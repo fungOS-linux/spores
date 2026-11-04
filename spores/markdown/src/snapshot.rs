@@ -299,3 +299,109 @@ fn push(
         target,
     });
 }
+
+/// Serialize a snapshot as a Lua table literal.
+///
+/// This is a tooling bridge, not the host contract: a real host materializes
+/// the table natively. It exists so the UI can be previewed and tested without
+/// a compositor. Control characters other than newline and tab are dropped.
+#[must_use]
+pub fn to_lua(snapshot: &Snapshot) -> String {
+    let mut out = String::new();
+    out.push_str("{\n");
+    out.push_str(&format!("  revision = {},\n", snapshot.revision));
+    out.push_str(&format!(
+        "  mode = {},\n",
+        lua_string(mode_name(snapshot.mode))
+    ));
+    out.push_str(&format!("  dirty = {},\n", snapshot.dirty));
+    out.push_str(&format!("  line_count = {},\n", snapshot.line_count));
+    out.push_str(&format!("  scroll = {},\n", snapshot.scroll));
+    out.push_str(&format!(
+        "  cursor = {{ line = {}, column = {} }},\n",
+        snapshot.cursor.line, snapshot.cursor.column
+    ));
+    match snapshot.selection {
+        Some((start, end)) => out.push_str(&format!(
+            "  selection = {{ {{ line = {}, column = {} }}, {{ line = {}, column = {} }} }},\n",
+            start.line, start.column, end.line, end.column
+        )),
+        None => out.push_str("  selection = nil,\n"),
+    }
+
+    out.push_str("  blocks = {\n");
+    for block in &snapshot.blocks {
+        out.push_str("    {");
+        out.push_str(&format!(" index = {},", block.index));
+        out.push_str(&format!(" line = {},", block.line));
+        out.push_str(&format!(" kind = {},", lua_string(block.kind)));
+        out.push_str(&format!(" level = {},", block.level));
+        out.push_str(&format!(" ordered = {},", block.ordered));
+        out.push_str(&format!(" item = {},", block.item));
+        out.push_str(&format!(
+            " language = {},",
+            lua_opt(block.language.as_deref())
+        ));
+        out.push_str(&format!(" text = {},", lua_string(&block.text)));
+        out.push_str(" spans = {");
+        for span in &block.spans {
+            out.push_str(&format!(
+                " {{ style = {}, text = {}, target = {} }},",
+                lua_string(span.style),
+                lua_string(&span.text),
+                lua_opt(span.target.as_deref())
+            ));
+        }
+        out.push_str(" } },\n");
+    }
+    out.push_str("  },\n");
+
+    out.push_str("  assets = {\n");
+    for request in &snapshot.assets {
+        out.push_str(&format!(
+            "    {{ kind = {}, target = {}, line = {}, label = {} }},\n",
+            lua_string(request_kind(request.kind)),
+            lua_string(&request.target.to_string()),
+            request.line,
+            lua_string(&request.label)
+        ));
+    }
+    out.push_str("  },\n");
+    out.push_str("}\n");
+    out
+}
+
+const fn mode_name(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Read => "read",
+        Mode::Edit => "edit",
+    }
+}
+
+const fn request_kind(kind: crate::content::RequestKind) -> &'static str {
+    match kind {
+        crate::content::RequestKind::Image => "image",
+        crate::content::RequestKind::Diagram(_) => "diagram",
+    }
+}
+
+fn lua_opt(value: Option<&str>) -> String {
+    value.map_or_else(|| "nil".to_owned(), lua_string)
+}
+
+fn lua_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
