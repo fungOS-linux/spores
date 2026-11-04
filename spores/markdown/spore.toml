@@ -1,17 +1,26 @@
-# Spore manifest. The host reads this; the module never sees it.
+# Spore manifest, schema 1. See fungOS-linux/soil docs/spore-package.md.
 #
 # A grant is a statement of intent reviewed with the pull request, not a
 # capability the Spore can widen at runtime.
 
+schema = 1
+
 [spore]
+id = "dev.fungos.markdown"
 name = "markdown"
 version = "0.1.0"
 license = "MIT"
 summary = "Markdown reader/editor with a hot-reloadable Lua UI"
+homepage = "https://github.com/fungOS-linux/spores"
 
-[module]
+[engine]
+soil = ">=0.1"
 target = "wasm32-wasip2"
-engine = "soil>=0.1"
+abi = { canvas = "1.0.0", storage = "1.0.0" }
+
+# Produced by the Soil guest build, then covered by spore.lock.
+[module]
+path = "module.wasm"
 
 # The UI is an artifact, not part of the module. Canvas JITs it, recompiles on
 # digest change, and records which UI revision produced a view.
@@ -32,6 +41,10 @@ surfaces = ["web", "native", "canvas"]
 
 # Planned when fungos-vfs lands. The Spore already uses the same Vfs boundary.
 # "fungos:vfs" = "read and write documents by DocId"
+
+[assets]
+# Content is declared here so the lock covers it. Empty until the first asset.
+# "site-map" = { path = "assets/site-map.png", media_type = "image/png" }
 
 [denied]
 # Stated explicitly so a reviewer sees intent, not merely absence.

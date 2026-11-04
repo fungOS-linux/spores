@@ -48,7 +48,17 @@ already the real one, so nothing above it changes when the store lands.
 ```sh
 cargo test -p spore-markdown
 luac -p ui/editor.lua
-lua tests/ui_fixture.lua   # prints "ui: ok"
+lua tests/ui_fixture.lua       # prints "ui: ok"
+soil-spore check .             # manifest, declared files, lock freshness
+```
+
+`module.wasm` is produced by the Soil guest build, so `soil-spore check` passes
+once that artifact exists. Packaging is deterministic:
+
+```sh
+soil-spore lock .
+soil-spore pack . -o markdown.spore
+soil-spore verify markdown.spore
 ```
 
 ## Grants
