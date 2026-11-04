@@ -49,7 +49,7 @@ spores/markdown     the Markdown reader/editor Spore
                     src/   semantics and editor state
                     ui/    the Lua UI Canvas renders
                     spore.toml  manifest, grants, launch surfaces
-docs/               the host/spore contract
+docs/               the host/spore contract and surface windowing
 ```
 
 ## Build and check
