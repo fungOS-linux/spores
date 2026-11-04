@@ -1,0 +1,39 @@
+# Spore manifest. The host reads this; the module never sees it.
+#
+# A grant is a statement of intent reviewed with the pull request, not a
+# capability the Spore can widen at runtime.
+
+[spore]
+name = "markdown"
+version = "0.1.0"
+license = "MIT"
+summary = "Markdown reader/editor with a hot-reloadable Lua UI"
+
+[module]
+target = "wasm32-wasip2"
+engine = "soil>=0.1"
+
+# The UI is an artifact, not part of the module. Canvas JITs it, recompiles on
+# digest change, and records which UI revision produced a view.
+[ui]
+entry = "ui/editor.lua"
+jit = true
+hot_reload = true
+
+# Which host Soil launches. The Spore and its UI are identical on all three.
+[launch]
+default = "canvas"
+surfaces = ["web", "native", "canvas"]
+
+[grants]
+"soil:canvas" = "present the reader/editor surface"
+"soil:time" = "debounced autosave"
+"soil:storage" = "open and save documents by DocId"
+
+# Planned when fungos-vfs lands. The Spore already uses the same Vfs boundary.
+# "fungos:vfs" = "read and write documents by DocId"
+
+[denied]
+# Stated explicitly so a reviewer sees intent, not merely absence.
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
