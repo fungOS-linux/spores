@@ -34,8 +34,11 @@ spores/unibus/tools/watch_contacts_lua.sh
 ```
 
 The script recomposes the installed module from `ui/lib/ui.lua` and the current
-snapshot, then asks Canvas to reload `contacts-dev`. A save redraws in roughly a
-second; no Rust, WASM, records query, or workspace import is involved.
+snapshot, reloads only the Contacts module, and captures the native surface to
+`/tmp/contacts-hot.png`. A save redraws in about a second; no Rust, WASM, records
+query, workspace switch, or workspace import is involved.
+
+Set `CAPTURE=0` to skip the screenshot or `SHOT=/path.png` to change its target.
 
 For a one-shot reload without the watcher:
 
@@ -43,5 +46,10 @@ For a one-shot reload without the watcher:
 cd spores/unibus
 lua tools/compose_inbox.lua "$HOME/Library/Application Support/Dock/canvas/modules" \
   examples/inbox_live.lua examples/contacts_live.lua
-printf 'workspace switch contacts-dev\n' | canvasctl
+python3 - <<'PY' | canvasctl
+import json
+print(json.dumps({"schema_version": 1, "request_id": "hot-reload",
+  "command": {"command": "reload_module", "surface_id": "contacts"}}))
+PY
+spores/unibus/tools/capture_contacts_surface.sh /tmp/contacts-hot.png
 ```
