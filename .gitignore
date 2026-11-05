@@ -4,3 +4,6 @@
 # Generated live inbox snapshot (metadata from AgentMail)
 spores/unibus/examples/inbox_live.lua
 spores/unibus/tools/__pycache__/
+
+# Generated live records snapshot
+spores/unibus/examples/contacts_live.lua

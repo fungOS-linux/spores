@@ -102,3 +102,4 @@ end
 
 compose("spore-dev-inbox", "Inbox", "ui/inbox.lua", arg[2] or "examples/inbox_mock.lua")
 compose("spore-dev-approval2", "Approve reply", "ui/approval.lua", "examples/approval_mock.lua")
+compose("spore-dev-contacts", "Contacts", "ui/contacts.lua", arg[3] or "examples/contacts_live.lua")
