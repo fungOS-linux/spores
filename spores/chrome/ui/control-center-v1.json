@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "id": "control-center-v1",
+  "title": "Control center",
+  "inputs": [
+    {
+      "id": "width",
+      "kind": "number",
+      "required": false
+    },
+    {
+      "id": "height",
+      "kind": "number",
+      "required": false
+    },
+    {
+      "id": "clock",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "date",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "workspace",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "surfaces",
+      "kind": "number",
+      "required": false
+    },
+    {
+      "id": "focused",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "battery",
+      "kind": "text",
+      "required": false
+    }
+  ],
+  "capabilities": {
+    "write_scene": true,
+    "read_inputs": [
+      "width",
+      "height",
+      "clock",
+      "date",
+      "workspace",
+      "surfaces",
+      "focused",
+      "battery"
+    ],
+    "read_theme": true
+  },
+  "actions": [
+    {
+      "id": "launcher",
+      "destination": "canvas.shell",
+      "kind": "select"
+    },
+    {
+      "id": "dismiss",
+      "destination": "canvas.shell",
+      "kind": "select"
+    }
+  ]
+}
