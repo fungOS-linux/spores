@@ -1,42 +1,62 @@
--- Control center: the shell's own status, as one panel.
+-- Control center: the shell's own state, as one panel.
 --
--- It reads only what the host already knows -- the clock, the focused surface,
--- how many windows are open -- so it cannot disagree with the bar about any of
--- them. Toggling things belongs here later; reading them is the part that has to
--- be honest first.
+-- Every value comes from the host -- the clock, the focused window, the surface
+-- count -- so the panel cannot disagree with the bar about any of them. Layout and
+-- spacing come from widget.tokens, so a theme change moves this with everything
+-- else instead of leaving one hardcoded gap behind.
 local i, t = module.inputs, module.theme
 local w, h = math.max(i.width or 360, 1), math.max(i.height or 420, 1)
 local p = widget.pixel_space(w, h)
-local pad = 18
+local k = widget.tokens()
+local pad = k.space.lg
 
-widget.panel({ id = "ground", x = -4, y = 4, width = 8, height = 8,
-  ink = "surface", opacity = 1.0, radius = t.radius, z = -1 })
+widget.glass({
+  id = "panel", space = p, x = 0, y = 0, width = w, height = h, z = -1,
+  ink = "surface", opacity = 1.0, radius = t.radius, elevation = k.elevation.floating,
+  shadow_opacity = 0.4, transition_ms = k.motion.base,
+})
 
 local function text(id, value, px, py, size, ink)
-  widget.label({ id = id, text = value, x = p.x(px), y = p.y(py), size = size or t.body, ink = ink or "text" })
+  widget.label({ id = id, text = value, x = p.x(px), y = p.y(py), size = size, ink = ink or "text" })
 end
 
-text("clock", i.clock or "--:--", pad, 14, t.title, "text")
-text("date", i.date or "", pad, 52, t.small, "muted")
+text("clock", i.clock or "--:--", pad, 12, k.type.display, "text")
+text("date", i.date or "", pad + 2, 46, k.type.small, "muted")
 
-widget.panel({ id = "rule", x = p.x(pad), y = p.y(80), width = p.w(w - pad * 2), height = p.h(1),
-  ink = "muted", opacity = 0.16, radius = 0 })
+local y = 84
+widget.section({ id = "session", space = p, title = "SESSION", x = pad, y = y, width = w - pad * 2 })
+y = y + 18
 
-local rows = {
-  { "workspace", i.workspace or "workspace", "text" },
-  { "focused", i.focused or "no window focused", "text" },
-  { "surfaces", tostring(i.surfaces or 0) .. " surfaces", "muted" },
-  { "battery", i.battery or "—", "muted" },
+local sessions = {
+  { "workspace", "Workspace", i.workspace or "workspace" },
+  { "focused", "Focused", i.focused or "no window focused" },
+  { "surfaces", "Windows", tostring(i.surfaces or 0) },
 }
-for index, row in ipairs(rows) do
-  local y = 96 + (index - 1) * 38
-  widget.label({ id = "row-" .. row[1], text = row[1], x = p.x(pad), y = p.y(y), size = t.small, ink = "muted" })
-  widget.label({ id = "value-" .. row[1], text = row[2], x = p.x(pad + 110), y = p.y(y), size = t.small, ink = row[3] })
+for _, row in ipairs(sessions) do
+  widget.list_row({
+    id = "row-" .. row[1], space = p, x = pad, y = y, width = w - pad * 2,
+    title = row[2], value = row[3], height = k.density.row,
+  })
+  y = y + k.density.row
 end
 
-widget.button({ id = "apps", label = "Applications", appearance = "quiet", align = "left",
+y = y + k.space.md
+widget.section({ id = "system", space = p, title = "SYSTEM", x = pad, y = y, width = w - pad * 2 })
+y = y + 22
+
+text("battery-label", "Battery", pad, y, k.type.small, "muted")
+local reading = i.battery or "—"
+text("battery-value", reading, pad + 190 - #tostring(reading) * (k.type.small * 0.6), y, k.type.small, "text")
+y = y + 30
+widget.gauge({ id = "battery", space = p, x = pad, y = y, width = w - pad * 2, height = 6, fraction = 0.62, ink = "success" })
+
+widget.button({
+  id = "apps", label = "Applications", appearance = "quiet", align = "left",
   action = "launcher", body = { origin = "control-center" },
-  x = p.x(pad), y = p.y(h - 96), width = p.w(w - pad * 2), height = p.h(34), enabled = true })
-widget.button({ id = "dismiss", label = "Close", appearance = "quiet", align = "left",
+  x = p.x(pad), y = p.y(h - 92), width = p.w(w - pad * 2), height = p.h(k.density.control), enabled = true,
+})
+widget.button({
+  id = "dismiss", label = "Close", appearance = "quiet", align = "left",
   action = "dismiss", body = { origin = "control-center" },
-  x = p.x(pad), y = p.y(h - 54), width = p.w(w - pad * 2), height = p.h(34), enabled = true })
+  x = p.x(pad), y = p.y(h - 50), width = p.w(w - pad * 2), height = p.h(k.density.control), enabled = true,
+})
