@@ -14,6 +14,12 @@ return {
   },
   counts = { unread = 7, urgent = 3, support = 2, drafts = 1 },
   selected_id = "support/refund-441",
+  layout = {
+    list_offset = 0,
+    list_limit = 6,
+    cursor_id = "github/mycelium/ci-11793527317",
+    focus = "list",
+  },
   filters = {
     { id = "all", label = "All mail", count = 24 },
     { id = "unread", label = "Unread", count = 7, selected = true },

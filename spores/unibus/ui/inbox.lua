@@ -188,18 +188,41 @@ end
 
 local function list(snapshot)
   local threads = snapshot.threads or {}
+  local layout = snapshot.layout or {}
+  local offset = math.max(0, math.floor(tonumber(layout.list_offset) or 0))
+  local limit = math.max(1, math.floor(tonumber(layout.list_limit) or #threads or 1))
+  local first = math.min(#threads, offset + 1)
+  local last = math.min(#threads, offset + limit)
+  if #threads == 0 then
+    first, last = 0, 0
+  end
+  local range = (#threads == 0) and "0 of 0" or string.format("%d–%d of %d", first, last, #threads)
   local children = {
     ui.row {
       widths = { 0.62, 0.38 },
       children = {
-        text("MAIL · " .. tostring(#threads), "caption", ROLE.quiet),
+        text("MAIL · " .. range, "caption", ROLE.quiet),
         text((snapshot.sort or "Newest first"), "caption", ROLE.quiet),
       },
     },
     ui.rule {},
   }
-  for _, thread in ipairs(threads) do
-    children[#children + 1] = thread_row(thread)
+  for index = first, last do
+    local thread = threads[index]
+    if thread then
+      children[#children + 1] = thread_row(thread)
+    end
+  end
+  if #threads > last then
+    children[#children + 1] = ui.row {
+      widths = { 0.72, 0.28 },
+      children = {
+        text("j/k move · space opens", "caption", ROLE.quiet),
+        text(string.format("↓ %d more", #threads - last), "caption", ROLE.warning),
+      },
+    }
+  elseif offset > 0 then
+    children[#children + 1] = text("↑ back to the top with g", "caption", ROLE.quiet)
   end
   return ui.column { gap = "none", children = children }
 end

@@ -25,6 +25,21 @@ end
 assert(selected and selected.id == "support/refund-441", "selected support thread")
 assert(selected.draft and #selected.draft > 0, "draft is present")
 
+local function values(node, out)
+  out = out or {}
+  if node.kind == "text" then out[#out + 1] = node.value end
+  for _, child in ipairs(node.children or {}) do values(child, out) end
+  return out
+end
+local text_values = table.concat(values(tree), "\n")
+assert(text_values:find("MAIL · 1–6 of 9", 1, true), "paged range is visible")
+assert(text_values:find("↓ 3 more", 1, true), "remaining count is visible")
+
+snapshot.layout.list_offset = 3
+local second = inbox.tree(snapshot)
+assert(table.concat(values(second), "\n"):find("MAIL · 4–9 of 9", 1, true), "offset page")
+snapshot.layout.list_offset = 0
+
 -- Exercise the Canvas path with a recorder. The preview only uses tree().
 local rects, texts = 0, 0
 _G.canvas = {
