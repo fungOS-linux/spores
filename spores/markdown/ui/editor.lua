@@ -1,24 +1,24 @@
 -- markdown spore · view
 --
--- A pure function of the snapshot. The frame, the rail and the document are the
--- same tree: no coordinates, no colours, no callbacks.
+-- A pure function of the snapshot. Frame, rail and document are one tree: no
+-- coordinates, no colours, no callbacks. Anything that looks pressable is an
+-- affordance; wiring presses to actions is the host's next step.
 
 local outline = {
-  { "Field notes", "h1", 0 },
-  { "What this is", "h2", 0 },
-  { "Content it handles", "h2", 0 },
-  { "Code", "h3", 1 },
-  { "Diagrams", "h3", 1 },
-  { "Images and attachments", "h3", 1 },
+  { "Field notes", "h1", 1 },
+  { "What this is", "h2", 1 },
+  { "Content it handles", "h2", 1 },
+  { "Code", "h3", 0 },
+  { "Diagrams", "h3", 0 },
+  { "Images and attachments", "h3", 0 },
   { "Open questions", "h2", 0 },
 }
 
-local function outline_item(entry)
-  local label, level, active = entry[1], entry[2], entry[3] == 1
-  local props = {
+local function rail_entry(label, level, active)
+  return ui.bar {
     pad = ui.gap.sm,
-    ink = "surface",
-    opacity = active and 0.95 or 0.0,
+    ink = "primary",
+    opacity = active and 0.16 or 0.0,
     radius = 4,
     children = {
       ui.text(label, {
@@ -27,13 +27,11 @@ local function outline_item(entry)
       }),
     },
   }
-  return ui.bar(props)
 end
 
-local rail_items = {}
+local rail = {}
 for _, entry in ipairs(outline) do
-  rail_items[#rail_items + 1] = entry[3] == 1 and outline_item({ entry[1], entry[2], 1 })
-    or outline_item(entry)
+  rail[#rail + 1] = rail_entry(entry[1], entry[2], entry[3] == 1 and entry[1] == "What this is")
 end
 
 ui.render(
@@ -50,19 +48,21 @@ ui.render(
         border = true,
         children = {
           ui.row {
-            widths = { 0.55, 0.45 },
+            widths = { 0.5, 0.5 },
             children = {
               ui.column {
                 gap = "none",
                 children = {
                   ui.text("Field notes", { style = "subheading", ink = "primary" }),
-                  ui.text("markdown · edit", { style = "caption", ink = "muted" }),
+                  ui.text("spore · markdown · draft", { style = "caption", ink = "muted" }),
                 },
               },
               ui.row {
+                gap = "sm",
+                align = "end",
                 children = {
-                  ui.text("Read", { style = "caption", ink = "muted" }),
-                  ui.text("Edit · 3:12 · unsaved", { style = "caption", ink = "primary" }),
+                  ui.kbd("⌘K"),
+                  ui.button("Share"),
                 },
               },
             },
@@ -70,31 +70,71 @@ ui.render(
         },
       },
 
-      -- Rail and document
+      -- Toolbar
+      ui.bar {
+        h = ui.gap.lg,
+        bleed = 0.16,
+        ink = "surface",
+        opacity = 0.85,
+        border = true,
+        children = {
+          ui.row {
+            widths = { 0.6, 0.4 },
+            children = {
+              ui.row {
+                gap = "xs",
+                children = {
+                  ui.button("Read", { small = true, quiet = true }),
+                  ui.button("Edit", { small = true, selected = true }),
+                  ui.text("  ", { style = "caption" }),
+                  ui.button("B", { small = true, quiet = true }),
+                  ui.button("I", { small = true, quiet = true }),
+                  ui.button("`", { small = true, quiet = true }),
+                  ui.button("link", { small = true, quiet = true }),
+                },
+              },
+              ui.row { align = "end", children = {
+                ui.text("412 words", { style = "caption", ink = "muted" }),
+              } },
+            },
+          },
+        },
+      },
+
+      -- Contents and document
       ui.row {
-        widths = { 0.30, 0.70 },
-        gap = "md",
+        widths = { 0.28, 0.72 },
+        gap = "lg",
         grow = true,
         children = {
           ui.column {
             gap = "xs",
+            pad = ui.gap.md,
             children = {
               ui.text("CONTENTS", { style = "caption", ink = "muted" }),
               ui.spacer { size = "xs" },
-              table.unpack(rail_items),
+              table.unpack(rail),
             },
           },
 
           ui.column {
             gap = "sm",
-            pad = ui.gap.md,
+            pad = ui.gap.lg,
             children = {
               ui.text("What this is", { style = "heading", ink = "primary" }),
-              ui.text(
-                "A Markdown reader and editor. The document is data; this file is the "
-                .. "interface. Nothing above it knows how a heading is drawn.",
-                { style = "body" }
-              ),
+              ui.bar {
+                pad = ui.gap.sm,
+                ink = "primary",
+                opacity = 0.10,
+                radius = 4,
+                children = {
+                  ui.text(
+                    "A Markdown reader and editor. The document is data; this file is "
+                    .. "the interface. Nothing above it knows how a heading is drawn.",
+                    { style = "body" }
+                  ),
+                },
+              },
               ui.text("Content it handles", { style = "subheading", ink = "primary" }),
               ui.bullets {
                 "headings, paragraphs, quotes, rules",
@@ -106,9 +146,7 @@ ui.render(
     println!("one scene, three hosts");
 }]]),
               ui.diagram("mermaid", "Spore -> Snapshot -> Lua UI -> Canvas"),
-              ui.quote(
-                "Roles and sizes come from the theme, so a theme change moves the page."
-              ),
+              ui.quote("Roles and sizes come from the theme, so a theme change moves the page."),
             },
           },
         },
@@ -124,9 +162,17 @@ ui.render(
         border_top = true,
         children = {
           ui.row {
+            widths = { 0.5, 0.5 },
             children = {
-              ui.text("utf-8 · markdown · 412 words", { style = "caption", ink = "muted" }),
-              ui.text("ln 3, col 12", { style = "caption", ink = "muted" }),
+              ui.text("utf-8 · markdown · theme project", { style = "caption", ink = "muted" }),
+              ui.row {
+                gap = "sm",
+                align = "end",
+                children = {
+                  ui.kbd("⌘S"),
+                  ui.text("3:12", { style = "caption", ink = "muted" }),
+                },
+              },
             },
           },
         },

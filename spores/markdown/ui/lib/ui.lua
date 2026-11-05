@@ -58,6 +58,18 @@ end
 
 function ui.rule(props) return node("rule", props or {}) end
 
+-- A pressable-looking control. It draws a control; the host decides whether a
+-- press reaches it. Until input is routed to Lua modules, this is an affordance,
+-- not a behaviour.
+function ui.button(label, props)
+  props = props or {}
+  props.label = label
+  return node("button", props)
+end
+
+-- A keyboard hint. Same drawing as a button, quieter and monospaced in spirit.
+function ui.kbd(label) return node("button", { label = label, quiet = true }) end
+
 -- A horizontal band with a background: title bars, toolbars, status lines.
 function ui.bar(props) return node("bar", props or {}) end
 
@@ -104,17 +116,29 @@ end
 local function estimate_width(n, theme)
   if n.kind ~= "text" then return 0 end
   local size = n.px or size_for(theme, n.style)
-  return #n.value * size * 0.48 * U
+  return #n.value * size * 0.58 * U
 end
 
 -- Character budget derived from the *column* width, not a global constant.
 -- 8 body characters per projected unit is calibrated against the rendered page;
 -- it is an estimate until the host exposes text metrics, so it is named once
 -- here rather than sprinkled through views.
-local CHARS_PER_UNIT = 8
+local CHARS_PER_UNIT = 11
 
 local function budget(theme, size, width)
   return math.max(8, math.floor(width * CHARS_PER_UNIT * (theme.body / size)))
+end
+
+-- Intrinsic width of a leaf, in units. Used to sequence a row without metrics.
+local function intrinsic(n, theme)
+  if n.kind == "button" then
+    return estimate_width({ kind = "text", value = n.label, style = n.small and "caption" or "body" }, theme) + 0.46
+  elseif n.kind == "text" then
+    return estimate_width(n, theme)
+  elseif n.kind == "kbd" then
+    return 0.5
+  end
+  return 0
 end
 
 local function text_lines(n, theme, width)
@@ -133,7 +157,13 @@ local function row_extent(n, theme, width)
   local total = width - spacing * (last - 1)
   local tallest = 0
   for index, child in ipairs(n.children) do
-    local child_width = n.widths and (total * n.widths[index]) or total
+    local child_width = total
+    if n.widths then
+      child_width = total * n.widths[index]
+    else
+      local own = intrinsic(child, theme)
+      if own > 0 then child_width = own end
+    end
     tallest = math.max(tallest, measure(child, theme, child_width))
   end
   return tallest
@@ -147,6 +177,8 @@ measure = function(n, theme, width)
     return px(10)
   elseif n.kind == "fill" then
     return n.h or 0
+  elseif n.kind == "button" then
+    return px((n.small and theme.small or theme.body) * ui.leading + 14)
   elseif n.kind == "bar" then
     local pad = n.pad or gap.sm
     local child = 0
@@ -219,6 +251,18 @@ local function emit(n, theme, x, y, width, out)
   elseif n.kind == "rule" then
     rect(string.format("r%d", #out + 1), x, y + px(4), width, 0.003, "muted", 0.26, 0)
     return y - px(10)
+
+  elseif n.kind == "button" then
+    local size = n.small and theme.small or theme.body
+    local width_est = estimate_width({ kind = "text", value = n.label, style = n.small and "caption" or "body" }, theme) + 0.30
+    local height = px(size * ui.leading + 14)
+    local ink = n.quiet and "surface" or "primary"
+    local opacity = n.quiet and 0.55 or (n.selected and 1.0 or 0.9)
+    rect(string.format("btn%d", #out + 1), x, y - px(6), width_est, height, ink, opacity, theme.radius)
+    text_at(n.label, size, n.quiet and "muted" or "background", 0.15)
+    -- text_at draws at the current y; nudge it into the button body
+    out[#out].translation[2] = y - px(12)
+    return y - height
 
   elseif n.kind == "fill" then
     rect(n.id or string.format("f%d", #out + 1), x, y, n.w or width, n.h or 0,
@@ -297,18 +341,29 @@ local function emit(n, theme, x, y, width, out)
     -- expose and the library refuses to guess beyond a character estimate.
     local tallest = row_extent(n, theme, width)
     local last = #n.children
-    local cursor = x
     local spacing = gap[n.gap or "none"] or 0
-    local total = width - spacing * (last - 1)
-    for index, child in ipairs(n.children) do
-      local child_width = total
-      if n.widths then child_width = total * n.widths[index] end
-      local child_x = cursor
-      if not n.widths and index == last and last > 1 then
-        child_x = x + width - estimate_width(child, theme)
+
+    if n.widths then
+      local total = width - spacing * (last - 1)
+      local cursor = x
+      for index, child in ipairs(n.children) do
+        local child_width = total * n.widths[index]
+        emit(child, theme, cursor, y, child_width, out)
+        cursor = cursor + child_width + spacing
       end
-      emit(child, theme, child_x, y, child_width, out)
-      cursor = cursor + child_width + spacing
+    else
+      local own = {}
+      local used = spacing * (last - 1)
+      for index, child in ipairs(n.children) do
+        own[index] = intrinsic(child, theme)
+        used = used + own[index]
+      end
+      local cursor = n.align == "end" and (x + width - used) or x
+      for index, child in ipairs(n.children) do
+        local remaining = x + width - cursor
+        emit(child, theme, cursor, y, math.max(own[index], remaining), out)
+        cursor = cursor + own[index] + spacing
+      end
     end
     return y - tallest
 
