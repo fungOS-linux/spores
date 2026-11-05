@@ -15,10 +15,13 @@ widget.panel({id="ground",x=-4,y=4,width=8,height=8,ink="surface",opacity=1,radi
 widget.panel({id="rule",x=-4,y=y(h-1),width=8,height=8/h,ink="muted",opacity=0.12,radius=0})
 local left=pad
 if w>=600 then
-  label("identity","fungOS",left,"primary")
-  control("back","‹",left+64,28,i.back)
-  control("forward","›",left+98,28,i.forward)
-  left=left+134
+  -- The identity gets a column, not a position: a label that grows into the next
+  -- control is the classic hardcoded-offset bug, and it looked exactly like that.
+  local identity_col=96
+  label("identity",string.sub("fungOS",1,10),left,"primary")
+  control("back","‹",left+identity_col,28,i.back)
+  control("forward","›",left+identity_col+34,28,i.forward)
+  left=left+identity_col+70
 end
 local clock_width=w>=360 and 112 or 0
 local project_width=math.max(32,math.min(210,w-left-clock_width-pad))
