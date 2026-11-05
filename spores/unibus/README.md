@@ -28,11 +28,15 @@ and exporting `run` + `snapshot`. The manifest, UI, and module are the first
 reviewable slice; a Soil host must implement the two capabilities before it can
 run end-to-end.
 
-Preview the UI without a compositor:
+Preview the new declarative inbox UI without a compositor:
 
 ```sh
-lua tools/preview.lua examples/inbox_snapshot.lua > /tmp/inbox.html
+lua tools/preview_inbox.lua examples/inbox_mock.lua > /tmp/inbox.html
 ```
+
+The old node-tree preview remains at `tools/preview.lua` for the legacy view.
+The new UI is `ui/inbox.lua` + `ui/lib/ui.lua`; the feature plan is
+[`docs/inbox-ui-plan.md`](docs/inbox-ui-plan.md).
 
 Preview with a real AgentMail inbox:
 
