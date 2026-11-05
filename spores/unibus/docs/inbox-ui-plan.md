@@ -1,8 +1,8 @@
 # Inbox UI plan
 
-Status: **M0 mock UI landed.** The new view is `ui/inbox.lua`, built on
-`ui/lib/ui.lua` and the snapshot in `examples/inbox_mock.lua`. Preview with
-`tools/preview_inbox.lua`.
+Status: **M0 and M1 implemented** on `pi/inbox-ui` (M1 in review). The new
+view is `ui/inbox.lua`, built on `ui/lib/ui.lua` and the snapshot in
+`examples/inbox_mock.lua`. Preview with `tools/preview_inbox.lua`.
 
 The split stays the same:
 
@@ -32,19 +32,16 @@ Spore as an action id.
 Known limits: no scrolling, fixed 8-unit frame, no focus state, no action
 routing, no real timestamps/relative-time formatting, no width adaptation.
 
-## M1 — layout and navigation
+## M1 — layout and navigation (implemented on branch)
 
-- Virtualize the thread list; keep header/footer fixed and scroll only the list.
-- Detail pane scrolls independently; keep the action row sticky.
-- Narrow mode (phone): one pane at a time, list → detail with back.
-- Wide mode: rail + list + detail; optional collapsed rail.
-- Density toggle: comfortable / compact.
-- Focus model: `selected_id`, `focus` (`rail`, `list`, `detail`, `composer`),
-  keyboard cursor distinct from open thread.
-- Empty/loading/offline/error states.
-- Stable row heights for virtual scrolling.
-- Snapshot gains `layout` hints (`width_class`, `density`, `scroll`, `focus`).
-- Actions: `select`, `open`, `back`, `next`, `previous`, `focus`.
+- Paged thread list; header/footer stay bounded and show `x–y of z`.
+- Focus cursor (`layout.cursor_id`) distinct from the open thread.
+- Narrow one-pane layout with a back affordance; wide three-pane layout.
+- Empty/loading/offline/error state cards.
+- Snapshot carries `layout.width_class`, `list_offset`, `list_limit`,
+  `cursor_id`, `focus`, and `state.mode`.
+- Still to do: true virtual scrolling with stable row heights, independent
+  detail scroll, density toggle, action routing for select/open/back/next.
 
 ## M2 — core inbox actions
 
