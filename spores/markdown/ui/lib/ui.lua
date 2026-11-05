@@ -116,7 +116,7 @@ end
 local function estimate_width(n, theme)
   if n.kind ~= "text" then return 0 end
   local size = n.px or size_for(theme, n.style)
-  return #n.value * size * 0.58 * U
+  return #n.value * size * 0.72 * U
 end
 
 -- Character budget derived from the *column* width, not a global constant.
@@ -254,14 +254,18 @@ local function emit(n, theme, x, y, width, out)
 
   elseif n.kind == "button" then
     local size = n.small and theme.small or theme.body
-    local width_est = estimate_width({ kind = "text", value = n.label, style = n.small and "caption" or "body" }, theme) + 0.30
-    local height = px(size * ui.leading + 14)
+    -- A pill is text plus padding: height follows the type size, and the label
+    -- is centred in it. Width stays an estimate until the host exposes metrics.
+    local text_h = px(size)
+    local vpad = px(size * 0.45)
+    local hpad = px(size * 0.52)
+    local height = text_h + vpad * 2
+    local width_est = #n.label * size * 0.95 * U + hpad * 2
     local ink = n.quiet and "surface" or "primary"
     local opacity = n.quiet and 0.55 or (n.selected and 1.0 or 0.9)
-    rect(string.format("btn%d", #out + 1), x, y - px(6), width_est, height, ink, opacity, theme.radius)
-    text_at(n.label, size, n.quiet and "muted" or "background", 0.15)
-    -- text_at draws at the current y; nudge it into the button body
-    out[#out].translation[2] = y - px(12)
+    rect(string.format("btn%d", #out + 1), x, y - height, width_est, height, ink, opacity, theme.radius)
+    text_at(n.label, size, n.quiet and "muted" or "background", hpad)
+    out[#out].translation[2] = y - vpad - text_h * 0.92
     return y - height
 
   elseif n.kind == "fill" then

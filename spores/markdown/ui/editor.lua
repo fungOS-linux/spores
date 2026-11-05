@@ -93,9 +93,7 @@ ui.render(
                   ui.button("link", { small = true, quiet = true }),
                 },
               },
-              ui.row { align = "end", children = {
-                ui.text("412 words", { style = "caption", ink = "muted" }),
-              } },
+              ui.text("", { style = "caption" }),
             },
           },
         },
