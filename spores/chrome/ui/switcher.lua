@@ -62,6 +62,17 @@ for index, slot in ipairs(slots) do
   local is_selected = i[key .. "-selected"] == true
   if is_selected then selected = index end
 
+  -- Hover is a lift, not a colour: the tile under the pointer gets its surface
+  -- raised, which is visible without pretending it is selected.
+  local is_hovered = tonumber(i.hover) == (index - 1)
+  if is_hovered and not is_selected then
+    widget.glass {
+      id = key .. "-hover", space = p, x = left, y = 12, width = tile, height = card_h,
+      ink = "surface", opacity = 0.55, radius = k.radius.md,
+      elevation = k.elevation.raised, shadow_opacity = 0.24,
+      transition_ms = k.motion.fast, z = 0.15,
+    }
+  end
   widget.glass {
     id = key .. "-card", space = p, x = left, y = 12, width = tile, height = card_h,
     ink = "background", opacity = is_selected and 0.55 or 0.32,
