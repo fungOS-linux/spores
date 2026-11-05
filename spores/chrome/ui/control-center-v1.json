@@ -42,6 +42,36 @@
       "id": "battery",
       "kind": "text",
       "required": false
+    },
+    {
+      "id": "sources",
+      "kind": "number",
+      "required": false
+    },
+    {
+      "id": "window0",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "window1",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "window2",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "window3",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "window4",
+      "kind": "text",
+      "required": false
     }
   ],
   "capabilities": {
@@ -54,7 +84,13 @@
       "workspace",
       "surfaces",
       "focused",
-      "battery"
+      "battery",
+      "sources",
+      "window0",
+      "window1",
+      "window2",
+      "window3",
+      "window4"
     ],
     "read_theme": true
   },
@@ -66,6 +102,16 @@
     },
     {
       "id": "dismiss",
+      "destination": "canvas.shell",
+      "kind": "select"
+    },
+    {
+      "id": "apps",
+      "destination": "canvas.shell",
+      "kind": "select"
+    },
+    {
+      "id": "projects",
       "destination": "canvas.shell",
       "kind": "select"
     }
