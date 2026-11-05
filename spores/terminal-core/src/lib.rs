@@ -30,7 +30,6 @@ pub struct Style {
     pub strikethrough: bool,
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cell {
     /// One grapheme cluster; empty for a wide-cell continuation.
