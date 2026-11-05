@@ -35,7 +35,7 @@ surfaces = ["canvas"]
 "soil:canvas" = "present shell regions"
 
 [chrome]
-regions = ["top-bar", "dock", "launcher", "switcher", "control-center"]
+regions = ["top-bar", "dock", "launcher", "switcher", "control-center", "window"]
 
 [chrome.sources]
 top-bar = "ui/top-bar.lua"
@@ -43,6 +43,7 @@ dock = "ui/dock.lua"
 launcher = "ui/launcher.lua"
 switcher = "ui/switcher.lua"
 control-center = "ui/control-center-v1.lua"
+window = "ui/window.lua"
 
 [presentation]
 badge = "C"
