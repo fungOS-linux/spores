@@ -138,10 +138,10 @@ local function detail(snapshot)
       },
     },
     {
-      id = "detail-brief", kind = "container", layout = { height = 196, flex_grow = 0, direction = "column", gap = 5, padding = { top = 10, right = 12, bottom = 10, left = 12 } },
+      id = "detail-brief", kind = "container", layout = { height = 172, flex_grow = 0, direction = "column", gap = 4, padding = { top = 10, right = 12, bottom = 8, left = 12 } },
       children = {
         label("detail-brief-label", "AGENT BRIEF", 10, { height = 14 }),
-        label("detail-brief-text", clip(thread.brief or thread.preview, 420), 12, { height = 116, wrap = true }),
+        label("detail-brief-text", clip(thread.brief or thread.preview, 420), 11, { height = 104, wrap = true }),
       },
     },
   }
@@ -195,6 +195,7 @@ end
 function M.render(snapshot)
   use_viewport()
   snapshot = apply_event(snapshot or {})
+  local visible = math.min(#(snapshot.threads or {}), 14)
   local laid = canvas.layout(tree(snapshot), W, H)
 
   rect("inbox-bg", 0, 0, W, H, "background", 1.0, 0)
@@ -213,6 +214,15 @@ function M.render(snapshot)
       if node then rect("action-bg-" .. id, node.rect.x, node.rect.y, node.rect.width, node.rect.height, id == "detail-reply" and "primary" or "surface", id == "detail-reply" and 0.75 or 0.65, 7) end
     end
   end
+  for index = 1, visible do
+    local row = find(laid, "thread-" .. index)
+    if row then
+      rect("thread-bg-" .. index, row.rect.x, row.rect.y, row.rect.width, row.rect.height, "surface", 0.10, 6)
+      if index < visible then
+        rect("thread-rule-" .. index, row.rect.x + 10, row.rect.y + row.rect.height - 1, row.rect.width - 20, 1, "muted", 0.05, 0)
+      end
+    end
+  end
   local _, selected_index = selected_thread(snapshot)
   local selected = find(laid, "thread-" .. tostring(selected_index))
   if selected then rect("thread-selected", selected.rect.x, selected.rect.y, selected.rect.width, selected.rect.height, "primary", 0.14, 7) end
@@ -221,7 +231,9 @@ function M.render(snapshot)
     if node.kind == "text" and node.style then
       local ink = "text"
       if node.id:find("account") or node.id:find("range") or node.id:find("sort") or node.id:find("meta") or node.id:find("brief%-label") or node.id:find("thread%-label") or node.id:find("msg%-from") or node.id:find("%-preview$") then ink = "muted" end
-      if node.id == "inbox-title" or node.id == "detail-title" or node.id == "detail-brief-text" then ink = "primary" end
+      if node.id == "inbox-title" or node.id == "detail-title" then ink = "primary" end
+      if node.id == "detail-brief-text" then ink = "text" end
+      if node.id == "detail-reply" then ink = "background" end
       text(node.id, node.text, node.rect.x, node.rect.y, node.style.size, ink)
     end
   end
