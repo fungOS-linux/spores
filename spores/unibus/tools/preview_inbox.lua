@@ -22,6 +22,11 @@ _G.module = {
 
 local inbox = assert(loadfile("ui/inbox.lua"))()
 local snapshot = assert(loadfile(snapshot_path))()
+if arg[2] == "narrow" then
+  snapshot.layout = snapshot.layout or {}
+  snapshot.layout.width_class = "narrow"
+  snapshot.layout.focus = arg[3] or "list"
+end
 local tree = inbox.tree(snapshot)
 
 local function escape(text)

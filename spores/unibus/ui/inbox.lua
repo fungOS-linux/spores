@@ -236,7 +236,7 @@ local function list(snapshot)
   return ui.column { gap = "none", children = children }
 end
 
-local function detail(snapshot)
+local function detail(snapshot, narrow)
   local thread = nil
   for _, candidate in ipairs(snapshot.threads or {}) do
     if candidate.selected or candidate.id == snapshot.selected_id then
@@ -275,6 +275,7 @@ local function detail(snapshot)
     ui.row {
       gap = "xs",
       children = {
+        narrow and pill("← Back", { quiet = true }) or nil,
         pill("Reply"),
         pill("Reply all", { quiet = true }),
         pill("Assign", { quiet = true }),
@@ -426,27 +427,39 @@ end
 
 function M.tree(snapshot)
   snapshot = snapshot or {}
+  local layout = snapshot.layout or {}
+  local narrow = layout.width_class == "narrow"
+  local main
+  if narrow then
+    if layout.focus == "detail" then
+      main = detail(snapshot, true)
+    else
+      main = list(snapshot)
+    end
+  else
+    main = ui.row {
+      widths = { 0.24, 0.76 },
+      gap = "md",
+      children = {
+        rail(snapshot),
+        ui.row {
+          widths = { 0.56, 0.44 },
+          gap = "md",
+          children = {
+            list(snapshot),
+            detail(snapshot, false),
+          },
+        },
+      },
+    }
+  end
   return ui.column {
     h = 8,
     gap = "none",
     children = {
       header(snapshot),
       summary(snapshot),
-      ui.row {
-        widths = { 0.24, 0.76 },
-        gap = "md",
-        children = {
-          rail(snapshot),
-          ui.row {
-            widths = { 0.56, 0.44 },
-            gap = "md",
-            children = {
-              list(snapshot),
-              detail(snapshot),
-            },
-          },
-        },
-      },
+      main,
       footer(snapshot),
     },
   }

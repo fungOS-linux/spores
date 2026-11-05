@@ -19,6 +19,7 @@ return {
     list_limit = 6,
     cursor_id = "github/mycelium/ci-11793527317",
     focus = "list",
+    width_class = "wide",
   },
   filters = {
     { id = "all", label = "All mail", count = 24 },

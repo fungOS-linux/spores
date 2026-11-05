@@ -28,6 +28,8 @@ assert(selected.draft and #selected.draft > 0, "draft is present")
 local function values(node, out)
   out = out or {}
   if node.kind == "text" then out[#out + 1] = node.value end
+  if node.kind == "button" then out[#out + 1] = node.label end
+  if node.kind == "icon" or node.kind == "icon_button" then out[#out + 1] = node.glyph end
   for _, child in ipairs(node.children or {}) do values(child, out) end
   return out
 end
@@ -39,6 +41,19 @@ snapshot.layout.list_offset = 3
 local second = inbox.tree(snapshot)
 assert(table.concat(values(second), "\n"):find("MAIL · 4–9 of 9", 1, true), "offset page")
 snapshot.layout.list_offset = 0
+
+-- Narrow mode removes the rail and shows one pane.
+snapshot.layout.width_class = "narrow"
+snapshot.layout.focus = "list"
+local narrow_list = table.concat(values(inbox.tree(snapshot)), "\n")
+assert(narrow_list:find("MAIL · 1–6 of 9", 1, true), "narrow list")
+assert(not narrow_list:find("FILTERS", 1, true), "narrow hides rail")
+snapshot.layout.focus = "detail"
+local narrow_detail = table.concat(values(inbox.tree(snapshot)), "\n")
+assert(narrow_detail:find("AGENT BRIEF", 1, true), "narrow detail")
+assert(narrow_detail:find("← Back", 1, true), "narrow back")
+snapshot.layout.width_class = "wide"
+snapshot.layout.focus = "list"
 
 -- Exercise the Canvas path with a recorder. The preview only uses tree().
 local rects, texts = 0, 0
