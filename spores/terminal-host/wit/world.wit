@@ -1,0 +1,15 @@
+// Mock/real host world for the terminal Spore.
+package fungos:terminal-spore@0.1.0;
+
+world terminal-spore {
+  import soil:mycelium/directory@0.1.0;
+  import soil:mycelium/session@0.1.0;
+  import soil:terminal/surface@0.1.0;
+
+  export run: func(args: list<string>) -> result<_, string>;
+  export feed: func(bytes: list<u8>) -> result<_, string>;
+  export present: func() -> result<_, string>;
+  export resize: func(cols: u32, rows: u32) -> result<_, string>;
+  export stop: func() -> result<_, string>;
+  export snapshot: func() -> result<list<u8>, string>;
+}
