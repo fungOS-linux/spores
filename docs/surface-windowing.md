@@ -38,6 +38,54 @@ rect looks cheaper for one demo and costs correctness everywhere else:
 
 If a Spore needs rich pixels, it presents a texture. It does not get a window.
 
+## Surface roles
+
+Not every surface is a tile. Three roles, and the role is a property of the
+surface, not a hint to the renderer:
+
+| Role | In layout flow | Above content | Example |
+|---|---|---|---|
+| **content** | yes, tiled by Canvas | no | a spore's document, a widget, a terminal |
+| **chrome** | no, anchored to a display edge | yes | dock, top bar, app switcher |
+| **overlay** | no | always, above chrome | permission prompt, capture indicator, revocation notice |
+
+Content participates in tiling and gets the remainder of the display after chrome
+insets. Chrome anchors to an edge (or a corner) and is excluded from tiling, so a
+dock can never be counted as a tile and can never be scrolled away.
+
+### Chrome may be a Spore
+
+Dock and top bar can be spores, and should be, for the same reason any app can:
+live restyling without a rebuild. The constraints are narrow:
+
+1. **Chrome proposes, Canvas disposes.** A chrome spore declares an anchor and an
+   inset; Canvas computes the final rect against the display and the reserved
+   system margins. A chrome spore cannot move content directly.
+2. **One chrome owner per display.** A second chrome spore does not stack; it
+   replaces the first atomically, or is refused by name.
+3. **Chrome gets less authority than content, not more.** It can read the
+   workspace summary and request layout actions; it cannot mutate the document,
+   open surfaces, or read other surfaces' content.
+4. **Fail-safe fallback.** If the chrome spore crashes, is revoked, or fails to
+   compile, Canvas draws its built-in minimal bar. Losing the window controls must
+   never be a way to lose the window.
+5. **Input priority is fixed:** overlay, then chrome, then content. Regions a
+   chrome surface does not claim pass through; a chrome spore cannot make a
+   full-screen invisible pointer trap.
+
+### Overlay is never a Spore
+
+Security-critical UI stays Canvas-owned: the permission prompt, the capture
+indicator, the revocation notice, and the "this spore is drawing" marker. A
+spore that could draw these could impersonate consent. Overlays are also the only
+surfaces that may draw above chrome.
+
+### Why this matters for revocation
+
+A revoked capability must be visible. If chrome were the only place that showed
+grants, a broken chrome spore would silently hide a revocation — which is why the
+revocation notice is an overlay and why the fallback bar exists.
+
 ## The GPU lease
 
 Soil already ships the narrow bridge: `soil:canvas-gpu@0.1.0` takes a
