@@ -45,6 +45,7 @@ end
 
 local function clip(value, limit)
   value = tostring(value or "")
+  if value == "" then return "—" end
   if #value <= limit then return value end
   return value:sub(1, limit - 1) .. "…"
 end
@@ -136,6 +137,7 @@ local function detail(snapshot)
         label("detail-reply-all", "Reply all", 11, { width = 88, height = 28 }),
         label("detail-assign", "Assign", 11, { width = 74, height = 28 }),
         label("detail-resolve", "Resolve", 11, { width = 78, height = 28 }),
+        label("detail-archive", "Archive", 11, { width = 78, height = 28 }),
       },
     },
     {
@@ -147,6 +149,60 @@ local function detail(snapshot)
     },
   }
   return { id = "detail-page", kind = "container", layout = { flex_grow = 1, direction = "column", gap = 14 }, children = children }
+end
+
+
+local function account_rows(snapshot)
+  local rows = snapshot.accounts
+  if not rows then
+    local account = snapshot.account or {}
+    rows = { { id = "primary", label = account.label or "AgentMail", email = account.email or "", provider = account.provider or "AgentMail", unread = (snapshot.counts or {}).unread or 0, selected = true } }
+  end
+  return rows
+end
+
+local function inbox_rows(snapshot)
+  local rows = snapshot.inboxes
+  if not rows then
+    rows = {
+      { id = "inbox", label = "Inbox", unread = (snapshot.counts or {}).unread or 0, selected = true },
+      { id = "archive", label = "Archive", unread = 0 },
+    }
+  end
+  return rows
+end
+
+local function tag_rows(snapshot)
+  local rows = snapshot.tags
+  if not rows then
+    local counts = {}
+    for _, thread in ipairs(snapshot.threads or {}) do
+      for _, tag in ipairs(thread.labels or {}) do counts[tag] = (counts[tag] or 0) + 1 end
+    end
+    rows = {}
+    for tag, count in pairs(counts) do rows[#rows + 1] = { id = tag, label = tag, count = count } end
+    table.sort(rows, function(a, b) return a.label < b.label end)
+  end
+  return rows
+end
+
+local function rail(snapshot)
+  local children = { label("rail-accounts", "ACCOUNTS", 9, { height = 16 }) }
+  for index, account in ipairs(account_rows(snapshot)) do
+    children[#children + 1] = label("rail-account-" .. index,
+      clip(account.label or account.email, 16) .. "  ·  " .. tostring(account.unread or 0), 10, { height = 22 })
+  end
+  children[#children + 1] = label("rail-inboxes", "INBOXES", 9, { height = 16 })
+  for index, box in ipairs(inbox_rows(snapshot)) do
+    children[#children + 1] = label("rail-inbox-" .. index,
+      clip(box.label or box.id, 16) .. "  ·  " .. tostring(box.unread or box.count or 0), 10, { height = 22 })
+  end
+  children[#children + 1] = label("rail-tags", "TAGS", 9, { height = 16 })
+  for index, tag in ipairs(tag_rows(snapshot)) do
+    children[#children + 1] = label("rail-tag-" .. index,
+      "#" .. clip(tag.label or tag.id, 15) .. "  ·  " .. tostring(tag.count or 0), 10, { height = 20 })
+  end
+  return { id = "inbox-rail-body", kind = "container", layout = { flex_grow = 1, direction = "column", gap = 1 }, children = children }
 end
 
 local function tree(snapshot)
@@ -170,8 +226,9 @@ local function tree(snapshot)
     root.children[#root.children + 1] = {
       id = "inbox-main", kind = "container", layout = { flex_grow = 1, direction = "row", gap = 16 },
       children = {
-        { id = "inbox-list-pane", kind = "container", layout = { width = math.max(360, W * 0.43), flex_grow = 0, direction = "column", padding = { top = 8, right = 10, bottom = 8, left = 10 } }, children = { list(snapshot) } },
-        { id = "inbox-detail-pane", kind = "container", layout = { flex_grow = 1, direction = "column", padding = { top = 10, right = 18, bottom = 10, left = 18 } }, children = { detail(snapshot) } },
+        { id = "inbox-rail", kind = "container", layout = { width = 150, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = 8, right = 8, bottom = 8, left = 8 } }, children = { rail(snapshot) } },
+        { id = "inbox-list-pane", kind = "container", layout = { width = 340, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = 8, right = 10, bottom = 8, left = 10 } }, children = { list(snapshot) } },
+        { id = "inbox-detail-pane", kind = "container", layout = { flex_grow = 1, flex_shrink = 1, direction = "column", padding = { top = 10, right = 18, bottom = 10, left = 18 } }, children = { detail(snapshot) } },
       },
     }
   else
@@ -201,6 +258,8 @@ function M.render(snapshot)
   rect("inbox-bg", 0, 0, W, H, "background", 1.0, 0)
   local search = find(laid, "inbox-search")
   if search then rect("inbox-search-bg", search.rect.x, search.rect.y, search.rect.width, search.rect.height, "surface", 0.72, 8) end
+  local rail_pane = find(laid, "inbox-rail")
+  if rail_pane then rect("inbox-rail-bg", rail_pane.rect.x, rail_pane.rect.y, rail_pane.rect.width, rail_pane.rect.height, "surface", 0.22, 10) end
   local list_pane = find(laid, "inbox-list-pane")
   if list_pane then rect("inbox-list-bg", list_pane.rect.x, list_pane.rect.y, list_pane.rect.width, list_pane.rect.height, "surface", 0.28, 10) end
   local detail_pane = find(laid, "inbox-detail-pane")
@@ -209,7 +268,7 @@ function M.render(snapshot)
   if brief then rect("inbox-brief-bg", brief.rect.x, brief.rect.y, brief.rect.width, brief.rect.height, "primary", 0.08, 8) end
   local actions = find(laid, "detail-actions")
   if actions then
-    for _, id in ipairs({ "detail-reply", "detail-reply-all", "detail-assign", "detail-resolve" }) do
+    for _, id in ipairs({ "detail-reply", "detail-reply-all", "detail-assign", "detail-resolve", "detail-archive" }) do
       local node = find(laid, id)
       if node then rect("action-bg-" .. id, node.rect.x, node.rect.y, node.rect.width, node.rect.height, id == "detail-reply" and "primary" or "surface", id == "detail-reply" and 0.75 or 0.65, 7) end
     end
@@ -232,6 +291,8 @@ function M.render(snapshot)
       local ink = "text"
       if node.id:find("account") or node.id:find("range") or node.id:find("sort") or node.id:find("meta") or node.id:find("brief%-label") or node.id:find("thread%-label") or node.id:find("msg%-from") or node.id:find("%-preview$") then ink = "muted" end
       if node.id == "detail-title" then ink = "primary" end
+      if node.id:find("^account%-%d+%-name$") and node.text ~= "" then ink = "text" end
+      if node.id:find("^tag%-%d+%-name$") then ink = "primary" end
       if node.id == "detail-brief-text" then ink = "text" end
       if node.id == "detail-reply" then ink = "background" end
       text(node.id, node.text, node.rect.x, node.rect.y, node.style.size, ink)

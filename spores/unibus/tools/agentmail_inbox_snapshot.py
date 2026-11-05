@@ -167,6 +167,14 @@ def main() -> int:
 
     github = sum(1 for thread in threads if "github" in thread["labels"])
     support = sum(1 for thread in threads if "support" in thread["labels"])
+    tag_counts: dict[str, int] = {}
+    for thread in threads:
+        for label in thread["labels"]:
+            tag_counts[label] = tag_counts.get(label, 0) + 1
+    tags = [
+        {"id": name, "label": name, "count": count}
+        for name, count in sorted(tag_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
     now = dt.datetime.now().astimezone().strftime("%H:%M")
 
     lines = [
@@ -176,13 +184,29 @@ def main() -> int:
         '  search = "",',
         '  sort = "Newest first",',
         f'  account = {{ email = {lua(inbox_id)}, provider = "AgentMail", sync = {lua(now)} }},',
-        f"  counts = {{ unread = {unread}, urgent = {urgent}, support = {support}, drafts = 0 }},",
+        "  accounts = {",
+        f'    {{ id = "agentmail", label = "AgentMail", email = {lua(inbox_id)}, provider = "AgentMail", sync = {lua(now)}, unread = {unread}, selected = true }},',
+        "  },",
+        "  inboxes = {",
+        f'    {{ id = "inbox", label = "Inbox", unread = {unread}, selected = true }},',
+        '    { id = "archive", label = "Archive", unread = 0 },',
+        '    { id = "snoozed", label = "Snoozed", unread = 0 },',
+        "  },",
+        f"  counts = {{ unread = {unread}, urgent = {urgent}, support = {support}, drafts = 0, archived = 0 }},",
         '  state = { mode = "ready" },',
+        "  tags = {",
+    ]
+    for tag in tags:
+        lines.append("    " + obj(tag) + ",")
+    lines += [
+        "  },",
+    ]
+    lines += [
         f'  selected_id = {lua(selected["id"] if selected else "")},',
         "  layout = {",
         "    list_offset = 0, list_limit = 50,",
         f'    cursor_id = {lua(selected["id"] if selected else "")},',
-        '    focus = "list", width_class = "wide", rail_collapsed = true, detail_collapsed = false,',
+        '    focus = "list", width_class = "wide", rail_collapsed = false, detail_collapsed = false,',
         "  },",
         "  filters = {",
         f'    {{ id = "all", label = "All mail", count = {len(threads)} }},',
