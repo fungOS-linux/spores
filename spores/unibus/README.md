@@ -11,11 +11,22 @@ and syncs across devices.
   Spore; durability, revisions, cursors, and tombstones live in the host.
 - **Sync** is `changes`/`apply` with last-writer-wins, not a network call.
 
+Build:
+
+```sh
+rustup target add wasm32-wasip2
+cargo build -p spore-unibus --target wasm32-wasip2 --release
+cp target/wasm32-wasip2/release/spore_unibus.wasm module.wasm
+```
+
 See [`docs/records.md`](../../docs/records.md) and
 [`docs/ai-inbox-spec.md`](../../docs/ai-inbox-spec.md).
 
-Status: scaffold + Canvas UI. `module.wasm` is not built yet; the record-key/
-schema mapping, manifest, and `ui/inbox.lua` are the first reviewable slice.
+Status: **component built**, host capabilities pending. `module.wasm` is a
+wasm32-wasip2 component importing `soil:records@0.1.0` and `soil:unibus@0.1.0`
+and exporting `run` + `snapshot`. The manifest, UI, and module are the first
+reviewable slice; a Soil host must implement the two capabilities before it can
+run end-to-end.
 
 Preview the UI without a compositor:
 

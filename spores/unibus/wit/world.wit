@@ -1,0 +1,13 @@
+// The first soil:unibus Spore: a read-only mail/chat inbox.
+package fungos:unibus-spore@0.1.0;
+
+world unibus-spore {
+  import soil:records/records@0.1.0;
+  import soil:unibus/bus@0.1.0;
+
+  /// `init` seeds account/inbox records; otherwise poll once and ingest.
+  export run: func(args: list<string>) -> result<_, string>;
+
+  /// Return the UI snapshot as JSON bytes. Canvas passes this to ui/inbox.lua.
+  export snapshot: func() -> result<list<u8>, string>;
+}
