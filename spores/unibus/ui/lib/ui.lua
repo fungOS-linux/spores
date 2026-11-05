@@ -13,6 +13,56 @@
 
 local ui = {}
 
+-- ---- user style ---------------------------------------------------------
+
+ui.style = {
+  density = "comfortable",
+  radius = nil,
+  spacing = { xs = 4, sm = 8, md = 16, lg = 28, xl = 44 },
+  type = {},
+  theme = {},
+  surfaces = { panel = 0.42, selected = 0.16 },
+  app = {},
+}
+
+local function copy(value)
+  if type(value) ~= "table" then return value end
+  local out = {}
+  for key, item in pairs(value) do out[key] = copy(item) end
+  return out
+end
+
+local function merge(base, override)
+  if type(override) ~= "table" then return base end
+  for key, value in pairs(override) do
+    if type(value) == "table" and type(base[key]) == "table" then
+      merge(base[key], value)
+    else
+      base[key] = copy(value)
+    end
+  end
+  return base
+end
+
+--- Apply the host/user style. `overrides` is data, never code with authority.
+function ui.configure(overrides, app_id)
+  ui.style = copy(ui.style)
+  merge(ui.style, overrides or {})
+  if app_id and overrides and overrides.app and overrides.app[app_id] then
+    merge(ui.style, overrides.app[app_id])
+  end
+  return ui.style
+end
+
+--- Resolve a theme with user type/color/radius overrides.
+function ui.theme(base)
+  local out = copy(base or {})
+  merge(out, ui.style.type)
+  merge(out, ui.style.theme)
+  if ui.style.radius then out.radius = ui.style.radius end
+  return out
+end
+
 -- ---- tokens -------------------------------------------------------------
 
 -- 4px base in projected units. The default is a ~1720px-tall surface; the
@@ -28,12 +78,11 @@ local function use_viewport(theme)
   local vp = theme and theme.viewport
   if not vp or not vp.height or vp.height <= 0 then return end
   U = 8 / vp.height
+  local density = ({ compact = 0.82, comfortable = 1.0, spacious = 1.25 })[ui.style.density] or 1.0
   gap.none = 0
-  gap.xs = px(4)
-  gap.sm = px(8)
-  gap.md = px(16)
-  gap.lg = px(28)
-  gap.xl = px(44)
+  for name, pixels in pairs(ui.style.spacing or {}) do
+    gap[name] = pixels * U * density
+  end
 end
 
 ui.leading = 2.8

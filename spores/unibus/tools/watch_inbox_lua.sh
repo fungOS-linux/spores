@@ -6,6 +6,7 @@ UNIBUS=$(CDPATH= cd -- "$TOOLS/.." && pwd)
 REPO=$(CDPATH= cd -- "$UNIBUS/../.." && pwd)
 MODULES=${MODULES:-"$HOME/Library/Application Support/Dock/canvas/modules"}
 SHOT=${SHOT:-/tmp/inbox-hot.png}
+STYLE=${UI_STYLE:-"$HOME/.config/fungos/ui.lua"}
 CAPTURE=${CAPTURE:-1}
 export MODULES
 cd "$UNIBUS"
@@ -37,5 +38,6 @@ echo "watching $REPO/spores/unibus/ui/inbox.lua"
 fswatch -o -l 0.05 \
   "$UNIBUS/ui/inbox.lua" \
   "$UNIBUS/ui/lib/ui.lua" \
-  "$UNIBUS/examples/inbox_live.lua" |
+  "$UNIBUS/examples/inbox_live.lua" \
+  "$STYLE" |
   while read -r _; do reload; done

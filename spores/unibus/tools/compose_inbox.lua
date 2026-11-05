@@ -8,6 +8,11 @@
 
 local out_dir = assert(arg[1], "usage: compose_inbox.lua <modules dir>")
 
+local style_path = os.getenv("UI_STYLE") or ((os.getenv("HOME") or "") .. "/.config/fungos/ui.lua")
+local style_file = io.open(style_path, "rb")
+local style_source = style_file and style_file:read("*a") or "return {}"
+if style_file then style_file:close() end
+
 local function read(path)
   local file = assert(io.open(path, "rb"), "missing " .. path)
   local text = file:read("*a")
@@ -59,7 +64,7 @@ local library = strip_comments(read("ui/lib/ui.lua"))
 -- of assigning _G.ui, and drop the view's global assertion.
 local marker = 'local ui = assert(_G.ui, "ui library not composed")'
 
-local function compose(name, title, view_path, snapshot_path)
+local function compose(name, title, view_path, snapshot_path, app_id)
   local view = strip_comments(read(view_path))
   local snapshot = strip_comments(read(snapshot_path))
   local at = view:find(marker, 1, true)
@@ -76,6 +81,10 @@ local function compose(name, title, view_path, snapshot_path)
     "local snapshot = (function()",
     snapshot,
     "end)()",
+    "local user_style = (function()",
+    style_source,
+    "end)()",
+    "ui.configure(user_style, " .. string.format("%q", app_id or "") .. ")",
     "local view = (function(ui)",
     view,
     "end)(ui)",
@@ -100,6 +109,6 @@ local function compose(name, title, view_path, snapshot_path)
   print(string.format("wrote %s (%d bytes) and %s", path, #composed, manifest_path))
 end
 
-compose("spore-dev-inbox", "Inbox", "ui/inbox.lua", arg[2] or "examples/inbox_mock.lua")
-compose("spore-dev-approval2", "Approve reply", "ui/approval.lua", "examples/approval_mock.lua")
-compose("spore-dev-contacts", "Contacts", "../../spores/contacts/ui/contacts.lua", arg[3] or "examples/contacts_live.lua")
+compose("spore-dev-inbox", "Inbox", "ui/inbox.lua", arg[2] or "examples/inbox_mock.lua", "dev.fungos.unibus")
+compose("spore-dev-approval2", "Approve reply", "ui/approval.lua", "examples/approval_mock.lua", "dev.fungos.unibus")
+compose("spore-dev-contacts", "Contacts", "../../spores/contacts/ui/contacts.lua", arg[3] or "examples/contacts_live.lua", "dev.fungos.contacts")

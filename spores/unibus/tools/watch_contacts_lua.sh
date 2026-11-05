@@ -42,5 +42,6 @@ echo "watching $REPO/spores/contacts/ui/contacts.lua"
 fswatch -o -l 0.05 \
   "$REPO/spores/contacts/ui/contacts.lua" \
   "$UNIBUS/ui/lib/ui.lua" \
-  "$UNIBUS/examples/contacts_live.lua" |
+  "$UNIBUS/examples/contacts_live.lua" \
+  "$STYLE" |
   while read -r _; do reload; done
