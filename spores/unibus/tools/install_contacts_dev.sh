@@ -49,4 +49,21 @@ PY
 
 printf 'workspace switch contacts-dev\n' | canvasctl
 printf 'workspace save contacts-dev\n' | canvasctl
+python3 - <<'PY'
+import json, subprocess
+request = {
+    "schema_version": 1,
+    "request_id": "contacts-workspace-name",
+    "command": {
+        "command": "workspace_sync",
+        "projects": [{
+            "project_id": "contacts-dev",
+            "name": "Contacts",
+            "status": "active",
+            "theme": {"source": "coherence", "mode": "dark", "accent": "success"},
+        }],
+    },
+}
+subprocess.run(["canvasctl"], input=json.dumps(request), text=True, check=True, capture_output=True)
+PY
 echo "installed contacts-dev"
