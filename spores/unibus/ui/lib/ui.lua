@@ -308,7 +308,7 @@ local function emit(n, theme, x, y, width, out)
     local vpad = px(size * 0.45)
     local hpad = px(size * 0.52)
     local height = text_h + vpad * 2
-    local width_est = #n.label * size * 0.95 * U + hpad * 2
+    local width_est = #n.label * size * 1.15 * U + hpad * 2
     local ink = n.quiet and "surface" or "primary"
     local opacity = n.quiet and 0.55 or (n.selected and 1.0 or 0.9)
     rect(string.format("btn%d", #out + 1), x, y - height, width_est, height, ink, opacity, theme.radius)

@@ -6,6 +6,7 @@
 return {
   revision = 42,
   title = "Inbox",
+  search = "",
   sort = "Newest first",
   account = {
     email = "ajmwagar-agents@agentmail.to",
@@ -17,7 +18,7 @@ return {
   selected_id = "support/refund-441",
   layout = {
     list_offset = 0,
-    list_limit = 6,
+    list_limit = 8,
     cursor_id = "github/mycelium/ci-11793527317",
     focus = "list",
     width_class = "wide",

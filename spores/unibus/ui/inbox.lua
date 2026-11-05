@@ -37,12 +37,12 @@ local function text_px(style)
   local t = theme()
   local base = t.body or 16
   return ({
-    title = base * 0.66,
-    heading = base * 0.56,
-    subheading = base * 0.50,
-    body = base * 0.38,
-    caption = base * 0.29,
-    micro = base * 0.24,
+    title = base * 0.58,
+    heading = base * 0.50,
+    subheading = base * 0.46,
+    body = base * 0.34,
+    caption = base * 0.26,
+    micro = base * 0.22,
   })[style or "body"] or (base * 0.44)
 end
 
@@ -104,31 +104,21 @@ end
 local function thread_row(thread, cursor)
   local unread = thread.unread and true or false
   local title_ink = unread and ROLE.title or ROLE.body
-  local status_ink = thread.urgent and ROLE.warning or ROLE.quiet
-  local status = thread.status or (thread.kind == "chat" and "chat" or "open")
-  local who = thread.assignee and ("@" .. thread.assignee) or (thread.sender or "")
-  local labels = thread.labels and table.concat(thread.labels, " · ") or ""
-  local meta = labels ~= "" and (thread.sender or "") .. " · " .. labels or (thread.sender or "")
+  local labels = thread.labels and ("#" .. table.concat(thread.labels, " #")) or ""
   local body = ui.column {
     gap = "none",
     children = {
       ui.row {
-        widths = { 0.04, 0.78, 0.18 },
+        widths = { 0.035, 0.45, 0.30, 0.215 },
         gap = "xs",
         children = {
           dot(unread and ROLE.title or ROLE.quiet),
-          text(thread.title, "body", title_ink, 26),
+          text(thread.sender or "", "caption", ROLE.body, 16),
+          text(labels, "caption", ROLE.primary, 22),
           text(thread.time or "", "caption", ROLE.quiet),
         },
       },
-      ui.row {
-        widths = { 0.66, 0.34 },
-        children = {
-          text(meta, "caption", ROLE.quiet, 28),
-          text(status .. " " .. who, "caption", status_ink, 16),
-        },
-      },
-      text(thread.preview or thread.summary or "", "caption", ROLE.quiet, 34),
+      text(thread.title, "body", title_ink, 30),
     },
   }
   if thread.selected then
@@ -163,7 +153,7 @@ local function message(msg)
           text(msg.time or "", "caption", ROLE.quiet),
         },
       },
-      text(msg.preview or "", "body", ROLE.body, 32),
+      text(msg.preview or "", "body", ROLE.body, 30),
     },
   }
 end
@@ -232,15 +222,9 @@ local function list(snapshot)
     end
   end
   if #threads > last then
-    children[#children + 1] = ui.row {
-      widths = { 0.72, 0.28 },
-      children = {
-        text("j/k move · space opens", "caption", ROLE.quiet),
-        text(string.format("↓ %d more", #threads - last), "caption", ROLE.warning),
-      },
-    }
+    children[#children + 1] = text(string.format("↓ %d more", #threads - last), "caption", ROLE.warning)
   elseif offset > 0 then
-    children[#children + 1] = text("↑ back to the top with g", "caption", ROLE.quiet)
+    children[#children + 1] = text("↑ back to the top", "caption", ROLE.quiet)
   end
   return ui.column { gap = "none", children = children }
 end
@@ -267,7 +251,7 @@ local function detail(snapshot, narrow)
         ui.column {
           gap = "none",
           children = {
-            text(thread.title, "heading", ROLE.heading, 24),
+            text(thread.title, "heading", ROLE.heading, 22),
             text((thread.sender or "") .. " · " .. (thread.time or ""), "caption", ROLE.quiet, 36),
           },
         },
@@ -280,7 +264,12 @@ local function detail(snapshot, narrow)
         },
       },
     },
-    ui.spacer { size = "xs" },
+    thread.labels and #thread.labels > 0 and text(
+      "#" .. table.concat(thread.labels, "  #"),
+      "caption",
+      ROLE.primary,
+      36
+    ) or ui.spacer { size = "none" },
     ui.row {
       gap = "xs",
       children = {
@@ -303,7 +292,7 @@ local function detail(snapshot, narrow)
           gap = "xs",
           children = {
             text("AGENT BRIEF", "caption", ROLE.quiet),
-            text(thread.brief or thread.preview or "", "body", ROLE.body, 32),
+            text(thread.brief or thread.preview or "", "body", ROLE.body, 30),
           },
         },
       },
@@ -384,6 +373,26 @@ local function state_view(snapshot)
   }
 end
 
+local function searchbar(snapshot)
+  local value = snapshot.search or ""
+  if value == "" then
+    value = "Search mail, people, tags"
+  end
+  return ui.bar {
+    pad = ui.gap.xs,
+    ink = "surface",
+    opacity = 0.55,
+    radius = theme().radius,
+    children = {
+      ui.row {
+        children = {
+          text(value, "caption", ROLE.quiet, 60),
+        },
+      },
+    },
+  }
+end
+
 local function header(snapshot)
   local account = snapshot.account or {}
   return ui.bar {
@@ -441,36 +450,6 @@ local function summary(snapshot)
   }
 end
 
-local function footer(snapshot)
-  return ui.bar {
-    h = ui.gap.lg,
-    pad = ui.gap.md,
-    ink = "surface",
-    opacity = 0.95,
-    border = true,
-    border_top = true,
-    children = {
-      ui.row {
-        widths = { 0.62, 0.38 },
-        children = {
-          text(
-            "j/k move · enter open · r reply · a assign · / search · focus: "
-              .. tostring((snapshot.layout and snapshot.layout.focus) or "list"),
-            "caption",
-            ROLE.quiet
-          ),
-          ui.row {
-            gap = "sm",
-            align = "end",
-            children = {
-              ui.kbd("⌘K"),
-            },
-          },
-        },
-      },
-    },
-  }
-end
 
 function M.tree(snapshot)
   snapshot = snapshot or {}
@@ -499,7 +478,7 @@ function M.tree(snapshot)
       widths[#widths + 1] = rail_collapsed and 1.0 or 0.79
     else
       panes[#panes + 1] = ui.row {
-        widths = { 0.50, 0.50 },
+        widths = { 0.38, 0.62 },
         gap = "md",
         children = {
           list(snapshot),
@@ -521,8 +500,8 @@ function M.tree(snapshot)
     children = {
       header(snapshot),
       summary(snapshot),
+      searchbar(snapshot),
       main,
-      footer(snapshot),
     },
   }
 end
