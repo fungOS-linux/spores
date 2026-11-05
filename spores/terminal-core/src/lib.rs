@@ -5,7 +5,9 @@
 //! without a Wasm host.
 
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "vt100")]
 use unicode_width::UnicodeWidthStr;
+#[cfg(feature = "vt100")]
 use vt100::Color;
 
 /// A deterministic ANSI fixture: title, colors, cursor movement, clear.
@@ -111,6 +113,7 @@ impl Grid {
 }
 
 /// Parse bytes into a fixed-size grid. The caller owns the bounds.
+#[cfg(feature = "vt100")]
 pub fn render(bytes: &[u8], cols: u32, rows: u32) -> Grid {
     let mut parser = vt100::Parser::new(rows as u16, cols as u16, 0);
     parser.process(bytes);
@@ -158,6 +161,7 @@ pub fn render(bytes: &[u8], cols: u32, rows: u32) -> Grid {
     }
 }
 
+#[cfg(feature = "vt100")]
 fn style(cell: &vt100::Cell) -> Style {
     Style {
         fg: color(cell.fgcolor()),
@@ -171,6 +175,7 @@ fn style(cell: &vt100::Cell) -> Style {
     }
 }
 
+#[cfg(feature = "vt100")]
 fn color(color: Color) -> u32 {
     match color {
         Color::Default => 0,
@@ -179,7 +184,7 @@ fn color(color: Color) -> u32 {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "vt100"))]
 mod tests {
     use super::*;
 

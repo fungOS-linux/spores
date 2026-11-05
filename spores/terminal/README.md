@@ -1,32 +1,32 @@
 # Terminal Spore
 
-A Mycelium directory plus one terminal session, rendered by the host.
+A Mycelium directory plus one live terminal session, rendered by the host.
 
 ```
-Spore: directory + VT parser (terminal-core / vt100 now, libghostty-vt next)
+Spore: directory + VT parser (libghostty-vt, linked as a guest static lib)
   import soil:mycelium/directory
   import soil:mycelium/session
   import soil:terminal/surface
         │
         ▼
-host: fixture or Mycelium adapter + ASCII or Canvas grid renderer
+host: Mycelium adapter + host PTY + minifb/ASCII surface
 ```
 
 The Spore has no sockets, SSH client, credentials, local process, or filesystem.
-The host owns Mycelium identity/routing and terminal pixels. This is the first
-vertical slice; `soil:ssh` is deliberately deferred.
+The host owns Mycelium identity/routing and terminal pixels.
 
-## Current slice
+## Real path
 
-- `soil:mycelium.directory.targets/get` — access-filtered targets.
-- `soil:mycelium.session.open-shell/read/write/resize/status/close/exec`.
-- `soil:terminal.surface.open/present/next-input/observe/close`.
-- The mock host serves a fixture directory and a fake PTY that emits ANSI.
-- `terminal-core` converts bytes to a bounded cell grid with `vt100`.
-- The host prints the grid as ASCII and returns a JSON snapshot.
-
-Handles are `u64` for v0, scoped to the component instance. A later revision can
-replace them with WIT resources without changing the verbs.
+- Directory: `mycelium targets --json`, falling back to
+  `mycelium fleet status --json` for fleet hosts.
+- Session: a host PTY running `mycelium ssh <hostname>` with
+  `TERM=xterm-256color`.
+- Parser: libghostty-vt built for `wasm32-freestanding` and linked into the
+  Spore; the C shim returns a flat cell grid.
+- Surface: ASCII by default, or a real `minifb` window with
+  `TERMINAL_WINDOW=1`.
+- Input in window mode is forwarded to the PTY; resize is fixed at 80x24 for
+  v0.
 
 ## Build
 
@@ -36,22 +36,38 @@ cargo build -p spore-terminal --target wasm32-wasip2 --release
 cp target/wasm32-wasip2/release/spore_terminal.wasm spores/terminal/module.wasm
 ```
 
-## Run the mock
+The static archives are in `vendor/`; see `vendor/README.md` to rebuild them.
+
+## Run
 
 ```sh
-cargo test -p terminal-core
-cargo run -p terminal-core --bin terminal-mock
-cargo run -p terminal-host -- open-first
+# real directory
 cargo run -p terminal-host -- list
+
+# real PTY to the first shell-capable target
+cargo run -p terminal-host -- open-first
+
+# real PTY to a specific target
+cargo run -p terminal-host -- open mycelium:agora-one
+
+# live window
+TERMINAL_WINDOW=1 cargo run -p terminal-host -- open mycelium:agora-one
+
+# deterministic fixture for tests
+TERMINAL_MOCK=1 cargo run -p terminal-host -- open-first
+
+# exercise the PTY path without Mycelium
+TERMINAL_SHELL='printf "hello\n"' cargo run -p terminal-host -- open-first
 ```
 
-Expected: a `status: ready` frame, cursor at `(0, 13)`, title
-`terminal fixture`, and a JSON snapshot with four targets.
+`MYCELIUM_BIN` overrides the binary. `TERMINAL_SHELL` is development-only and
+replaces the spawned command.
 
-## Next
+## Current limits
 
-1. Replace `vt100` with libghostty-vt linked as a guest library.
-2. Replace the fixture adapter with `mycelium targets --json` and a host PTY
-   running `mycelium ssh <device>`.
-3. Replace the ASCII renderer with the real `soil:terminal` surface.
-4. Add session records and the GUI/TUI toggle.
+- The Spore runs one bounded initial drain, then the host streams
+  `feed`/`present` while the window is open.
+- Window resize and mouse input are not wired yet.
+- `open-exec` uses `mycelium exec`; terminal sessions use `mycelium ssh`.
+- No session records or GUI/TUI toggle yet.
+- The 80x24 view is fixed.

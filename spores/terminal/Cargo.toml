@@ -14,7 +14,7 @@ crate-type = ["cdylib"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-terminal-core = { path = "../terminal-core" }
+terminal-core = { path = "../terminal-core", default-features = false }
 wit-bindgen = "0.41"
 
 # wit-bindgen emits unsafe shims and export_name; isolate that to this Spore.

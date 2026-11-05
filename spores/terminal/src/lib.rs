@@ -1,4 +1,4 @@
-//! Terminal Spore: Mycelium directory + one VT session.
+//! Terminal Spore: Mycelium directory + one live VT session.
 //!
 //! The host owns Mycelium identity/routing and terminal pixels. This component
 //! owns the directory view, bounded session pumping, VT state and the cell grid.
@@ -6,17 +6,21 @@
 
 wit_bindgen::generate!({ path: "wit", world: "terminal-spore", generate_all });
 
+mod ghostty;
+
 use serde::Serialize;
 use soil::mycelium::{directory, session};
 use soil::terminal::surface;
+use std::cell::RefCell;
 use std::sync::Mutex;
-use terminal_core::{Grid, render};
+use terminal_core::Grid;
 
 const MAX_TARGETS: u32 = 64;
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const READ_CHUNK: u32 = 64 * 1024;
-const READ_TIMEOUT_MS: u32 = 200;
+const READ_TIMEOUT_MS: u32 = 50;
 const MAX_READS: u32 = 4096;
+const MAX_EMPTY_READS: u32 = 20;
 const DEFAULT_COLS: u32 = 80;
 const DEFAULT_ROWS: u32 = 24;
 
@@ -24,6 +28,19 @@ struct Component;
 export!(Component);
 
 static SNAPSHOT: Mutex<Option<Snapshot>> = Mutex::new(None);
+
+thread_local! {
+    static LIVE: RefCell<Option<Live>> = const { RefCell::new(None) };
+}
+
+struct Live {
+    terminal: ghostty::Terminal,
+    session: u64,
+    view: u64,
+    generation: u64,
+    cols: u32,
+    rows: u32,
+}
 
 #[derive(Debug, Clone, Serialize)]
 struct Snapshot {
@@ -47,25 +64,77 @@ struct TerminalView {
     cols: u32,
     rows: u32,
     text: String,
+    cells: Vec<CellView>,
     cursor_row: u32,
     cursor_col: u32,
     cursor_visible: bool,
     title: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct CellView {
+    text: String,
+    width: u8,
+    fg: u32,
+    bg: u32,
+    flags: u32,
+}
+
 impl Component {
     fn record(snapshot: Snapshot) {
         *SNAPSHOT.lock().expect("snapshot poisoned") = Some(snapshot);
+    }
+
+    fn empty() -> Snapshot {
+        Snapshot {
+            targets: Vec::new(),
+            terminal: None,
+            error: None,
+        }
+    }
+
+    fn present_live() -> Result<(), String> {
+        LIVE.with(|live| {
+            let mut live = live.borrow_mut();
+            let live = live.as_mut().ok_or("no live terminal")?;
+            live.generation = live.generation.saturating_add(1);
+            let grid = live.terminal.grid();
+            let frame = frame_from_grid(&grid, live.generation);
+            surface::present(live.view, &frame).map_err(|error| format!("present: {error:?}"))?;
+            let mut snapshot = SNAPSHOT
+                .lock()
+                .expect("snapshot poisoned")
+                .clone()
+                .unwrap_or_else(Self::empty);
+            snapshot.terminal = Some(TerminalView {
+                cols: grid.cols,
+                rows: grid.rows,
+                text: grid.plain_text(),
+                cells: grid
+                    .cells
+                    .iter()
+                    .map(|cell| CellView {
+                        text: cell.text.clone(),
+                        width: cell.width,
+                        fg: cell.style.fg,
+                        bg: cell.style.bg,
+                        flags: flags(cell),
+                    })
+                    .collect(),
+                cursor_row: grid.cursor_row,
+                cursor_col: grid.cursor_col,
+                cursor_visible: grid.cursor_visible,
+                title: grid.title,
+            });
+            *SNAPSHOT.lock().expect("snapshot poisoned") = Some(snapshot);
+            Ok(())
+        })
     }
 }
 
 impl Guest for Component {
     fn run(args: Vec<String>) -> Result<(), String> {
-        let mut snap = Snapshot {
-            targets: Vec::new(),
-            terminal: None,
-            error: None,
-        };
+        let mut snap = Component::empty();
 
         let command = args.first().map(String::as_str).unwrap_or("open-first");
         match command {
@@ -90,8 +159,45 @@ impl Guest for Component {
             other => return Err(format!("unknown command {other:?}")),
         }
 
-        Self::record(snap);
+        Component::record(snap);
         Ok(())
+    }
+
+    fn feed(bytes: Vec<u8>) -> Result<(), String> {
+        LIVE.with(|live| {
+            let mut live = live.borrow_mut();
+            let live = live.as_mut().ok_or("no live terminal")?;
+            live.terminal.feed(&bytes);
+            Ok(())
+        })
+    }
+
+    fn present() -> Result<(), String> {
+        Component::present_live()
+    }
+
+    fn resize(cols: u32, rows: u32) -> Result<(), String> {
+        if cols == 0 || rows == 0 || cols > 400 || rows > 200 {
+            return Err("resize over budget".into());
+        }
+        LIVE.with(|live| {
+            let mut live = live.borrow_mut();
+            let live = live.as_mut().ok_or("no live terminal")?;
+            live.terminal.resize(cols, rows);
+            live.cols = cols;
+            live.rows = rows;
+            Ok(())
+        })
+    }
+
+    fn stop() -> Result<(), String> {
+        LIVE.with(|live| {
+            if let Some(live) = live.borrow_mut().take() {
+                let _ = session::close(live.session);
+                let _ = surface::close(live.view);
+            }
+            Ok(())
+        })
     }
 
     fn snapshot() -> Result<Vec<u8>, String> {
@@ -99,11 +205,7 @@ impl Guest for Component {
             .lock()
             .expect("snapshot poisoned")
             .clone()
-            .unwrap_or_else(|| Snapshot {
-                targets: Vec::new(),
-                terminal: None,
-                error: None,
-            });
+            .unwrap_or_else(Component::empty);
         serde_json::to_vec(&snapshot).map_err(|error| format!("snapshot: {error}"))
     }
 }
@@ -130,49 +232,67 @@ fn open_target(snap: &mut Snapshot, target: &str) -> Result<(), String> {
         .map_err(|error| format!("terminal surface: {error:?}"))?;
     let session = session::open_shell(target, DEFAULT_COLS, DEFAULT_ROWS)
         .map_err(|error| format!("open shell: {error:?}"))?;
+    let terminal = ghostty::Terminal::new(DEFAULT_COLS, DEFAULT_ROWS)?;
 
-    let mut bytes = Vec::new();
+    LIVE.with(|live| {
+        *live.borrow_mut() = Some(Live {
+            terminal,
+            session,
+            view,
+            generation: 0,
+            cols: DEFAULT_COLS,
+            rows: DEFAULT_ROWS,
+        });
+    });
+
+    let mut total = 0usize;
+    let mut empty = 0u32;
     for _ in 0..MAX_READS {
         match session::read(session, READ_CHUNK, READ_TIMEOUT_MS) {
             Ok(Some(chunk)) => {
-                bytes.extend_from_slice(&chunk);
-                if bytes.len() > MAX_FRAME_BYTES {
-                    let _ = session::close(session);
+                if chunk.is_empty() {
+                    empty = empty.saturating_add(1);
+                    if empty >= MAX_EMPTY_READS {
+                        break;
+                    }
+                    continue;
+                }
+                empty = 0;
+                total = total.saturating_add(chunk.len());
+                if total > MAX_FRAME_BYTES {
                     return Err("session exceeded the bounded frame budget".into());
                 }
+                Component::feed(chunk)?;
             }
             Ok(None) => break,
             Err(session::Error::Closed) => break,
-            Err(error) => {
-                let _ = session::close(session);
-                return Err(format!("read: {error:?}"));
-            }
+            Err(error) => return Err(format!("read: {error:?}")),
         }
     }
 
-    let state = session::status(session).ok();
-    let _ = session::close(session);
-
-    let grid = render(&bytes, DEFAULT_COLS, DEFAULT_ROWS);
-    let frame = frame_from_grid(&grid, 1);
-    let presented =
-        surface::present(view, &frame).map_err(|error| format!("present: {error:?}"))?;
-    let _ = surface::close(view);
-
-    snap.terminal = Some(TerminalView {
-        cols: grid.cols,
-        rows: grid.rows,
-        text: grid.plain_text(),
-        cursor_row: grid.cursor_row,
-        cursor_col: grid.cursor_col,
-        cursor_visible: grid.cursor_visible,
-        title: grid.title,
-    });
-    if let Some(state) = state {
+    if let Ok(state) = session::status(session) {
         snap.error = state.message;
     }
-    let _ = presented;
+    Component::present_live()?;
+    if let Some(terminal) = SNAPSHOT
+        .lock()
+        .expect("snapshot poisoned")
+        .as_ref()
+        .and_then(|snapshot| snapshot.terminal.clone())
+    {
+        snap.terminal = Some(terminal);
+    }
     Ok(())
+}
+
+fn flags(grid_cell: &terminal_core::Cell) -> u32 {
+    let style = &grid_cell.style;
+    (style.bold as u32)
+        | ((style.italic as u32) << 1)
+        | ((style.underline as u32) << 2)
+        | ((style.reverse as u32) << 3)
+        | ((style.dim as u32) << 4)
+        | ((style.strikethrough as u32) << 5)
 }
 
 fn frame_from_grid(grid: &Grid, generation: u64) -> surface::Frame {
