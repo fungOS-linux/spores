@@ -19,7 +19,7 @@ local ui = {}
 local U = 1 / 215
 local function px(n) return n * U end
 
-ui.gap = { xs = px(4), sm = px(8), md = px(16), lg = px(28), xl = px(44) }
+ui.gap = { none = 0, xs = px(4), sm = px(8), md = px(16), lg = px(28), xl = px(44) }
 local gap = ui.gap
 
 ui.leading = 2.1
@@ -57,6 +57,13 @@ function ui.text(value, props)
 end
 
 function ui.rule(props) return node("rule", props or {}) end
+
+-- A horizontal band with a background: title bars, toolbars, status lines.
+function ui.bar(props) return node("bar", props or {}) end
+
+-- A raw rectangle in token colours. The escape hatch for dividers and
+-- highlights; it takes units, not pixels, so it still follows the surface.
+function ui.fill(props) return node("fill", props or {}) end
 function ui.spacer(props) return node("spacer", props or {}) end
 function ui.code(language, source) return node("code", { language = language, source = source }) end
 function ui.diagram(format, source) return node("diagram", { format = format, source = source }) end
@@ -100,17 +107,51 @@ local function estimate_width(n, theme)
   return #n.value * size * 0.48 * U
 end
 
-local function text_lines(n, theme)
-  local chars = ui.chars[n.style or "body"] or ui.chars.body
-  return wrap(n.value, n.chars or chars)
+-- Character budget derived from the *column* width, not a global constant.
+-- 8 body characters per projected unit is calibrated against the rendered page;
+-- it is an estimate until the host exposes text metrics, so it is named once
+-- here rather than sprinkled through views.
+local CHARS_PER_UNIT = 8
+
+local function budget(theme, size, width)
+  return math.max(8, math.floor(width * CHARS_PER_UNIT * (theme.body / size)))
 end
 
-local function measure(n, theme, width)
+local function text_lines(n, theme, width)
+  local size = n.px or size_for(theme, n.style)
+  return wrap(n.value, n.chars or budget(theme, size, width))
+end
+
+-- Forward declaration: row_extent measures children, and measure measures rows.
+local measure
+
+-- A row's height is the tallest child measured at *its own* width, otherwise
+-- the row reports less height than it draws and the next sibling overlaps it.
+local function row_extent(n, theme, width)
+  local last = #n.children
+  local spacing = gap[n.gap or "none"] or 0
+  local total = width - spacing * (last - 1)
+  local tallest = 0
+  for index, child in ipairs(n.children) do
+    local child_width = n.widths and (total * n.widths[index]) or total
+    tallest = math.max(tallest, measure(child, theme, child_width))
+  end
+  return tallest
+end
+
+measure = function(n, theme, width)
   if n.kind == "text" then
     local size = n.px or size_for(theme, n.style)
-    return #text_lines(n, theme) * px(size * ui.leading)
+    return #text_lines(n, theme, width) * px(size * ui.leading)
   elseif n.kind == "rule" then
     return px(10)
+  elseif n.kind == "fill" then
+    return n.h or 0
+  elseif n.kind == "bar" then
+    local pad = n.pad or gap.sm
+    local child = 0
+    for _, c in ipairs(n.children) do child = math.max(child, measure(c, theme, width - pad * 2)) end
+    return math.max(n.h or 0, child + pad * 2)
   elseif n.kind == "spacer" then
     return gap[n.size or "md"]
   elseif n.kind == "code" then
@@ -122,7 +163,7 @@ local function measure(n, theme, width)
   elseif n.kind == "bullets" then
     local height = 0
     for _, item in ipairs(n.items) do
-      height = height + #wrap(item, ui.chars.body) * px(theme.body * ui.leading)
+      height = height + #wrap(item, n.chars or budget(theme, theme.body, width - 0.34)) * px(theme.body * ui.leading)
     end
     return height
   elseif n.kind == "quote" then
@@ -136,11 +177,7 @@ local function measure(n, theme, width)
     if n.kind == "card" then height = height + gap.md end
     return height
   elseif n.kind == "row" then
-    local tallest = 0
-    for _, child in ipairs(n.children) do
-      tallest = math.max(tallest, measure(child, theme, width))
-    end
-    return tallest
+    return row_extent(n, theme, width)
   end
   return 0
 end
@@ -173,7 +210,7 @@ local function emit(n, theme, x, y, width, out)
 
   if n.kind == "text" then
     local size = n.px or size_for(theme, n.style)
-    for _, line in ipairs(text_lines(n, theme)) do
+    for _, line in ipairs(text_lines(n, theme, width)) do
       text_at(line, size, n.ink or (n.style == "title" and "primary" or "text"))
       y = y - px(size * ui.leading)
     end
@@ -182,6 +219,32 @@ local function emit(n, theme, x, y, width, out)
   elseif n.kind == "rule" then
     rect(string.format("r%d", #out + 1), x, y + px(4), width, 0.003, "muted", 0.26, 0)
     return y - px(10)
+
+  elseif n.kind == "fill" then
+    rect(n.id or string.format("f%d", #out + 1), x, y, n.w or width, n.h or 0,
+         n.ink or "surface", n.opacity or 0.6, n.radius or 0)
+    return y - (n.h or 0)
+
+  elseif n.kind == "bar" then
+    local pad = n.pad or gap.sm
+    local child_h = 0
+    for _, c in ipairs(n.children) do child_h = math.max(child_h, measure(c, theme, width - pad * 2)) end
+    local height = math.max(n.h or 0, child_h + pad * 2)
+    local bleed = n.bleed or 0
+    rect(string.format("bar%d", #out + 1), x - bleed, y + (n.dy or 0),
+         width + bleed * 2, height, n.ink or "surface", n.opacity or 0.9, n.radius or 0)
+    if n.border then
+      rect(string.format("barb%d", #out + 1), x - bleed,
+           y - height + (n.border_top and height or 0), width + bleed * 2,
+           0.0025, "muted", 0.22, 0)
+    end
+    -- Children start at the top padding, and the band grows to fit them, so a
+    -- bar can never be shorter than its contents.
+    local inner_y = y - pad
+    for _, child in ipairs(n.children) do
+      emit(child, theme, x + pad, inner_y, width - pad * 2, out)
+    end
+    return y - height
 
   elseif n.kind == "spacer" then
     return y - gap[n.size or "md"]
@@ -211,7 +274,7 @@ local function emit(n, theme, x, y, width, out)
   elseif n.kind == "bullets" then
     for _, item in ipairs(n.items) do
       text_at("•", theme.body, "muted", gap.sm)
-      for _, line in ipairs(wrap(item, ui.chars.body)) do
+      for _, line in ipairs(wrap(item, n.chars or budget(theme, theme.body, width - 0.34))) do
         text_at(line, theme.body, "text", 0.34)
         y = y - px(theme.body * ui.leading)
       end
@@ -219,7 +282,7 @@ local function emit(n, theme, x, y, width, out)
     return y
 
   elseif n.kind == "quote" then
-    local lines = wrap(n.value, 47)
+    local lines = wrap(n.value, n.chars or budget(theme, theme.body, width - 0.25))
     local height = #lines * px(theme.body * ui.leading)
     rect(string.format("q%d", #out + 1), x, y, 0.008, height + px(4), "primary", 0.5, 2)
     for _, line in ipairs(lines) do
@@ -229,37 +292,61 @@ local function emit(n, theme, x, y, width, out)
     return y
 
   elseif n.kind == "row" then
-    -- Rows place aligned pairs: first child left, last child right. Free
-    -- horizontal flow would need text metrics, which the host does not expose
-    -- and the library refuses to guess beyond a character-width estimate.
-    local tallest = 0
-    for _, child in ipairs(n.children) do
-      tallest = math.max(tallest, measure(child, theme, width))
-    end
+    -- Rows place aligned pairs, or weighted columns when `widths` is given.
+    -- Free horizontal flow would need text metrics, which the host does not
+    -- expose and the library refuses to guess beyond a character estimate.
+    local tallest = row_extent(n, theme, width)
     local last = #n.children
+    local cursor = x
+    local spacing = gap[n.gap or "none"] or 0
+    local total = width - spacing * (last - 1)
     for index, child in ipairs(n.children) do
-      local child_x = x
-      if index == last and last > 1 then
+      local child_width = total
+      if n.widths then child_width = total * n.widths[index] end
+      local child_x = cursor
+      if not n.widths and index == last and last > 1 then
         child_x = x + width - estimate_width(child, theme)
       end
-      emit(child, theme, child_x, y, width, out)
+      emit(child, theme, child_x, y, child_width, out)
+      cursor = cursor + child_width + spacing
     end
     return y - tallest
 
   elseif n.kind == "card" or n.kind == "column" then
     local top = y
-    local inner = x
+    local inner = x + (n.pad or 0)
+    local inner_width = width - (n.pad or 0) * 2
+    if n.pad then y = y - n.pad end
     if n.kind == "card" then
       local height = measure(n, theme, width)
       rect(string.format("k%d", #out + 1), x - 0.16, y + px(6), width + 0.32, height - px(6), "surface", 0.9, theme.radius)
       inner = x + gap.sm
+      inner_width = width - gap.sm * 2
       y = y - gap.sm
     end
+
+    -- A column with a fixed height distributes what is left to children marked
+    -- `grow`. That is how a footer stays pinned to the bottom of a fixed frame
+    -- instead of floating after the last line of content.
+    local spacing = gap[n.gap or "sm"] or 0
+    local heights, used = {}, 0
     for index, child in ipairs(n.children) do
-      if index > 1 then y = y - gap[n.gap or "sm"] end
-      y = emit(child, theme, inner, y, width - (inner - x), out)
+      heights[index] = measure(child, theme, inner_width)
+      used = used + heights[index]
+    end
+    used = used + spacing * (#n.children - 1)
+    local extra = math.max(0, (n.h or 0) - used)
+
+    for index, child in ipairs(n.children) do
+      if index > 1 then y = y - spacing end
+      local before = y
+      y = emit(child, theme, inner, y, inner_width, out)
+      if child.grow and n.h then
+        y = before - (heights[index] + extra)
+      end
     end
     if n.kind == "card" then y = y - gap.sm end
+    if n.pad then y = y - n.pad end
     return y
   end
 
@@ -277,7 +364,7 @@ function ui.render(tree, theme)
     translation = { -4, 4, -1 },
     scale = { 8, 8, 1 },
   }
-  emit(tree, theme, -3.45, 3.4, 6.9, out)
+  emit(tree, theme, -4.0, 4.0, 8.0, out)
   -- Rects first (behind), then text.
   for _, n in ipairs(out) do
     if n.opacity ~= nil then
