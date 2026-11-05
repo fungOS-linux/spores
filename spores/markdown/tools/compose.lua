@@ -35,8 +35,20 @@ local composed = table.concat({
 -- the artifact stays small.
 local minified = composed:gsub("\n%s*%-%-[^\n]*", ""):gsub("\n%s*\n", "\n")
 
-local path = out_dir .. "/spore-dev.lua"
+-- One module id per Spore. Two apps writing `spore-dev.lua` meant the last
+-- compose won and a surface silently changed which app it was, which is what
+-- "opening a Spore replaces the one that was open" actually was.
+local name = "field-notes"
+
+local path = out_dir .. "/" .. name .. ".lua"
 local file = assert(io.open(path, "wb"), "cannot write " .. path)
 file:write(minified)
 file:close()
-print(string.format("wrote %s (%d bytes, %d after minify)", path, #composed, #minified))
+
+local manifest = read("ui/module.json")
+local manifest_path = out_dir .. "/" .. name .. ".json"
+local mf = assert(io.open(manifest_path, "wb"), "cannot write " .. manifest_path)
+mf:write(manifest)
+mf:close()
+
+print(string.format("wrote %s (%d bytes, %d after minify) and %s", path, #composed, #minified, manifest_path))

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "field-notes",
+  "title": "Field notes",
+  "inputs": [
+    { "id": "width", "kind": "number", "required": false },
+    { "id": "height", "kind": "number", "required": false },
+    { "id": "mode", "kind": "text", "required": false },
+    { "id": "section", "kind": "text", "required": false }
+  ],
+  "resources": [],
+  "capabilities": {
+    "write_scene": true,
+    "read_inputs": ["width", "height", "mode", "section"],
+    "read_theme": true
+  },
+  "actions": [
+    { "id": "mode-read", "destination": "canvas.state", "kind": "mode" },
+    { "id": "mode-edit", "destination": "canvas.state", "kind": "mode" },
+    { "id": "share", "destination": "canvas.state", "kind": "notice" },
+    { "id": "search", "destination": "canvas.state", "kind": "notice" },
+    { "id": "more", "destination": "canvas.state", "kind": "notice" },
+    { "id": "bold", "destination": "canvas.state", "kind": "notice" },
+    { "id": "italic", "destination": "canvas.state", "kind": "notice" },
+    { "id": "code", "destination": "canvas.state", "kind": "notice" },
+    { "id": "link", "destination": "canvas.state", "kind": "notice" },
+    { "id": "section-field-notes", "destination": "canvas.state", "kind": "section" },
+    { "id": "section-what-this-is", "destination": "canvas.state", "kind": "section" },
+    { "id": "section-content-it-handles", "destination": "canvas.state", "kind": "section" },
+    { "id": "section-code", "destination": "canvas.state", "kind": "section" },
+    { "id": "section-diagrams", "destination": "canvas.state", "kind": "section" },
+    { "id": "section-images-and-attachments", "destination": "canvas.state", "kind": "section" },
+    { "id": "section-open-questions", "destination": "canvas.state", "kind": "section" }
+  ]
+}

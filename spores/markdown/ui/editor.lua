@@ -4,6 +4,16 @@
 -- coordinates, no colours, no callbacks. Anything that looks pressable is an
 -- affordance; wiring presses to actions is the host's next step.
 
+-- The surface hands its own small state back as inputs: which mode the pane is
+-- in, and which section the rail selected. A view is a pure function of these.
+local inputs = module.inputs or {}
+local mode = inputs.mode or "read"
+local section = inputs.section or "What this is"
+
+local function slug(value)
+  return (tostring(value):lower():gsub("[^%w]+", "-"):gsub("^-", ""):gsub("-$", ""))
+end
+
 local outline = {
   { "Field notes", "h1", 1 },
   { "What this is", "h2", 1 },
@@ -14,24 +24,20 @@ local outline = {
   { "Open questions", "h2", 0 },
 }
 
+-- A rail row is a control, not a picture of one: the host owns the hit region
+-- and returns `section` as an input on the next render.
 local function rail_entry(label, level, active)
-  return ui.bar {
-    pad = ui.gap.sm,
-    ink = "primary",
-    opacity = active and 0.16 or 0.0,
-    radius = "sm",
-    children = {
-      ui.text(label, {
-        style = "body",
-        ink = active and "primary" or (level == "h3" and "muted" or "text"),
-      }),
-    },
-  }
+  return ui.button(label, {
+    action = "section-" .. slug(label),
+    body = { value = label },
+    small = level == "h3",
+    quiet = not active,
+  })
 end
 
 local rail = {}
 for _, entry in ipairs(outline) do
-  rail[#rail + 1] = rail_entry(entry[1], entry[2], entry[3] == 1 and entry[1] == "What this is")
+  rail[#rail + 1] = rail_entry(entry[1], entry[2], entry[1] == section)
 end
 
 ui.render(
@@ -61,9 +67,9 @@ ui.render(
                 gap = "xs",
                 align = "end",
                 children = {
-                  ui.icon_button("search", { size = "small", quiet = true }),
-                  ui.icon_button("more", { size = "small", quiet = true }),
-                  ui.button("Share"),
+                  ui.icon_button("search", { size = "small", quiet = true, action = "search" }),
+                  ui.icon_button("more", { size = "small", quiet = true, action = "more" }),
+                  ui.button("Share", { action = "share", body = { value = "share" } }),
                 },
               },
             },
@@ -85,13 +91,15 @@ ui.render(
               ui.row {
                 gap = "xs",
                 children = {
-                  ui.button("Read", { small = true, quiet = true }),
-                  ui.button("Edit", { small = true, selected = true }),
+                  ui.button("Read", { small = true, quiet = mode ~= "read",
+                                      action = "mode-read", body = { value = "read" } }),
+                  ui.button("Edit", { small = true, quiet = mode ~= "edit",
+                                      action = "mode-edit", body = { value = "edit" } }),
                   ui.text("  ", { style = "caption" }),
-                  ui.icon_button("bold", { size = "small", quiet = true }),
-                  ui.icon_button("italic", { size = "small", quiet = true }),
-                  ui.icon_button("code", { size = "small", quiet = true }),
-                  ui.icon_button("link", { size = "small", quiet = true }),
+                  ui.icon_button("bold", { size = "small", quiet = true, action = "bold" }),
+                  ui.icon_button("italic", { size = "small", quiet = true, action = "italic" }),
+                  ui.icon_button("code", { size = "small", quiet = true, action = "code" }),
+                  ui.icon_button("link", { size = "small", quiet = true, action = "link" }),
                 },
               },
               ui.row {
@@ -127,7 +135,29 @@ ui.render(
             gap = "sm",
             pad = ui.gap.lg,
             children = {
-              ui.text("What this is", { style = "heading", ink = "primary" }),
+              ui.text(section, { style = "heading", ink = "primary" }),
+              ui.bar {
+                pad = ui.gap.sm,
+                ink = "surface",
+                opacity = 0.7,
+                radius = "sm",
+                children = {
+                  ui.row {
+                    widths = { 0.6, 0.4 },
+                    children = {
+                      ui.text(mode == "edit" and "editing · unsaved" or "read only · draft",
+                              { style = "caption", ink = "muted" }),
+                      ui.row {
+                        align = "end",
+                        children = {
+                          ui.text(mode == "edit" and "⌘S saves" or "press Edit to type",
+                                  { style = "caption", ink = "muted" }),
+                        },
+                      },
+                    },
+                  },
+                },
+              },
               ui.bar {
                 pad = ui.gap.sm,
                 ink = "primary",

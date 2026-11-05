@@ -309,6 +309,15 @@ local function intrinsic(n, S)
   return 0
 end
 
+-- Interactive controls are host-owned: the module declares *what* the control
+-- is and which action it means, and Canvas owns the pixels, the hit region, the
+-- hover state and the press. A view that drew its own pill could not be pressed.
+local function control_id(n)
+  if n.id then return n.id end
+  local action = tostring(n.action)
+  return (action:gsub("[^%w%-_]", "-")):sub(1, 48)
+end
+
 local function lay_text(n, S, width)
   local name = style(n.style)
   local size = n.px or S.theme[STYLE[name]]
@@ -346,7 +355,7 @@ lay = function(n, S, width)
       -- A rect's scale is a length; a text's scale is a font multiplier, so its
       -- drawn height has to be recovered from the size it asked for.
       local extent
-      if prim.opacity ~= nil then
+      if prim.opacity ~= nil or prim.button then
         extent = prim.scale[2]
       else
         extent = hy(S, prim.scale[1] * prim.scale[1] * S.theme.body * S.depth)
@@ -390,6 +399,19 @@ lay_node = function(n, S, width)
     local wide = wx(S, size * 1.9)
     local color = n.quiet and "surface" or "primary"
     local opacity = n.quiet and 0.5 or (n.selected and 1.0 or 0.85)
+    if n.action and widget and widget.button then
+      return { h = side, p = { {
+        button = {
+          id = control_id(n),
+          label = n.glyph,
+          action = n.action,
+          body = n.body,
+          enabled = n.enabled ~= false,
+          appearance = "quiet",
+        },
+        translation = { 0, 0, 0 }, scale = { wide, side, 1 },
+      } } }
+    end
     return { h = side, p = {
       rect_prim(color, opacity, radius("md", "icon_button"), 0, 0, wide, side),
       text_prim(n.glyph, size, S, n.quiet and "muted" or "background",
@@ -407,6 +429,19 @@ lay_node = function(n, S, width)
     local label_w = estimate_width(n.label, size, S) + hpad * 2
     local color = n.quiet and "surface" or "primary"
     local opacity = n.quiet and 0.55 or (n.selected and 1.0 or 0.9)
+    if n.action and widget and widget.button then
+      return { h = height, p = { {
+        button = {
+          id = control_id(n),
+          label = n.label,
+          action = n.action,
+          body = n.body,
+          enabled = n.enabled ~= false,
+          appearance = n.quiet and "quiet" or "standard",
+        },
+        translation = { 0, 0, 0 }, scale = { label_w, height, 1 },
+      } } }
+    end
     return { h = height, p = {
       rect_prim(color, opacity, radius(n.radius or "md", "button"),
                 0, 0, label_w, height),
@@ -601,12 +636,33 @@ function ui.render(tree, theme)
     translation = { -4, 4, -1 }, scale = { 8, 8, 1 },
   })
 
-  -- Rects first (behind), then text.
+  -- Controls first: the host owns their pixels, so there is nothing to draw
+  -- under them, and their hit region has to be registered either way.
   local index = 0
   for _, prim in ipairs(prims) do
     index = index + 1
+    if prim.button then
+      local spec = prim.button
+      widget.button({
+        id = spec.id,
+        label = spec.label,
+        action = spec.action,
+        body = spec.body or {},
+        x = prim.translation[1], y = prim.translation[2],
+        width = prim.scale[1], height = prim.scale[2],
+        enabled = spec.enabled,
+        appearance = spec.appearance,
+      })
+    end
+  end
+
+  -- Rects next (behind), then text.
+  for _, prim in ipairs(prims) do
+    index = index + 1
     local id = prim.id or string.format("e%d", index)
-    if prim.opacity ~= nil then
+    if prim.button then
+      -- already registered above
+    elseif prim.opacity ~= nil then
       canvas.rect({ id = id, ink = prim.ink, opacity = prim.opacity, radius = prim.radius,
                     translation = prim.translation, scale = prim.scale })
     else
