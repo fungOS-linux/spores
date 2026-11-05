@@ -16,8 +16,10 @@ local function read(path)
   return text
 end
 
+ui_debug = true
+
 local composed = table.concat({
-  "local ui = (function()\n", read("ui/lib/ui.lua"), "\nend)()\n", read("ui/editor.lua"), "\n",
+  "local ui = (function()\n", read("ui/lib/ui.lua"), "\nend)()\nui.debug = true\n", read("ui/editor.lua"), "\n",
 }, "\n")
 
 local prims = {}
@@ -58,6 +60,14 @@ for _, prim in ipairs(prims) do
       x = prim.translation[1], y = prim.translation[2],
       w = width, h = height,
     }
+  end
+end
+
+if os.getenv("DUMP") then
+  for i, prim in ipairs(prims) do
+    local label = prim._kind == "text" and (prim.text or "") or ""
+    local h = prim._kind == "rect" and string.format("h=%.3f", prim.scale[2]) or ""
+    print(string.format("%3d %-4s y=%7.3f x=%7.3f %-12s %s", i, prim._kind, prim.translation[2], prim.translation[1], h, label:sub(1, 40)))
   end
 end
 

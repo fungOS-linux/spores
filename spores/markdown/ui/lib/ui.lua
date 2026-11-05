@@ -294,7 +294,10 @@ end
 local function intrinsic(n, S)
   local theme = S.theme
   if n.kind == "button" then
-    return estimate_width(n.label, n.small and theme.small or theme.body, S) + wx(S, 16)
+    -- The same formula `lay` uses, not a second opinion: two width estimates for
+    -- one control is how a row ends up overlapping its neighbour.
+    local size = n.small and theme.small or theme.body
+    return ulen(n.label) * size * 0.95 * S.ux + wx(S, size * 0.52) * 2
   elseif n.kind == "text" then
     return estimate_width(n.value, n.px or size_for(theme, n.style), S)
   elseif n.kind == "icon" then
@@ -329,7 +332,39 @@ local function lay_children(n, S, width)
   return heights, parts, used
 end
 
+-- The invariant that would have caught the toolbar bug: a node's primitives must
+-- stay inside the box it claimed. Checked only when `ui.debug` is set, because
+-- the message costs bytes in every module that never trips it.
+local lay_node
+
 lay = function(n, S, width)
+  local result = lay_node(n, S, width)
+  if ui.debug then
+    local top, bottom = 0, 0
+    for _, prim in ipairs(result.p) do
+      local y = prim.translation[2]
+      -- A rect's scale is a length; a text's scale is a font multiplier, so its
+      -- drawn height has to be recovered from the size it asked for.
+      local extent
+      if prim.opacity ~= nil then
+        extent = prim.scale[2]
+      else
+        extent = hy(S, prim.scale[1] * prim.scale[1] * S.theme.body * S.depth)
+      end
+      top = math.max(top, y)
+      bottom = math.min(bottom, y - extent)
+    end
+    local tolerance = hy(S, 1)
+    if top > tolerance or bottom < -result.h - tolerance then
+      fail(("%s(%q) claims h=%.3f but draws %.3f..%.3f (w=%.3f)"):format(
+        tostring(n.kind), tostring(n.value or n.label or n.glyph or ""),
+        result.h, bottom, top, width), 3)
+    end
+  end
+  return result
+end
+
+lay_node = function(n, S, width)
   local kind = n.kind
   local theme = S.theme
 
@@ -356,9 +391,9 @@ lay = function(n, S, width)
     local color = n.quiet and "surface" or "primary"
     local opacity = n.quiet and 0.5 or (n.selected and 1.0 or 0.85)
     return { h = side, p = {
-      rect_prim(color, opacity, radius("md", "icon_button"), 0, -side, wide, side),
+      rect_prim(color, opacity, radius("md", "icon_button"), 0, 0, wide, side),
       text_prim(n.glyph, size, S, n.quiet and "muted" or "background",
-                wx(S, size * 0.45), -hy(S, size * 0.55)),
+                wx(S, size * 0.45), -hy(S, size * 0.42)),
     } }
 
   elseif kind == "button" then
@@ -374,9 +409,9 @@ lay = function(n, S, width)
     local opacity = n.quiet and 0.55 or (n.selected and 1.0 or 0.9)
     return { h = height, p = {
       rect_prim(color, opacity, radius(n.radius or "md", "button"),
-                0, -height, label_w, height),
+                0, 0, label_w, height),
       text_prim(n.label, size, S, n.quiet and "muted" or "background",
-                hpad, -vpad - text_h * 0.92),
+                hpad, -vpad),
     } }
 
   elseif kind == "bar" then
@@ -412,10 +447,10 @@ lay = function(n, S, width)
     local height = advance * (#lines + 1) + hy(S, 8)
     local bleed = wx(S, 4)
     local prims = {
-      rect_prim("surface", 0.95, radius("md", "code"), -bleed, hy(S, 4), width + bleed * 2, height),
+      rect_prim("surface", 0.95, radius("md", "code"), -bleed, 0, width + bleed * 2, height),
     }
     if n.language and n.language ~= "" then
-      prims[#prims + 1] = text_prim(n.language, theme.micro, S, "muted", width - wx(S, 40), hy(S, 4))
+      prims[#prims + 1] = text_prim(n.language, theme.micro, S, "muted", width - wx(S, 40), -hy(S, 4))
     end
     for index, line in ipairs(lines) do
       prims[#prims + 1] = text_prim(line, theme.small, S, "muted", 0, -hy(S, 4) - (index - 1) * advance)
@@ -426,8 +461,8 @@ lay = function(n, S, width)
     local height = hy(S, theme.small * 1.8 + 24)
     local bleed = wx(S, 4)
     return { h = height + hy(S, ui.gap.xs), p = {
-      rect_prim("surface", 0.55, radius("md", "diagram"), -bleed, hy(S, 4), width + bleed * 2, height),
-      text_prim("[" .. n.format .. "]  " .. n.source, theme.small, S, "muted", wx(S, 6), -hy(S, 4)),
+      rect_prim("surface", 0.55, radius("md", "diagram"), -bleed, 0, width + bleed * 2, height),
+      text_prim("[" .. n.format .. "]  " .. n.source, theme.small, S, "muted", wx(S, 8), -hy(S, 8)),
     } }
 
   elseif kind == "bullets" then
@@ -448,7 +483,7 @@ lay = function(n, S, width)
     local indent = wx(S, 14)
     local lines = wrap(n.value, n.chars or budget(S, theme.body, width - indent))
     local height = #lines * advance
-    local prims = { rect_prim("primary", 0.5, radius("sm", "quote"), 0, 0, wx(S, 2), height + hy(S, 4)) }
+    local prims = { rect_prim("primary", 0.5, radius("sm", "quote"), 0, 0, wx(S, 2), height) }
     for index, line in ipairs(lines) do
       prims[#prims + 1] = text_prim(line, theme.body, S, "muted", indent, -(index - 1) * advance)
     end
