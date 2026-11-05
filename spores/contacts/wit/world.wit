@@ -1,0 +1,9 @@
+// Contacts Spore: one soil:records contact collection, one searchable snapshot.
+package fungos:contacts-spore@0.1.0;
+
+world contacts-spore {
+  import soil:records/records@0.1.0;
+
+  /// Return the contact directory matching `query` as JSON bytes.
+  export snapshot: func(query: string) -> result<list<u8>, string>;
+}

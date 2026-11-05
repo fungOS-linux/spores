@@ -1,0 +1,36 @@
+# Contacts Spore over soil:records. See docs/soil-records.md.
+schema = 1
+
+[spore]
+id = "dev.fungos.contacts"
+name = "contacts"
+version = "0.1.0"
+license = "MIT"
+summary = "Searchable contacts from the local records book"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { records = "0.1.0", canvas = "1.0.0" }
+
+[module]
+path = "module.wasm"
+
+[ui]
+entry = "ui/contacts.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+surfaces = ["web", "native", "canvas"]
+
+[grants]
+"soil:records.read" = "read the contact collection"
+"soil:canvas" = "present the contact directory"
+
+[denied]
+# Read-only Spore. Write/sync grants are separate.
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]

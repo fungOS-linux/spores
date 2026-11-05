@@ -5,7 +5,11 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 MODULES=${1:-"$HOME/Library/Application Support/Dock/canvas/modules"}
 export MODULES
 cd "$ROOT"
-python3 tools/records_contacts_snapshot.py "$ROOT/examples/contacts_live.lua"
+if [ -x "${CONTACTS_HOST:-../../target/debug/contacts-host}" ]; then
+  python3 tools/contacts_spore_snapshot.py "$ROOT/examples/contacts_live.lua"
+else
+  python3 tools/records_contacts_snapshot.py "$ROOT/examples/contacts_live.lua"
+fi
 lua tools/compose_inbox.lua "$MODULES" "$ROOT/examples/inbox_live.lua" "$ROOT/examples/contacts_live.lua"
 
 python3 - <<'PY'
