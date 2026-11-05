@@ -399,24 +399,25 @@ lay_node = function(n, S, width)
     local wide = wx(S, size * 1.9)
     local color = n.quiet and "surface" or "primary"
     local opacity = n.quiet and 0.5 or (n.selected and 1.0 or 0.85)
+    local prims = {
+      rect_prim(color, opacity, radius("md", "icon_button"), 0, 0, wide, side),
+      text_prim(n.glyph, size, S, n.quiet and "muted" or "background",
+                wx(S, size * 0.45), -hy(S, size * 0.42)),
+    }
     if n.action and widget and widget.button then
-      return { h = side, p = { {
+      prims[#prims + 1] = {
         button = {
           id = control_id(n),
           label = n.glyph,
           action = n.action,
           body = n.body,
           enabled = n.enabled ~= false,
-          appearance = "quiet",
+          appearance = "invisible",
         },
         translation = { 0, 0, 0 }, scale = { wide, side, 1 },
-      } } }
+      }
     end
-    return { h = side, p = {
-      rect_prim(color, opacity, radius("md", "icon_button"), 0, 0, wide, side),
-      text_prim(n.glyph, size, S, n.quiet and "muted" or "background",
-                wx(S, size * 0.45), -hy(S, size * 0.42)),
-    } }
+    return { h = side, p = prims }
 
   elseif kind == "button" then
     local size = n.small and theme.small or theme.body
@@ -429,25 +430,29 @@ lay_node = function(n, S, width)
     local label_w = estimate_width(n.label, size, S) + hpad * 2
     local color = n.quiet and "surface" or "primary"
     local opacity = n.quiet and 0.55 or (n.selected and 1.0 or 0.9)
+    local prims = {
+      rect_prim(color, opacity, radius(n.radius or "md", "button"),
+                0, 0, label_w, height),
+      text_prim(n.label, size, S, n.quiet and "muted" or "background",
+                hpad, -vpad),
+    }
+    -- Draw the control *and* register a press region on top of it. The host
+    -- draws nothing for an invisible control, so the view keeps its own look
+    -- while Canvas still owns the hit area and the press.
     if n.action and widget and widget.button then
-      return { h = height, p = { {
+      prims[#prims + 1] = {
         button = {
           id = control_id(n),
           label = n.label,
           action = n.action,
           body = n.body,
           enabled = n.enabled ~= false,
-          appearance = n.quiet and "quiet" or "standard",
+          appearance = "invisible",
         },
         translation = { 0, 0, 0 }, scale = { label_w, height, 1 },
-      } } }
+      }
     end
-    return { h = height, p = {
-      rect_prim(color, opacity, radius(n.radius or "md", "button"),
-                0, 0, label_w, height),
-      text_prim(n.label, size, S, n.quiet and "muted" or "background",
-                hpad, -vpad),
-    } }
+    return { h = height, p = prims }
 
   elseif kind == "bar" then
     local pad = space(n.pad or "sm", "bar.pad")
