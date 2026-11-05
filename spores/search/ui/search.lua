@@ -160,6 +160,8 @@ local function read_view_state()
         elseif value:sub(1, 2) == "i:" then state.index = tonumber(value:sub(3)) end
       elseif key == "filter" and (value == "all" or value == "files" or value == "folders") then
         state.filter = value
+      elseif key == "hover" then
+        state.hover = tonumber(value)
       end
     end
     return state
@@ -184,13 +186,23 @@ local function write_view_state(snapshot, state)
   if state.filter and state.filter ~= "all" then
     parts[#parts + 1] = "filter=" .. state.filter
   end
+  if state.hover and snapshot.results and snapshot.results[state.hover] then
+    parts[#parts + 1] = "hover=" .. state.hover
+  end
   local key = table.concat(parts, ";")
-  if #key > 128 then
-    -- Drop optional filter memory before dropping selection.
+  -- Selection is the important part. Drop transient hover first, then filter,
+  -- rather than losing the row the person deliberately chose.
+  while #key > 128 and #parts > 2 do
     parts[#parts] = nil
     key = table.concat(parts, ";")
   end
   if #key <= 128 then pcall(module.select, key) end
+end
+
+local function full_result_index(snapshot, path)
+  for index, result in ipairs(snapshot.results or {}) do
+    if result.path == path then return index end
+  end
 end
 
 local function apply_view_state(snapshot, state)
@@ -384,9 +396,44 @@ function M.render(snapshot)
     end
   end
 
-  -- Selected row highlight.
   local filtered = filter_results(snapshot.results or {}, state.filter)
   local _, selected_index = selected_result(snapshot, filtered)
+
+  -- Hover is host-throttled: Canvas only sends pointer.move when the hit target
+  -- changes, so this costs a re-render on row entry/exit, not per mouse pixel.
+  local event = _G.module and _G.module.event
+  if event and event.kind == "pointer" then
+    local next_hover
+    if event.phase ~= "leave" and event.x and event.y then
+      local px, py = event.x * W, event.y * H
+      for index = 1, #filtered do
+        local row = find(laid, "result-" .. index)
+        if row and px >= row.rect.x and px <= row.rect.x + row.rect.width
+          and py >= row.rect.y and py <= row.rect.y + row.rect.height then
+          next_hover = full_result_index(snapshot, filtered[index].path)
+          break
+        end
+      end
+    end
+    if next_hover ~= state.hover then
+      state.hover = next_hover
+      write_view_state(snapshot, state)
+    end
+  end
+
+  local hover_index
+  if state.hover and (snapshot.results or {})[state.hover] then
+    local hover_path = snapshot.results[state.hover].path
+    for index, result in ipairs(filtered) do
+      if result.path == hover_path then hover_index = index break end
+    end
+  end
+  local hover_row = hover_index and find(laid, "result-" .. tostring(hover_index)) or nil
+  if hover_row and hover_index ~= selected_index then
+    rect("search-hover", hover_row.rect.x - 6, hover_row.rect.y, hover_row.rect.width + 12, hover_row.rect.height, "surface", 0.32, 8)
+  end
+
+  -- Selected row highlight.
   local selected_row = find(laid, "result-" .. tostring(selected_index))
   if selected_row then
     rect("search-selected", selected_row.rect.x - 6, selected_row.rect.y, selected_row.rect.width + 12, selected_row.rect.height, "primary", 0.16, 8)
