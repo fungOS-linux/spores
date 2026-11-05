@@ -30,8 +30,13 @@ local composed = table.concat({
   "",
 }, "\n")
 
+-- The host bounds an adapter script at 32 KiB. A library plus a view crosses
+-- that quickly, so drop comments and blank lines: the sources stay readable,
+-- the artifact stays small.
+local minified = composed:gsub("\n%s*%-%-[^\n]*", ""):gsub("\n%s*\n", "\n")
+
 local path = out_dir .. "/spore-dev.lua"
 local file = assert(io.open(path, "wb"), "cannot write " .. path)
 file:write(composed)
 file:close()
-print(string.format("wrote %s (%d bytes)", path, #composed))
+print(string.format("wrote %s (%d bytes, %d after minify)", path, #composed, #minified))
