@@ -378,25 +378,11 @@ local function header(snapshot)
     opacity = 0.95,
     border = true,
     children = {
-      ui.row {
-        widths = { 0.52, 0.48 },
+      ui.column {
+        gap = "none",
         children = {
-          ui.column {
-            gap = "none",
-            children = {
-              text(snapshot.title or "Inbox", "title", ROLE.title),
-              text((account.email or "") .. " · " .. (account.sync or ""), "caption", ROLE.quiet),
-            },
-          },
-          ui.row {
-            gap = "xs",
-            align = "end",
-            children = {
-              ui.icon_button("columns", { size = "small", quiet = true }),
-              ui.icon_button("doc", { size = "small", quiet = true }),
-              pill("New"),
-            },
-          },
+          text(snapshot.title or "Inbox", "title", ROLE.title),
+          text((account.email or "") .. " · " .. (account.sync or ""), "caption", ROLE.quiet),
         },
       },
     },
@@ -449,7 +435,7 @@ function M.tree(snapshot)
       widths[#widths + 1] = rail_collapsed and 1.0 or 0.79
     else
       panes[#panes + 1] = ui.row {
-        widths = { 0.38, 0.62 },
+        widths = { 0.42, 0.58 },
         gap = "md",
         children = {
           list(snapshot),

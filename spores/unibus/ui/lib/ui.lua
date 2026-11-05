@@ -15,12 +15,26 @@ local ui = {}
 
 -- ---- tokens -------------------------------------------------------------
 
--- 4px base, expressed in projected units for a surface ~1720px tall.
+-- 4px base in projected units. The default is a ~1720px-tall surface; the
+-- host replaces it with the real viewport height when one is available, so
+-- the same view follows a resized or differently shaped surface.
 local U = 1 / 215
 local function px(n) return n * U end
 
 ui.gap = { none = 0, xs = px(4), sm = px(8), md = px(16), lg = px(28), xl = px(44) }
 local gap = ui.gap
+
+local function use_viewport(theme)
+  local vp = theme and theme.viewport
+  if not vp or not vp.height or vp.height <= 0 then return end
+  U = 8 / vp.height
+  gap.none = 0
+  gap.xs = px(4)
+  gap.sm = px(8)
+  gap.md = px(16)
+  gap.lg = px(28)
+  gap.xl = px(44)
+end
 
 ui.leading = 2.8
 ui.chars = { title = 34, body = 50, caption = 60 }
@@ -504,6 +518,7 @@ local function emit(n, theme, x, y, width, out)
 end
 
 function ui.render(tree, theme)
+  use_viewport(theme)
   local out = {}
   -- Opaque base: a surface is a window, not a hole in the wallpaper.
   out[#out + 1] = {
