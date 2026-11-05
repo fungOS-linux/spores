@@ -86,7 +86,7 @@ local function filter_row(filter)
   return ui.bar { pad = ui.gap.xs, children = { row } }
 end
 
-local function thread_row(thread)
+local function thread_row(thread, cursor)
   local unread = thread.unread and true or false
   local title_ink = unread and ROLE.title or ROLE.body
   local status_ink = thread.urgent and ROLE.warning or ROLE.quiet
@@ -127,6 +127,15 @@ local function thread_row(thread)
       pad = ui.gap.xs,
       ink = "primary",
       opacity = 0.10,
+      radius = theme().radius,
+      children = { body },
+    }
+  end
+  if cursor then
+    return ui.bar {
+      pad = ui.gap.xs,
+      ink = "primary",
+      opacity = 0.05,
       radius = theme().radius,
       children = { body },
     }
@@ -210,7 +219,7 @@ local function list(snapshot)
   for index = first, last do
     local thread = threads[index]
     if thread then
-      children[#children + 1] = thread_row(thread)
+      children[#children + 1] = thread_row(thread, thread.id == layout.cursor_id)
     end
   end
   if #threads > last then
@@ -395,7 +404,12 @@ local function footer(snapshot)
       ui.row {
         widths = { 0.62, 0.38 },
         children = {
-          text("j/k move · enter open · r reply · a assign · / search", "caption", ROLE.quiet),
+          text(
+            "j/k move · enter open · r reply · a assign · / search · focus: "
+              .. tostring((snapshot.layout and snapshot.layout.focus) or "list"),
+            "caption",
+            ROLE.quiet
+          ),
           ui.row {
             gap = "sm",
             align = "end",
