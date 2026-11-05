@@ -1,0 +1,17 @@
+// Search Spore: read the host VFS through `soil:vfs` and the derived browse /
+// search index through `soil:index`, and export one Canvas snapshot of the
+// results plus the selected entry's preview.
+//
+// The Spore never sees a host path, provider CID, or content transport. It
+// names workspace-relative paths, asks the index for recall, then reads the
+// authoritative entry and a bounded preview through `soil:vfs`.
+package fungos:search-spore@0.1.0;
+
+world search-spore {
+  import soil:vfs/vfs@1.0.0;
+  import soil:index/index@1.0.0;
+
+  /// Return the search/browse snapshot matching `query` as JSON bytes.
+  /// An empty query browses the workspace root; a non-empty query searches.
+  export snapshot: func(query: string) -> result<list<u8>, string>;
+}

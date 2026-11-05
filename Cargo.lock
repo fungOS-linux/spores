@@ -759,6 +759,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "fungos-vfs"
+version = "0.1.0"
+source = "git+https://github.com/fungOS-linux/fungos-vfs.git?rev=001a1dca542acdae6bfc9ba81679bf2948501976#001a1dca542acdae6bfc9ba81679bf2948501976"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "clap",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "futures"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1715,6 +1729,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "search-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "soil-vfs-host",
+ "wasmtime",
+ "wasmtime-wasi",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1893,6 +1917,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "soil-vfs-host"
+version = "0.1.0"
+source = "git+https://github.com/fungOS-linux/soil.git?rev=c04a8883b26d219d80f06432ab4dbe1b2f38a698#c04a8883b26d219d80f06432ab4dbe1b2f38a698"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "fungos-vfs",
+ "rusqlite",
+ "serde_json",
+ "wasmtime",
+]
+
+[[package]]
 name = "spdx"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1920,6 +1957,14 @@ dependencies = [
 [[package]]
 name = "spore-markdown"
 version = "0.1.0"
+
+[[package]]
+name = "spore-search"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen",
+]
 
 [[package]]
 name = "spore-terminal"

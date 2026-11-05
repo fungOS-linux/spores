@@ -1,5 +1,5 @@
 [workspace]
-members = ["spores/markdown", "spores/unibus", "spores/contacts", "spores/launcher", "spores/terminal-core", "spores/terminal", "spores/terminal-host", "spores/contacts-host", "spores/launcher-host"]
+members = ["spores/markdown", "spores/unibus", "spores/contacts", "spores/launcher", "spores/terminal-core", "spores/terminal", "spores/terminal-host", "spores/contacts-host", "spores/launcher-host", "spores/search", "spores/search-host"]
 resolver = "3"
 
 [workspace.package]

@@ -1,0 +1,19 @@
+[package]
+name = "search-host"
+description = "Wasmtime host for the search Spore over soil:vfs + soil:index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "search-host"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+soil-vfs-host = { git = "https://github.com/fungOS-linux/soil.git", rev = "c04a8883b26d219d80f06432ab4dbe1b2f38a698", default-features = false }
+wasmtime = { version = "50", features = ["anyhow"] }
+wasmtime-wasi = "50"

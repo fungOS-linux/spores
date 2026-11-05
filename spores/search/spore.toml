@@ -1,0 +1,37 @@
+# Search Spore over soil:vfs + soil:index. See ~/src/fungOS/soil/docs/soil-vfs-index.md.
+schema = 1
+
+[spore]
+id = "dev.fungos.search"
+name = "search"
+version = "0.1.0"
+license = "MIT"
+summary = "Search and browse the host VFS workspace, rendered as a Canvas snapshot"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { canvas = "1.0.0", vfs = "1.0.0", index = "1.0.0" }
+
+[module]
+path = "module.wasm"
+
+[ui]
+entry = "ui/search.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+surfaces = ["web", "native", "canvas"]
+
+[grants]
+"soil:vfs.read" = "list, stat and range-read the workspace namespace"
+"soil:index.search" = "browse and full-text/fuzzy search the derived index"
+"soil:canvas" = "present the search surface"
+
+[denied]
+# Read-only projection over the VFS. No writes, no content-provider selection.
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
