@@ -96,27 +96,24 @@ end
 local function thread_row(thread, cursor, index)
   local unread = thread.unread and true or false
   local title_ink = unread and ROLE.title or ROLE.body
-  local labels = thread.labels and ("#" .. table.concat(thread.labels, " #")) or ""
   local body = ui.column {
     gap = "none",
     children = {
       ui.row {
-        widths = { 0.035, 0.45, 0.30, 0.215 },
+        widths = { 0.76, 0.24 },
         gap = "xs",
         children = {
-          dot(unread and ROLE.title or ROLE.quiet),
-          text(thread.sender or "", "caption", ROLE.body, 16),
-          text(labels, "caption", ROLE.primary, 22),
+          text(thread.sender or "", "caption", unread and ROLE.title or ROLE.body, 24),
           text(thread.time or "", "caption", ROLE.quiet),
         },
       },
-      text(thread.title, "body", title_ink, 30),
+      text(thread.title, "body", title_ink, 34),
     },
   }
   if thread.selected then
     return ui.bar {
       hit = { id = "thread-" .. index },
-      pad = ui.gap.xs,
+      pad = ui.gap.sm,
       ink = "primary",
       opacity = 0.10,
       radius = theme().radius,
@@ -126,14 +123,14 @@ local function thread_row(thread, cursor, index)
   if cursor then
     return ui.bar {
       hit = { id = "thread-" .. index },
-      pad = ui.gap.xs,
+      pad = ui.gap.sm,
       ink = "primary",
       opacity = 0.05,
       radius = theme().radius,
       children = { body },
     }
   end
-  return ui.bar { hit = { id = "thread-" .. index }, pad = ui.gap.xs, children = { body } }
+  return ui.bar { hit = { id = "thread-" .. index }, pad = ui.gap.sm, children = { body } }
 end
 
 local function message(msg)
@@ -435,7 +432,7 @@ function M.tree(snapshot)
       widths[#widths + 1] = rail_collapsed and 1.0 or 0.79
     else
       panes[#panes + 1] = ui.row {
-        widths = { 0.42, 0.58 },
+        widths = { 0.46, 0.54 },
         gap = "md",
         children = {
           list(snapshot),
