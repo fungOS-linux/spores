@@ -1,0 +1,20 @@
+[package]
+name = "calendar-host"
+description = "Wasmtime host for the calendar Spore"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "calendar-host"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+wasmtime = { version = "50", features = ["anyhow"] }
+wasmtime-wasi = "50"
+fungos-records = { git = "https://github.com/fungOS-linux/records.git", rev = "46450ede02588e533984378bc979cb4010f9867b" }

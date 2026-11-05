@@ -1,0 +1,9 @@
+// Calendar Spore: one soil:records calendar collection, one normalized snapshot.
+package fungos:calendar-spore@0.1.0;
+
+world calendar-spore {
+  import soil:records/records@0.1.0;
+
+  /// Return normalized calendar events as JSON bytes.
+  export snapshot: func(query: string) -> result<list<u8>, string>;
+}
