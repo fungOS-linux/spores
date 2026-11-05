@@ -1,9 +1,14 @@
 //! Calendar over `soil:records`.
 //!
 //! The host owns the records book and iCal bodies. This Spore owns the calendar
-//! projection: parse the stored event fields, normalize dates and times, detect
-//! same-day overlaps, and emit one bounded Canvas snapshot.
+//! projection: parse stored event fields, resolve TZID time zones, expand bounded
+//! recurrence windows, detect same-day overlaps, and emit one Canvas snapshot.
 
+use std::str::FromStr;
+
+use chrono::TimeZone;
+use chrono_tz::Tz as ChronoTz;
+use rrule::{RRule, RRuleSet, Tz, Unvalidated};
 use serde_json::{Value, json};
 
 wit_bindgen::generate!({ path: "wit", world: "calendar-spore", generate_all });
@@ -13,11 +18,13 @@ use soil::records::records::{self, Entry};
 const COLLECTION: &str = "event";
 const SCAN_LIMIT: u32 = 512;
 const MAX_EVENTS: usize = 512;
+const RECUR_BEFORE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+const RECUR_AFTER_MS: u64 = 365 * 24 * 60 * 60 * 1000;
 
 struct Component;
 export!(Component);
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Event {
     id: String,
     summary: String,
@@ -41,8 +48,9 @@ struct Event {
 }
 
 impl Guest for Component {
-    fn snapshot(query: String) -> Result<Vec<u8>, String> {
+    fn snapshot(query: String, now_ms: u64, local_zone: String) -> Result<Vec<u8>, String> {
         let needle = query.trim().to_lowercase();
+        let local_zone = ChronoTz::from_str(&local_zone).map(Tz::from).unwrap_or(Tz::UTC);
         let mut events = Vec::new();
         let mut calendars = std::collections::BTreeMap::<String, (String, String, usize)>::new();
         let mut revision = 0u64;
@@ -51,24 +59,23 @@ impl Guest for Component {
             let Ok(value) = serde_json::from_slice::<Value>(&entry.body) else {
                 continue;
             };
-            let Some(event) = project(entry.key.id, value) else {
-                continue;
-            };
-            if !needle.is_empty() {
-                let haystack = format!(
-                    "{} {} {} {}",
-                    event.summary, event.location, event.notes, event.calendar_label
-                )
-                .to_lowercase();
-                if !haystack.contains(&needle) {
-                    continue;
+            for event in project(entry.key.id, value, now_ms, local_zone) {
+                if !needle.is_empty() {
+                    let haystack = format!(
+                        "{} {} {} {}",
+                        event.summary, event.location, event.notes, event.calendar_label
+                    )
+                    .to_lowercase();
+                    if !haystack.contains(&needle) {
+                        continue;
+                    }
                 }
+                calendars
+                    .entry(event.calendar_id.clone())
+                    .and_modify(|slot| slot.2 += 1)
+                    .or_insert((event.calendar_label.clone(), event.calendar_color.clone(), 1));
+                events.push(event);
             }
-            calendars
-                .entry(event.calendar_id.clone())
-                .and_modify(|slot| slot.2 += 1)
-                .or_insert((event.calendar_label.clone(), event.calendar_color.clone(), 1));
-            events.push(event);
         }
         events.sort_by(|left, right| {
             left.start_ms
@@ -126,10 +133,16 @@ impl Guest for Component {
     }
 }
 
-fn project(id: String, value: Value) -> Option<Event> {
-    let start = parse_moment(text(&value, "start")?)?;
-    let end = parse_moment(text(&value, "end").unwrap_or_default()).unwrap_or_default();
-    let all_day = value.get("all_day").and_then(Value::as_bool).unwrap_or(start.time.is_empty());
+fn project(id: String, value: Value, now_ms: u64, local_zone: Tz) -> Vec<Event> {
+    let Some(start_raw) = text(&value, "start") else {
+        return Vec::new();
+    };
+    let zone = event_zone(&value, &start_raw);
+    let Some(start) = parse_datetime(&start_raw, zone) else {
+        return Vec::new();
+    };
+    let end = parse_datetime(&text(&value, "end").unwrap_or_default(), zone).unwrap_or(start);
+    let duration_ms = (end.timestamp_millis() - start.timestamp_millis()).max(0);
     let categories = value
         .get("categories")
         .and_then(Value::as_array)
@@ -143,8 +156,7 @@ fn project(id: String, value: Value) -> Option<Event> {
     let calendar_id = slug(&calendar_label);
     let calendar_color = match calendar_id.as_str() {
         "personal" => "success",
-        "family" => "warning",
-        "birthdays" => "warning",
+        "family" | "birthdays" => "warning",
         _ => "primary",
     }
     .into();
@@ -166,28 +178,101 @@ fn project(id: String, value: Value) -> Option<Event> {
         .get("organizer")
         .and_then(|organizer| text(organizer, "name").or_else(|| text(organizer, "value")))
         .unwrap_or_default();
-    let end_date = if end.date.is_empty() { start.date.clone() } else { end.date.clone() };
-    Some(Event {
+    let rrule = text(&value, "rrule").unwrap_or_default();
+    let shown_start = start.with_timezone(&local_zone);
+    let shown_end = end.with_timezone(&local_zone);
+    let base = Event {
         id,
         summary: text(&value, "summary").unwrap_or_else(|| "Untitled event".into()),
         calendar_id,
         calendar_label,
         calendar_color,
-        date_key: start.date.clone(),
-        end_date,
-        start_time: start.time.clone(),
-        end_time: end.time.clone(),
-        start_ms: start.ms,
-        end_ms: if end.ms > start.ms { end.ms } else { start.ms },
-        all_day,
-        is_recurring: !text(&value, "rrule").unwrap_or_default().is_empty(),
-        rrule: text(&value, "rrule").unwrap_or_default(),
+        date_key: shown_start.date_naive().format("%Y-%m-%d").to_string(),
+        end_date: shown_end.date_naive().format("%Y-%m-%d").to_string(),
+        start_time: if start.time() == chrono::NaiveTime::MIN { String::new() } else { shown_start.format("%H:%M").to_string() },
+        end_time: if end.time() == chrono::NaiveTime::MIN { String::new() } else { shown_end.format("%H:%M").to_string() },
+        start_ms: start.timestamp_millis().max(0) as u64,
+        end_ms: end.timestamp_millis().max(0) as u64,
+        all_day: value.get("all_day").and_then(Value::as_bool).unwrap_or(start.time() == chrono::NaiveTime::MIN),
+        is_recurring: !rrule.is_empty(),
+        rrule,
         location: text(&value, "location").unwrap_or_default(),
         organizer,
         attendees,
         notes: text(&value, "description").or_else(|| text(&value, "notes")).unwrap_or_default(),
         conflicts: Vec::new(),
-    })
+    };
+    if !base.is_recurring {
+        return vec![base];
+    }
+    let Ok(rule) = RRule::<Unvalidated>::from_str(&base.rrule) else {
+        return vec![base];
+    };
+    let Ok(rule) = rule.validate(start) else {
+        return vec![base];
+    };
+    let after_ms = now_ms.saturating_sub(RECUR_BEFORE_MS);
+    let before_ms = now_ms.saturating_add(RECUR_AFTER_MS);
+    let after = zone.timestamp_millis_opt(after_ms as i64).single();
+    let before = zone.timestamp_millis_opt(before_ms as i64).single();
+    let (Some(after), Some(before)) = (after, before) else {
+        return vec![base];
+    };
+    let set = RRuleSet::new(start).rrule(rule).after(after).before(before);
+    let dates = set.all(MAX_EVENTS as u16).dates;
+    if dates.is_empty() {
+        return vec![base];
+    }
+    dates
+        .into_iter()
+        .map(|occurrence| {
+            let occurrence_end = occurrence + chrono::Duration::milliseconds(duration_ms);
+            let shown_start = occurrence.with_timezone(&local_zone);
+            let shown_end = occurrence_end.with_timezone(&local_zone);
+            let occurrence_ms = occurrence.timestamp_millis().max(0) as u64;
+            Event {
+                id: format!("{}@{}", base.id, occurrence_ms / 1000),
+                date_key: shown_start.date_naive().format("%Y-%m-%d").to_string(),
+                end_date: shown_end.date_naive().format("%Y-%m-%d").to_string(),
+                start_time: shown_start.format("%H:%M").to_string(),
+                end_time: if duration_ms > 0 { shown_end.format("%H:%M").to_string() } else { String::new() },
+                start_ms: occurrence_ms,
+                end_ms: occurrence_end.timestamp_millis().max(occurrence_ms as i64) as u64,
+                ..base.clone()
+            }
+        })
+        .collect()
+}
+
+fn event_zone(value: &Value, start: &str) -> Tz {
+    if start.ends_with('Z') {
+        return Tz::UTC;
+    }
+    text(value, "timezone")
+        .and_then(|name| ChronoTz::from_str(&name).ok())
+        .map(Tz::from)
+        .unwrap_or(Tz::UTC)
+}
+
+fn parse_datetime(raw: &str, zone: Tz) -> Option<chrono::DateTime<Tz>> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let digits: String = raw.chars().filter(char::is_ascii_digit).collect();
+    if digits.len() < 8 {
+        return None;
+    }
+    let year = digits.get(0..4)?.parse().ok()?;
+    let month = digits.get(4..6)?.parse().ok()?;
+    let day = digits.get(6..8)?.parse().ok()?;
+    let (hour, minute, second) = if digits.len() >= 14 {
+        (digits.get(8..10)?.parse().ok()?, digits.get(10..12)?.parse().ok()?, digits.get(12..14)?.parse().ok()?)
+    } else {
+        (0, 0, 0)
+    };
+    let zone = if raw.ends_with('Z') { Tz::UTC } else { zone };
+    zone.with_ymd_and_hms(year, month, day, hour, minute, second).single()
 }
 
 fn mark_conflicts(events: &mut [Event]) {
@@ -211,66 +296,6 @@ fn mark_conflicts(events: &mut [Event]) {
         }
         events[left].conflicts = ids;
     }
-}
-
-#[derive(Default)]
-struct Moment {
-    date: String,
-    time: String,
-    ms: u64,
-}
-
-fn parse_moment(raw: String) -> Option<Moment> {
-    let raw = raw.trim().to_string();
-    if raw.is_empty() {
-        return None;
-    }
-    let digits: String = raw.chars().filter(char::is_ascii_digit).collect();
-    if digits.len() < 8 {
-        return None;
-    }
-    let year = digits.get(0..4)?.parse::<i64>().ok()?;
-    let month = digits.get(4..6)?.parse::<i64>().ok()?;
-    let day = digits.get(6..8)?.parse::<i64>().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
-    let date = format!("{year:04}-{month:02}-{day:02}");
-    let (hour, minute, second) = if digits.len() >= 14 {
-        (
-            digits.get(8..10)?.parse::<i64>().ok()?,
-            digits.get(10..12)?.parse::<i64>().ok()?,
-            digits.get(12..14)?.parse::<i64>().ok()?,
-        )
-    } else if raw.contains('T') && raw.len() >= 16 {
-        (
-            raw.get(11..13)?.parse::<i64>().ok()?,
-            raw.get(14..16)?.parse::<i64>().ok()?,
-            0,
-        )
-    } else {
-        (0, 0, 0)
-    };
-    if !(0..=23).contains(&hour) || !(0..=59).contains(&minute) || !(0..=59).contains(&second) {
-        return None;
-    }
-    let time = if digits.len() >= 12 || raw.contains('T') {
-        format!("{hour:02}:{minute:02}")
-    } else {
-        String::new()
-    };
-    let days = days_from_civil(year, month, day);
-    let ms = (days * 86_400 + hour * 3_600 + minute * 60 + second) as u64 * 1000;
-    Some(Moment { date, time, ms })
-}
-
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = year - if month <= 2 { 1 } else { 0 };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let yoe = year - era * 400;
-    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
 }
 
 fn scan(collection: &str, limit: u32) -> Vec<Entry> {

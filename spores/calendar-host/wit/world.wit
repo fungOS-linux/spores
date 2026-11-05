@@ -5,5 +5,5 @@ world calendar-spore {
   import soil:records/records@0.1.0;
 
   /// Return normalized calendar events as JSON bytes.
-  export snapshot: func(query: string) -> result<list<u8>, string>;
+  export snapshot: func(query: string, now-ms: u64, local-zone: string) -> result<list<u8>, string>;
 }

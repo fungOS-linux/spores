@@ -193,8 +193,17 @@ fn main() -> Result<()> {
     let bindings = CalendarSpore::instantiate(&mut store, &component, &linker)
         .map_err(anyhow::Error::from)
         .context("instantiate calendar Spore")?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let local_zone = std::env::var("CALENDAR_TZ")
+        .ok()
+        .filter(|zone| !zone.trim().is_empty())
+        .or_else(|| iana_time_zone::get_timezone().ok())
+        .unwrap_or_else(|| "UTC".into());
     let snapshot = bindings
-        .call_snapshot(&mut store, &query)
+        .call_snapshot(&mut store, &query, now_ms, &local_zone)
         .map_err(anyhow::Error::from)?
         .map_err(|message| anyhow!("snapshot: {message}"))?;
     println!("{}", String::from_utf8_lossy(&snapshot));
