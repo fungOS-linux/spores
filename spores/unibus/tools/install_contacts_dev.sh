@@ -32,7 +32,7 @@ surface["content"]["spec"]["data"] = {
 }
 document["layout"]["placements"] = [{
     "surface_id": "contacts",
-    "bounds": {"x": 0.03, "y": 0.035, "width": 0.94, "height": 0.93},
+    "bounds": {"x": 0.06, "y": 0.07, "width": 0.88, "height": 0.72},
     "layer": 0,
 }]
 document["focused_surface_id"] = "contacts"
