@@ -18,7 +18,7 @@ plain\r\n\
 \x1b[2J\x1b[H\
 \x1b[33mstatus:\x1b[0m ready";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Style {
     pub fg: u32,
     pub bg: u32,
@@ -30,20 +30,6 @@ pub struct Style {
     pub strikethrough: bool,
 }
 
-impl Default for Style {
-    fn default() -> Self {
-        Self {
-            fg: 0,
-            bg: 0,
-            bold: false,
-            italic: false,
-            underline: false,
-            reverse: false,
-            dim: false,
-            strikethrough: false,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cell {
