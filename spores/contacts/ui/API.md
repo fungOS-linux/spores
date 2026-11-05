@@ -32,6 +32,23 @@ Contact = {
   addresses: { string }?,
   birthday: string?,
   note: string?,
+  favorite: boolean?,
+  tags: { string }?,
+  last_contacted: integer?,
+  updated_at_ms: integer?,
+  created: string?,
+  last_modified: string?,
+  interactions: {
+    {
+      contact_id: string?,
+      identity_kind: string?,
+      identity: string?,
+      source: string,
+      kind: string,
+      last_at_ms: integer,
+      count: integer,
+    },
+  }?,
 }
 ```
 
@@ -78,5 +95,9 @@ Uses `module.theme` and the global `fungos.ui` profile. No app-specific keys yet
 
 ## Authority
 
-None. Reads are performed by `module.wasm` over `soil:records` with
+None in Lua. Reads are performed by `module.wasm` over `soil:records` with
 `soil:records.read`.
+
+The Spore also reads optional `contact_preference` and `contact_interaction`
+collections. It has no mail, telephony, chat, or calendar capability. Connectors
+write bounded records; see `docs/contact-connectors.md`.
