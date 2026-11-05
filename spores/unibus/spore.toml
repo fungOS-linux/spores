@@ -17,6 +17,11 @@ abi = { canvas = "1.0.0", records = "0.1.0", unibus = "0.1.0" }
 [module]
 path = "module.wasm"
 
+[ui]
+entry = "ui/inbox.lua"
+jit = true
+hot_reload = true
+
 [launch]
 default = "canvas"
 surfaces = ["web", "native", "canvas"]

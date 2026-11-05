@@ -14,5 +14,11 @@ and syncs across devices.
 See [`docs/records.md`](../../docs/records.md) and
 [`docs/ai-inbox-spec.md`](../../docs/ai-inbox-spec.md).
 
-Status: scaffold. `module.wasm` is not built yet; the record-key/schema mapping
-and manifest are the first reviewable slice.
+Status: scaffold + Canvas UI. `module.wasm` is not built yet; the record-key/
+schema mapping, manifest, and `ui/inbox.lua` are the first reviewable slice.
+
+Preview the UI without a compositor:
+
+```sh
+lua tools/preview.lua examples/inbox_snapshot.lua > /tmp/inbox.html
+```

@@ -5,3 +5,7 @@ version = 4
 [[package]]
 name = "spore-markdown"
 version = "0.1.0"
+
+[[package]]
+name = "spore-unibus"
+version = "0.1.0"
