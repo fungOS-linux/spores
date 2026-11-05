@@ -1,0 +1,36 @@
+# Installed Spore launcher. The host owns discovery and execution.
+schema = 1
+
+[spore]
+id = "dev.fungos.launcher"
+name = "launcher"
+version = "0.1.0"
+license = "MIT"
+summary = "Browse installed Spores and launch one bounded surface"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { spore = "0.1.0", canvas = "1.0.0" }
+
+[module]
+path = "module.wasm"
+
+[ui]
+entry = "ui/launcher.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+surfaces = ["canvas", "web", "native"]
+
+[grants]
+"soil:spore.catalog" = "list installed Spore packages"
+"soil:spore.launch" = "launch a declared Spore surface"
+"soil:canvas" = "present the launcher"
+
+[denied]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
