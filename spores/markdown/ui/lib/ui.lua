@@ -58,6 +58,28 @@ end
 
 function ui.rule(props) return node("rule", props or {}) end
 
+-- Glyphs, not an icon font. The host has no icon primitive and Canvas has no
+-- symbol set, so the library draws well-supported Unicode and keeps the names
+-- stable: when the renderer grows real icons, only this table changes.
+ui.glyph = {
+  search = "⌕", share = "↑", more = "⋯", close = "✕",
+  bold = "B", italic = "I", code = "</>", link = "∞",
+  doc = "▤", files = "▣", grid = "▦", list = "☰", columns = "◫",
+  chevron = "▸", check = "✓", dot = "●", eye = "◉",
+}
+
+function ui.icon(name, props)
+  props = props or {}
+  props.glyph = ui.glyph[name] or name
+  return node("icon", props)
+end
+
+function ui.icon_button(name, props)
+  props = props or {}
+  props.glyph = ui.glyph[name] or name
+  return node("icon_button", props)
+end
+
 -- A pressable-looking control. It draws a control; the host decides whether a
 -- press reaches it. Until input is routed to Lua modules, this is an affordance,
 -- not a behaviour.
@@ -137,6 +159,12 @@ local function intrinsic(n, theme)
     return estimate_width(n, theme)
   elseif n.kind == "kbd" then
     return 0.5
+  elseif n.kind == "icon" then
+    local size = n.size and theme[n.size] or theme.body
+    return px(size) * 1.1
+  elseif n.kind == "icon_button" then
+    local size = n.size and theme[n.size] or theme.body
+    return px(size) + px(size * 0.9)
   end
   return 0
 end
@@ -179,6 +207,11 @@ measure = function(n, theme, width)
     return n.h or 0
   elseif n.kind == "button" then
     return px((n.small and theme.small or theme.body) * ui.leading + 14)
+  elseif n.kind == "icon" then
+    return px((n.size and theme[n.size] or theme.body) * ui.leading)
+  elseif n.kind == "icon_button" then
+    local size = n.size and theme[n.size] or theme.body
+    return px(size) + px(size * 0.9)
   elseif n.kind == "bar" then
     local pad = n.pad or gap.sm
     local child = 0
@@ -251,6 +284,21 @@ local function emit(n, theme, x, y, width, out)
   elseif n.kind == "rule" then
     rect(string.format("r%d", #out + 1), x, y + px(4), width, 0.003, "muted", 0.26, 0)
     return y - px(10)
+
+  elseif n.kind == "icon" then
+    local size = n.size and theme[n.size] or theme.body
+    text_at(n.glyph, size, n.ink or "muted")
+    return y - px(size * ui.leading)
+
+  elseif n.kind == "icon_button" then
+    local size = n.size and theme[n.size] or theme.body
+    local side = px(size) + px(size * 0.9)
+    local ink = n.quiet and "surface" or "primary"
+    local opacity = n.quiet and 0.5 or (n.selected and 1.0 or 0.85)
+    rect(string.format("ib%d", #out + 1), x, y - side, side, side, ink, opacity, theme.radius)
+    text_at(n.glyph, size, n.quiet and "muted" or "background", px(size * 0.45))
+    out[#out].translation[2] = y - px(size * 0.55)
+    return y - side
 
   elseif n.kind == "button" then
     local size = n.small and theme.small or theme.body
@@ -362,7 +410,7 @@ local function emit(n, theme, x, y, width, out)
         own[index] = intrinsic(child, theme)
         used = used + own[index]
       end
-      local cursor = n.align == "end" and (x + width - used) or x
+      local cursor = n.align == "end" and (x + width - used - gap.xs) or x
       for index, child in ipairs(n.children) do
         local remaining = x + width - cursor
         emit(child, theme, cursor, y, math.max(own[index], remaining), out)

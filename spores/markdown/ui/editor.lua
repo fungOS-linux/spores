@@ -42,7 +42,7 @@ ui.render(
       -- Title bar
       ui.bar {
         h = ui.gap.xl,
-        bleed = 0.16,
+        pad = ui.gap.md,
         ink = "surface",
         opacity = 0.95,
         border = true,
@@ -58,10 +58,11 @@ ui.render(
                 },
               },
               ui.row {
-                gap = "sm",
+                gap = "xs",
                 align = "end",
                 children = {
-                  ui.kbd("⌘K"),
+                  ui.icon_button("search", { size = "small", quiet = true }),
+                  ui.icon_button("more", { size = "small", quiet = true }),
                   ui.button("Share"),
                 },
               },
@@ -73,7 +74,7 @@ ui.render(
       -- Toolbar
       ui.bar {
         h = ui.gap.lg,
-        bleed = 0.16,
+        pad = ui.gap.md,
         ink = "surface",
         opacity = 0.85,
         border = true,
@@ -87,13 +88,20 @@ ui.render(
                   ui.button("Read", { small = true, quiet = true }),
                   ui.button("Edit", { small = true, selected = true }),
                   ui.text("  ", { style = "caption" }),
-                  ui.button("B", { small = true, quiet = true }),
-                  ui.button("I", { small = true, quiet = true }),
-                  ui.button("`", { small = true, quiet = true }),
-                  ui.button("link", { small = true, quiet = true }),
+                  ui.icon_button("bold", { size = "small", quiet = true }),
+                  ui.icon_button("italic", { size = "small", quiet = true }),
+                  ui.icon_button("code", { size = "small", quiet = true }),
+                  ui.icon_button("link", { size = "small", quiet = true }),
                 },
               },
-              ui.text("", { style = "caption" }),
+              ui.row {
+                gap = "xs",
+                align = "end",
+                children = {
+                  ui.icon("dot", { size = "micro", ink = "success" }),
+                  ui.text("saved", { style = "caption", ink = "muted" }),
+                },
+              },
             },
           },
         },
@@ -153,7 +161,7 @@ ui.render(
       -- Status bar
       ui.bar {
         h = ui.gap.lg,
-        bleed = 0.16,
+        pad = ui.gap.md,
         ink = "surface",
         opacity = 0.95,
         border = true,
