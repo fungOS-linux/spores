@@ -86,6 +86,85 @@ A revoked capability must be visible. If chrome were the only place that showed
 grants, a broken chrome spore would silently hide a revocation — which is why the
 revocation notice is an overlay and why the fallback bar exists.
 
+## Chrome as a wrapping spore
+
+Chrome is what makes a content surface a *window*: the frame, the drag handle,
+the resize grips, the close affordance. It should be a spore, so "how dragging
+feels" is a value in a Lua table rather than a constant in the renderer.
+
+The split that keeps it safe: **a chrome spore declares regions and policy;
+Canvas enforces both.**
+
+```toml
+[chrome]
+role = "window"          # names the frame a content surface is wrapped in
+anchor = "top"           # top | left | right | bottom | floating
+inset = 36               # logical points reserved from the content rect
+regions = ["title", "close", "grip"]      # named, hit-tested by Canvas
+draggable = ["title"]                     # which regions initiate a move
+resizable = ["e", "s", "se"]              # which edges initiate a resize
+
+[chrome.policy]
+deadzone = 4             # travel before a press becomes a drag
+snap_distance = 12
+snap_zones = true        # half/quarter dock offers at display edges
+grip = 8                 # resize handle thickness, logical points
+min_size = [160, 120]
+double_click = "maximize"
+```
+
+Rules:
+
+1. **Regions are geometry, not pixels.** Canvas hit-tests the named regions it
+   computed; a chrome spore cannot claim a region and then not draw it, and it
+   cannot claim a full-screen invisible one.
+2. **Policy is data, not behaviour.** Deadzone, snap, grip size, double-click
+   action and motion tokens are read by the interaction engine. A chrome spore
+   changes feel without owning the gesture state machine.
+3. **One chrome per surface, one surface per chrome.** Chrome wraps; it does not
+   tile, scroll, or nest.
+4. **Content never knows.** A content spore presents into the inset rect and
+   receives input already normalized to that rect. Swapping chrome does not
+   touch content.
+5. **Fail-safe.** A chrome that fails to compile, load, or render is replaced by
+   Canvas's built-in bar for that surface. Window controls must never be lost
+   because a spore broke.
+6. **Overlays stay Canvas-owned.** Permission prompts, capture indicators and
+   revocation notices are never drawn by chrome, because a window frame that can
+   impersonate consent is worse than an ugly one.
+
+This is the same authority rule as the rest of the system: the *user* chooses
+their chrome (like choosing a window manager theme), and the content author
+cannot force one.
+
+## Theming out of the gate
+
+Three levels, and each one only maps roles to values:
+
+| Level | Owner | Scope |
+|---|---|---|
+| **Token set** | Coherence | palette, type scale, spacing, radius, motion |
+| **Theme** | project or user | role → token choices for one look |
+| **Spore view** | spore author | *names* roles; never supplies RGB, sizes or coordinates |
+
+Today a view can name `ink` (`text`, `muted`, `primary`, `success`, `warning`,
+`danger`) and read `module.theme` (`micro … hero`, `space_2`, `radius`, the
+eight role colours). That is enough to look consistent and not enough to look
+designed. The role set needs to grow before spores ship:
+
+- **Surfaces:** `background`, `surface`, `raised`, `sunken`, `border`, `divider`,
+  `scrim`.
+- **Text:** `title`, `body`, `caption`, `mono`, plus `on_primary`, `on_danger`
+  for text that sits on a filled role.
+- **State:** `hover`, `pressed`, `selected`, `disabled` as modifiers on a role.
+- **Elevation and motion:** shadow steps, and `duration`/`easing` tokens so
+  chrome transients feel the same everywhere.
+- **Scales, not literals:** `space_1 … space_6`, `radius_sm/md/lg`, and the type
+  scale that already exists.
+
+The invariant stays: a view may *derive* from a role, never invent a colour. If
+a spore needs an RGB literal to look right, the role set is wrong, not the spore.
+
 ## The GPU lease
 
 Soil already ships the narrow bridge: `soil:canvas-gpu@0.1.0` takes a
