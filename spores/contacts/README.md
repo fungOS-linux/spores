@@ -23,3 +23,25 @@ cargo run -p contacts-host -- spores/contacts/module.wasm "alex" > /tmp/contacts
 
 The host reads `RECORDS_ROOT`, `RECORDS_CONTACTS_BOOK`, and
 `RECORDS_COLLECTION`; defaults are the local contacts book and `contact`.
+
+## Fast Lua loop
+
+The view is just Lua. Once `contacts-dev` is installed, edit
+`spores/contacts/ui/contacts.lua` and run:
+
+```sh
+spores/unibus/tools/watch_contacts_lua.sh
+```
+
+The script recomposes the installed module from `ui/lib/ui.lua` and the current
+snapshot, then asks Canvas to reload `contacts-dev`. A save redraws in roughly a
+second; no Rust, WASM, records query, or workspace import is involved.
+
+For a one-shot reload without the watcher:
+
+```sh
+cd spores/unibus
+lua tools/compose_inbox.lua "$HOME/Library/Application Support/Dock/canvas/modules" \
+  examples/inbox_live.lua examples/contacts_live.lua
+printf 'workspace switch contacts-dev\n' | canvasctl
+```
