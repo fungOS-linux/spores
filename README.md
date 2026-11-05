@@ -49,7 +49,10 @@ spores/markdown     the Markdown reader/editor Spore
                     src/   semantics and editor state
                     ui/    the Lua UI Canvas renders
                     spore.toml  manifest, grants, launch surfaces
-docs/               the host/spore contract and surface windowing
+spores/unibus       initial soil:unibus Spore
+                    src/   record keys/schemas for mail + chat metadata
+                    spore.toml  records/unibus grants, read-only
+docs/               host/spore contract, records/sync, AI inbox spec
 ```
 
 ## Build and check
