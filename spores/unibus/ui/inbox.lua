@@ -40,6 +40,24 @@ local function row(record, index)
       text = record.summary,
     }
   end
+  if record.status then
+    local status_role = (record.status == "resolved") and ROLE.quiet
+      or (record.status == "pending") and ROLE.urgent or ROLE.body
+    nodes[#nodes + 1] = {
+      id = "r" .. index .. ".status",
+      kind = "text",
+      role = status_role,
+      text = record.status,
+    }
+  end
+  if record.assignee and record.assignee ~= "" then
+    nodes[#nodes + 1] = {
+      id = "r" .. index .. ".assignee",
+      kind = "text",
+      role = ROLE.quiet,
+      text = "@" .. record.assignee,
+    }
+  end
   if record.urgent then
     nodes[#nodes + 1] = {
       id = "r" .. index .. ".urgent",

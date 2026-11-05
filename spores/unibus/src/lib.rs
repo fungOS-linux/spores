@@ -4,6 +4,9 @@
 //! supplies `soil:unibus` frames and `soil:records` storage; the module never
 //! sees a socket, a credential, or a raw file path.
 
+pub const ACCOUNT_COLLECTION: &str = "account";
+pub const INBOX_COLLECTION: &str = "inbox";
+pub const CONVERSATION_COLLECTION: &str = "conversation";
 pub const MAIL_COLLECTION: &str = "email.message";
 pub const CHAT_COLLECTION: &str = "chat.message";
 pub const CHAT_BODY_COLLECTION: &str = "chat.body";
@@ -11,6 +14,88 @@ pub const CHAT_BODY_COLLECTION: &str = "chat.body";
 pub const MAIL_SCHEMA: &str = "email.message.v1";
 pub const CHAT_SCHEMA: &str = "chat.message.v1";
 pub const CHAT_BODY_SCHEMA: &str = "chat.body.v1";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InboxKind {
+    /// Personal or role inbox.
+    Inbox,
+    /// Shared queue that needs assignment and a disposition.
+    Triage,
+    /// Customer support queue with status/SLA fields.
+    Support,
+}
+
+impl InboxKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Inbox => "inbox",
+            Self::Triage => "triage",
+            Self::Support => "support",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConversationStatus {
+    New,
+    Open,
+    Pending,
+    Resolved,
+    Snoozed,
+}
+
+impl ConversationStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Open => "open",
+            Self::Pending => "pending",
+            Self::Resolved => "resolved",
+            Self::Snoozed => "snoozed",
+        }
+    }
+
+    pub fn is_closed(self) -> bool {
+        matches!(self, Self::Resolved)
+    }
+}
+
+/// Account and inbox identity are records, not adapter config. The adapter
+/// owns the session; the Spore owns the user-facing triage state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountMeta {
+    pub id: String,
+    pub provider: String,
+    pub address: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InboxMeta {
+    pub id: String,
+    pub account_id: String,
+    pub kind: InboxKind,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationMeta {
+    pub id: String,
+    pub inbox_id: String,
+    pub status: ConversationStatus,
+    pub assignee: Option<String>,
+    pub priority: u8,
+    pub summary: String,
+}
+
+pub fn account_key(id: &str) -> String {
+    id.to_owned()
+}
+pub fn inbox_key(account_id: &str, inbox_id: &str) -> String {
+    format!("{account_id}/{inbox_id}")
+}
+pub fn conversation_key(inbox_id: &str, thread_id: &str) -> String {
+    format!("{inbox_id}/{thread_id}")
+}
 
 /// One record the Spore will `upsert` through `soil:records`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,6 +136,23 @@ mod tests {
             mail_key("work", "INBOX", 42, 7),
             mail_key("work", "INBOX", 43, 7)
         );
+    }
+
+    #[test]
+    fn triage_support_state_has_explicit_status_and_assignee() {
+        let conversation = ConversationMeta {
+            id: conversation_key("support", "thread-1"),
+            inbox_id: "support".into(),
+            status: ConversationStatus::Open,
+            assignee: Some("avery".into()),
+            priority: 2,
+            summary: "needs a refund decision".into(),
+        };
+        assert_eq!(conversation.id, "support/thread-1");
+        assert!(!conversation.status.is_closed());
+        assert_eq!(ConversationStatus::Resolved.as_str(), "resolved");
+        assert_eq!(InboxKind::Support.as_str(), "support");
+        assert_eq!(inbox_key("mail-work", "triage"), "mail-work/triage");
     }
 
     #[test]

@@ -18,5 +18,13 @@ return {
         { id = "irc-fleet/$abc", title = "avery in #agents", summary = "deploy is green", unread = true },
       },
     },
+    {
+      collection = "conversation",
+      label = "Support triage",
+      records = {
+        { id = "support/thread-1", title = "Refund request", summary = "Customer wants a refund", status = "open", assignee = "avery", urgent = true, selected = true },
+        { id = "support/thread-2", title = "Login issue", summary = "Resolved yesterday", status = "resolved", assignee = "jules" },
+      },
+    },
   },
 }
