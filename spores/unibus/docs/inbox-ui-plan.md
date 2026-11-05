@@ -40,6 +40,8 @@ routing, no real timestamps/relative-time formatting, no width adaptation.
 - Empty/loading/offline/error state cards.
 - Snapshot carries `layout.width_class`, `list_offset`, `list_limit`,
   `cursor_id`, `focus`, and `state.mode`.
+- Collapsed rail/detail state (`layout.rail_collapsed`, `layout.detail_collapsed`);
+  header affordances are visible, press routing is M2.
 - Still to do: true virtual scrolling with stable row heights, independent
   detail scroll, density toggle, action routing for select/open/back/next.
 

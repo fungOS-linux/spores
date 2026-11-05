@@ -33,11 +33,26 @@ local ROLE = {
   danger = "danger",
 }
 
-local function text(value, style, ink, props)
-  props = props or {}
-  props.style = style or "body"
-  props.ink = ink or ROLE.body
-  return ui.text(tostring(value or ""), props)
+local function text_px(style)
+  local t = theme()
+  local base = t.body or 16
+  return ({
+    title = base * 0.66,
+    heading = base * 0.56,
+    subheading = base * 0.50,
+    body = base * 0.38,
+    caption = base * 0.29,
+    micro = base * 0.24,
+  })[style or "body"] or (base * 0.44)
+end
+
+local function text(value, style, ink, chars)
+  return ui.text(tostring(value or ""), {
+    style = style or "body",
+    ink = ink or ROLE.body,
+    chars = chars,
+    px = text_px(style),
+  })
 end
 
 local function dot(ink, size)
@@ -92,34 +107,28 @@ local function thread_row(thread, cursor)
   local status_ink = thread.urgent and ROLE.warning or ROLE.quiet
   local status = thread.status or (thread.kind == "chat" and "chat" or "open")
   local who = thread.assignee and ("@" .. thread.assignee) or (thread.sender or "")
-  local meta = ui.column {
+  local labels = thread.labels and table.concat(thread.labels, " · ") or ""
+  local meta = labels ~= "" and (thread.sender or "") .. " · " .. labels or (thread.sender or "")
+  local body = ui.column {
     gap = "none",
     children = {
-      text(status, "caption", status_ink),
-      text(who, "caption", ROLE.quiet),
-      text(thread.time or "", "caption", ROLE.quiet),
-    },
-  }
-  local body = ui.row {
-    widths = { 0.035, 0.60, 0.20, 0.165 },
-    gap = "xs",
-    children = {
-      dot(unread and ROLE.title or ROLE.quiet),
-      ui.column {
-        gap = "none",
+      ui.row {
+        widths = { 0.04, 0.78, 0.18 },
+        gap = "xs",
         children = {
-          text(thread.title, "body", title_ink),
-          text(thread.preview or thread.summary or "", "caption", ROLE.quiet),
+          dot(unread and ROLE.title or ROLE.quiet),
+          text(thread.title, "body", title_ink, 26),
+          text(thread.time or "", "caption", ROLE.quiet),
         },
       },
-      ui.column {
-        gap = "none",
+      ui.row {
+        widths = { 0.66, 0.34 },
         children = {
-          text(thread.sender or "", "caption", ROLE.body),
-          text(thread.labels and table.concat(thread.labels, " · ") or "", "caption", ROLE.quiet),
+          text(meta, "caption", ROLE.quiet, 28),
+          text(status .. " " .. who, "caption", status_ink, 16),
         },
       },
-      meta,
+      text(thread.preview or thread.summary or "", "caption", ROLE.quiet, 34),
     },
   }
   if thread.selected then
@@ -150,11 +159,11 @@ local function message(msg)
       ui.row {
         widths = { 0.72, 0.28 },
         children = {
-          text(msg.from, "body", ROLE.body),
+          text(msg.from, "body", ROLE.body, 24),
           text(msg.time or "", "caption", ROLE.quiet),
         },
       },
-      text(msg.preview or "", "body", ROLE.body),
+      text(msg.preview or "", "body", ROLE.body, 32),
     },
   }
 end
@@ -258,8 +267,8 @@ local function detail(snapshot, narrow)
         ui.column {
           gap = "none",
           children = {
-            text(thread.title, "heading", ROLE.heading),
-            text((thread.sender or "") .. " · " .. (thread.time or ""), "caption", ROLE.quiet),
+            text(thread.title, "heading", ROLE.heading, 24),
+            text((thread.sender or "") .. " · " .. (thread.time or ""), "caption", ROLE.quiet, 36),
           },
         },
         ui.column {
@@ -294,7 +303,7 @@ local function detail(snapshot, narrow)
           gap = "xs",
           children = {
             text("AGENT BRIEF", "caption", ROLE.quiet),
-            text(thread.brief or thread.preview or "", "body", ROLE.body),
+            text(thread.brief or thread.preview or "", "body", ROLE.body, 32),
           },
         },
       },
@@ -317,14 +326,14 @@ local function detail(snapshot, narrow)
           gap = "xs",
           children = {
             text("DRAFT · needs approval", "caption", ROLE.warning),
-            text(thread.draft, "body", ROLE.body),
+            text(thread.draft, "body", ROLE.body, 40),
           },
         },
       },
     }
     children[#children + 1] = ui.row {
       gap = "xs",
-      children = { pill("Approve & send"), pill("Edit", { quiet = true }), pill("Discard", { quiet = true }) },
+      children = { pill("Approve"), pill("Edit", { quiet = true }), pill("Discard", { quiet = true }) },
     }
   else
     children[#children + 1] = ui.bar {
@@ -385,7 +394,7 @@ local function header(snapshot)
     border = true,
     children = {
       ui.row {
-        widths = { 0.60, 0.40 },
+        widths = { 0.52, 0.48 },
         children = {
           ui.column {
             gap = "none",
@@ -398,7 +407,9 @@ local function header(snapshot)
             gap = "xs",
             align = "end",
             children = {
-              pill("Compose"),
+              ui.icon_button("columns", { size = "small", quiet = true }),
+              ui.icon_button("doc", { size = "small", quiet = true }),
+              pill("New"),
               ui.icon_button("search", { size = "small", quiet = true }),
               ui.icon_button("more", { size = "small", quiet = true }),
             },
@@ -453,7 +464,6 @@ local function footer(snapshot)
             align = "end",
             children = {
               ui.kbd("⌘K"),
-              text((snapshot.account and snapshot.account.provider) or "AgentMail", "caption", ROLE.quiet),
             },
           },
         },
@@ -476,22 +486,35 @@ function M.tree(snapshot)
       main = list(snapshot)
     end
   else
-    main = ui.row {
-      widths = { 0.24, 0.76 },
-      gap = "md",
-      children = {
-        rail(snapshot),
-        ui.row {
-          widths = { 0.56, 0.44 },
-          gap = "md",
-          children = {
-            list(snapshot),
-            detail(snapshot, false),
-          },
+    local rail_collapsed = layout.rail_collapsed and true or false
+    local detail_collapsed = layout.detail_collapsed and true or false
+    local panes = {}
+    local widths = {}
+    if not rail_collapsed then
+      panes[#panes + 1] = rail(snapshot)
+      widths[#widths + 1] = 0.21
+    end
+    if detail_collapsed then
+      panes[#panes + 1] = list(snapshot)
+      widths[#widths + 1] = rail_collapsed and 1.0 or 0.79
+    else
+      panes[#panes + 1] = ui.row {
+        widths = { 0.50, 0.50 },
+        gap = "md",
+        children = {
+          list(snapshot),
+          detail(snapshot, false),
         },
-      },
+      }
+      widths[#widths + 1] = rail_collapsed and 1.0 or 0.79
+    end
+    main = ui.row {
+      widths = widths,
+      gap = "md",
+      children = panes,
     }
   end
+  main.grow = true
   return ui.column {
     h = 8,
     gap = "none",

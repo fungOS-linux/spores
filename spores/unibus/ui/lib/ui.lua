@@ -22,7 +22,7 @@ local function px(n) return n * U end
 ui.gap = { none = 0, xs = px(4), sm = px(8), md = px(16), lg = px(28), xl = px(44) }
 local gap = ui.gap
 
-ui.leading = 2.1
+ui.leading = 2.8
 ui.chars = { title = 34, body = 50, caption = 60 }
 
 local function size_for(theme, style)
