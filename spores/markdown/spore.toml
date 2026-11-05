@@ -39,8 +39,8 @@ surfaces = ["web", "native", "canvas"]
 "soil:time" = "debounced autosave"
 "soil:storage" = "open and save documents by DocId"
 
-# Planned when fungos-vfs lands. The Spore already uses the same Vfs boundary.
-# "fungos:vfs" = "read and write documents by DocId"
+# Planned when soil:vfs lands. The Spore already uses the same Vfs boundary.
+# "soil:vfs" = "read and write documents by DocId"
 
 [assets]
 # Content is declared here so the lock covers it. Empty until the first asset.

@@ -40,7 +40,7 @@ is attributable and reversible.
 ## Storage
 
 Documents are opaque `DocId`s through the `Vfs` trait. `MemoryVfs` is the current
-implementation; `fungos-vfs` implements the same trait later. The boundary is
+implementation; `soil:vfs` implements the same trait later. The boundary is
 already the real one, so nothing above it changes when the store lands.
 
 ## Check

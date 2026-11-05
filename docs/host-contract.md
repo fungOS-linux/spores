@@ -109,7 +109,7 @@ is always false.
 
 ## Not yet implemented
 
-- `fungos-vfs` (the `Vfs` trait is real, `MemoryVfs` is the only implementation).
+- `soil:vfs` (the `Vfs` trait is real, `MemoryVfs` is the only implementation).
 - Canvas's spore scene primitive and the Lua host bindings.
 - Soil's surface selection at launch.
 - Signed manifests and the Spore Store.

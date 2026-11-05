@@ -38,7 +38,7 @@ drawing it. See [`docs/host-contract.md`](docs/host-contract.md).
 ## Storage
 
 Spores never see paths. A document is an opaque `DocId` resolved through
-`fungos-vfs`, which is still work in progress. Until it exists, the spore is
+`soil:vfs`, which is still work in progress. Until it exists, the spore is
 compiled against a `Vfs` trait with an in-memory implementation, so the
 storage boundary is already the real one.
 
