@@ -36,3 +36,7 @@ surfaces = ["web", "native", "canvas"]
 # SSH, credentials, routes and host keys stay in the Mycelium host capability.
 transport = ["socket", "quic", "iroh", "ssh"]
 host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+
+[presentation]
+badge = "T"
+color = "#8bd5ca"

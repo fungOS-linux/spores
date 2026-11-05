@@ -50,3 +50,10 @@ surfaces = ["web", "native", "canvas"]
 # Stated explicitly so a reviewer sees intent, not merely absence.
 transport = ["socket", "quic", "iroh"]
 host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+
+[presentation]
+# A launcher row needs to be recognisable without reading it. A monogram is a
+# character, not an asset: it cannot go missing on someone else's machine, and it
+# reads at the size a launcher actually draws.
+badge = "M"
+color = "#f0b866"
