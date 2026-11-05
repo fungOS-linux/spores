@@ -93,6 +93,20 @@ view.render(restored)
 assert(remembered.text["detail-name"] and remembered.text["detail-name"]:find("greece-notes.txt", 1, true),
   "selection survives a fresh render")
 
+-- Filters are host-backed view state and must not leave a stale preview behind.
+local filtered_snapshot = assert(loadfile("examples/search_mock.lua"))()
+_G.module.event = { kind = "activate", target_id = "filter-folders" }
+_G.module.view = nil
+local filtered = {}
+_G.canvas = mock_canvas(filtered)
+_G.widget = mock_widget(filtered)
+fresh(filtered)
+view.render(filtered_snapshot)
+assert(filtered.text["detail-name"] and filtered.text["detail-name"]:find("photos", 1, true),
+  "folder filter selects a folder")
+assert(not filtered.text["detail-preview"], "folder filter does not reuse the old image preview")
+assert(selected_key and selected_key:find("filter=folders", 1, true), "folder filter is remembered")
+
 -- An empty query browses; the UI still renders a coherent pane.
 snapshot.query = ""
 snapshot.mode = "browse"

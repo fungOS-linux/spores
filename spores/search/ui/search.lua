@@ -102,6 +102,32 @@ local function result_row(result, index)
   }
 end
 
+local FILTERS = {
+  { id = "all", label = "All" },
+  { id = "files", label = "Files" },
+  { id = "folders", label = "Folders" },
+}
+
+local function clip(value, limit)
+  value = tostring(value or "")
+  if #value <= limit then return value end
+  return value:sub(1, limit - 1) .. "…"
+end
+
+local function filter_results(results, filter)
+  local out = {}
+  for _, result in ipairs(results or {}) do
+    if filter == "files" then
+      if not result.is_dir then out[#out + 1] = result end
+    elseif filter == "folders" then
+      if result.is_dir then out[#out + 1] = result end
+    else
+      out[#out + 1] = result
+    end
+  end
+  return out
+end
+
 local function encode_path(value)
   return (tostring(value or ""):gsub("([^%w%-%._~/])", function(char)
     return string.format("%%%02X", string.byte(char))
@@ -117,37 +143,57 @@ end
 local function read_view_state()
   local module = rawget(_G, "module")
   local raw = module and module.view and module.view.selected
-  if type(raw) ~= "string" then return nil end
+  if type(raw) ~= "string" or raw == "" then return { filter = "all" } end
+  -- Backward-compatible selection-only state from the first slice.
   if raw:sub(1, 8) == "v1:path:" then
-    return { path = decode_path(raw:sub(9)) }
+    return { filter = "all", path = decode_path(raw:sub(9)) }
   end
   if raw:sub(1, 9) == "v1:index:" then
-    return { index = tonumber(raw:sub(10)) }
+    return { filter = "all", index = tonumber(raw:sub(10)) }
   end
-  if raw ~= "" then return { path = raw } end
-  return nil
+  local state = { filter = "all" }
+  if raw:sub(1, 2) == "v1" and raw:sub(3, 3) == ";" then
+    for part in raw:gmatch("[^;]+") do
+      local key, value = part:match("^([%w_]+)=(.*)$")
+      if key == "sel" then
+        if value:sub(1, 2) == "p:" then state.path = decode_path(value:sub(3))
+        elseif value:sub(1, 2) == "i:" then state.index = tonumber(value:sub(3)) end
+      elseif key == "filter" and (value == "all" or value == "files" or value == "folders") then
+        state.filter = value
+      end
+    end
+    return state
+  end
+  return { filter = "all", path = raw }
 end
 
-local function write_view_state(snapshot)
+local function write_view_state(snapshot, state)
   local module = rawget(_G, "module")
   if not (module and type(module.select) == "function") then return end
   local path = snapshot.selected_path
   if type(path) ~= "string" or path == "" then return end
   local encoded = encode_path(path)
-  local key
-  if #encoded <= 120 then
-    key = "v1:path:" .. encoded
+  local parts = { "v1" }
+  if #encoded <= 76 then
+    parts[#parts + 1] = "sel=p:" .. encoded
   else
     for index, result in ipairs(snapshot.results or {}) do
-      if result.path == path then key = "v1:index:" .. index break end
+      if result.path == path then parts[#parts + 1] = "sel=i:" .. index break end
     end
   end
-  if key and #key <= 128 then pcall(module.select, key) end
+  if state.filter and state.filter ~= "all" then
+    parts[#parts + 1] = "filter=" .. state.filter
+  end
+  local key = table.concat(parts, ";")
+  if #key > 128 then
+    -- Drop optional filter memory before dropping selection.
+    parts[#parts] = nil
+    key = table.concat(parts, ";")
+  end
+  if #key <= 128 then pcall(module.select, key) end
 end
 
-local function apply_view_state(snapshot)
-  local state = read_view_state()
-  if not state then return snapshot end
+local function apply_view_state(snapshot, state)
   if state.path then
     for _, result in ipairs(snapshot.results or {}) do
       if result.path == state.path then
@@ -161,21 +207,22 @@ local function apply_view_state(snapshot)
   return snapshot
 end
 
-local function selected_result(snapshot)
-  if snapshot.detail and snapshot.detail.path then
-    for index, result in ipairs(snapshot.results or {}) do
-      if result.path == snapshot.selected_path then return result, index end
-    end
+local function selected_result(snapshot, results)
+  for index, result in ipairs(results or {}) do
+    if result.path == snapshot.selected_path then return result, index end
   end
-  return (snapshot.results or {})[1], 1
+  return (results or {})[1], 1
 end
 
-local function layout_tree(snapshot)
+local function layout_tree(snapshot, state)
   local z, wide = zones()
-  local visible = math.min(#(snapshot.results or {}), wide and 18 or 8)
-  local selected, selected_index = selected_result(snapshot)
+  local results_for_filter = filter_results(snapshot.results or {}, state.filter)
+  local row_height = wide and 82 or 76
+  local list_room = math.max(1, math.floor((H - (wide and 230 or 260)) / row_height))
+  local visible = math.min(#results_for_filter, list_room, 48)
+  local selected, selected_index = selected_result(snapshot, results_for_filter)
 
-  -- Left sidebar: title, query, result count.
+  -- Left sidebar: title, query, filters and result count.
   local sidebar = {
     { id = "search-head", kind = "container", layout = { direction = "row", height = 46, gap = 8 },
       children = {
@@ -189,13 +236,32 @@ local function layout_tree(snapshot)
         label("search-query", (snapshot.query ~= "") and ("⌕ " .. snapshot.query) or "⌕  Search files, paths, content", 11),
       } },
   }
+  local chips = {}
+  for _, filter in ipairs(FILTERS) do
+    local count = #filter_results(snapshot.results or {}, filter.id)
+    chips[#chips + 1] = {
+      id = "filter-" .. filter.id,
+      kind = "container",
+      selected = state.filter == filter.id,
+      layout = { direction = "row", height = 26, padding = { top = 5, right = 10, bottom = 5, left = 10 } },
+      children = { label("filter-" .. filter.id .. "-label", filter.label .. "  " .. count, 10) },
+    }
+  end
+  sidebar[#sidebar + 1] = {
+    id = "search-filters", kind = "container",
+    layout = { direction = "row", height = 30, gap = 6 },
+    children = chips,
+  }
+  sidebar[#sidebar + 1] = label("search-status",
+    string.format("%d shown · generation %d", #results_for_filter, tonumber(snapshot.generation) or 0),
+    10, { height = 18 })
   if snapshot.error then
     sidebar[#sidebar + 1] = label("search-error", snapshot.error, 11, { height = 18 })
   end
 
   -- Main pane: the results list.
   local rows = {}
-  for index = 1, visible do rows[#rows + 1] = result_row(snapshot.results[index], index) end
+  for index = 1, visible do rows[#rows + 1] = result_row(results_for_filter[index], index) end
   if #rows == 0 then
     rows[1] = label("results-empty", snapshot.error and "Index unavailable" or "No matches", 13, { height = 28 })
   end
@@ -205,7 +271,8 @@ local function layout_tree(snapshot)
     { id = "search-list", kind = "container", layout = { direction = "column", gap = 2 }, children = rows },
   }
 
-  -- Detail pane: selected entry metadata + text preview.
+  -- Detail pane. `snapshot.detail` is authoritative only for the path the host
+  -- previewed; selecting another row must not show a stale preview from hit 1.
   local detail = {}
   if selected then
     detail[1] = label("detail-name", selected.name, 20, { height = 28 })
@@ -215,12 +282,19 @@ local function layout_tree(snapshot)
     local function line(value) row = row + 1; detail[row] = label("detail-" .. row, value, 11, { height = 19 }) end
     line("kind  " .. (selected.is_dir and "directory" or "file"))
     if selected.matched_by then line("matched by  " .. selected.matched_by) end
-    local preview = snapshot.detail and snapshot.detail.preview or nil
+    if tonumber(selected.score) and tonumber(selected.score) > 0 then line("score  " .. tostring(selected.score)) end
+    local preview
+    if snapshot.detail and snapshot.detail.path == selected.path then
+      preview = snapshot.detail.preview
+    end
     if preview and preview ~= "" then
       row = row + 1
       detail[row] = label("detail-preview-label", "PREVIEW", 10, { height = 18 })
       row = row + 1
-      detail[row] = label("detail-preview", preview, 12, { wrap = true, height = H * 0.42 })
+      detail[row] = label("detail-preview", clip(preview, 6000), 12, { wrap = true, height = H * 0.40 })
+    elseif not selected.is_dir then
+      row = row + 1
+      detail[row] = label("detail-preview-empty", "Preview loads when the host selects this entry.", 11, { height = 19, wrap = true })
     end
   else
     detail[1] = label("detail-empty", "No selection", 13)
@@ -242,27 +316,48 @@ local function layout_tree(snapshot)
 
   return {
     id = "search-root", kind = "container", layout = root_layout,
-    children = wide and { sidebar_box, results_box, detail_box }
-      or { sidebar_box, results_box, detail_box },
+    children = { sidebar_box, results_box, detail_box },
+    _selected_index = selected_index,
   }
 end
 
-local function apply_event(snapshot)
+local function apply_event(snapshot, state)
   local event = _G.module and _G.module.event
   if not event or event.kind ~= "activate" then return snapshot end
-  local index = tonumber((event.target_id or ""):match("^result%-(%d+)$"))
-  if index and (snapshot.results or {})[index] then
-    snapshot.selected_path = snapshot.results[index].path
-    write_view_state(snapshot)
+  local target = tostring(event.target_id or "")
+  if target:sub(1, 7) == "filter-" then
+    local filter = target:sub(8)
+    if filter ~= "all" and filter ~= "files" and filter ~= "folders" then return snapshot end
+    state.filter = filter
+    local results = filter_results(snapshot.results or {}, state.filter)
+    local found = false
+    for _, result in ipairs(results) do
+      if result.path == snapshot.selected_path then found = true break end
+    end
+    if not found then
+      snapshot.selected_path = results[1] and results[1].path or ""
+      snapshot.detail = nil
+    end
+    write_view_state(snapshot, state)
+    return snapshot
+  end
+  local index = tonumber(target:match("^result%-(%d+)$"))
+  local results = filter_results(snapshot.results or {}, state.filter)
+  if index and results[index] then
+    snapshot.selected_path = results[index].path
+    snapshot.detail = nil
+    write_view_state(snapshot, state)
   end
   return snapshot
 end
 
 function M.render(snapshot)
   use_viewport()
-  snapshot = apply_view_state(snapshot or {})
-  snapshot = apply_event(snapshot)
-  local laid = canvas.layout(layout_tree(snapshot), W, H)
+  snapshot = snapshot or {}
+  local state = read_view_state()
+  snapshot = apply_view_state(snapshot, state)
+  snapshot = apply_event(snapshot, state)
+  local laid = canvas.layout(layout_tree(snapshot, state), W, H)
 
   rect("search-bg", 0, 0, W, H, "background", 1.0, 0)
   local z, _ = zones()
@@ -279,8 +374,19 @@ function M.render(snapshot)
     rect("search-divider-2", results.rect.x + z.results - 1, 0, 2, H, "surface", 0.9, 0)
   end
 
+  -- Filter chip backgrounds.
+  for _, filter in ipairs(FILTERS) do
+    local chip = find(laid, "filter-" .. filter.id)
+    if chip then
+      local active = state.filter == filter.id
+      rect("filter-" .. filter.id .. "-bg", chip.rect.x, chip.rect.y, chip.rect.width, chip.rect.height,
+        active and "primary" or "surface", active and 0.18 or 0.48, 7)
+    end
+  end
+
   -- Selected row highlight.
-  local _, selected_index = selected_result(snapshot)
+  local filtered = filter_results(snapshot.results or {}, state.filter)
+  local _, selected_index = selected_result(snapshot, filtered)
   local selected_row = find(laid, "result-" .. tostring(selected_index))
   if selected_row then
     rect("search-selected", selected_row.rect.x - 6, selected_row.rect.y, selected_row.rect.width + 12, selected_row.rect.height, "primary", 0.16, 8)
@@ -293,13 +399,26 @@ function M.render(snapshot)
       local ink = "text"
       if node.id:find("subtitle") or node.id:find("count") or node.id:find("meta")
         or node.id:find("snippet") or node.id:find("path") or node.id:find("preview")
-        or node.id:find("empty") then ink = "muted" end
+        or node.id:find("empty") or node.id:find("status") then ink = "muted" end
       if node.id == "search-title" or node.id == "detail-name" or node.id:find("avatar") then ink = "primary" end
+      if node.id:find("^filter%-") then
+        for _, filter in ipairs(FILTERS) do
+          if node.id == "filter-" .. filter.id .. "-label" and state.filter == filter.id then ink = "primary" end
+        end
+      end
       text(node.id, node.text, r.x, r.y, node.style.size, ink)
     end
   end
 
-  for index = 1, math.min(#(snapshot.results or {}), 24) do
+  for _, filter in ipairs(FILTERS) do
+    local chip = find(laid, "filter-" .. filter.id)
+    if chip then
+      widget.hit { id = "filter-" .. filter.id, label = filter.label,
+        x = nx(chip.rect.x), y = ny(chip.rect.y), width = sw(chip.rect.width), height = sh(chip.rect.height) }
+    end
+  end
+
+  for index = 1, math.min(#filtered, 48) do
     local row = find(laid, "result-" .. index)
     if row then
       widget.hit { id = "result-" .. index, label = "hit",
