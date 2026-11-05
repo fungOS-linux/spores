@@ -1,0 +1,102 @@
+# UI model
+
+Status: adopted, partly implemented. `spores/markdown/ui/lib/ui.lua` is the
+first implementation; the rest is host work.
+
+This reconciles a declarative-UI proposal with the constraints the system
+already has: Canvas owns layout and pixels, `soil:canvas` is the guest ABI, a
+Spore is a signed wasm module, and a view has no authority.
+
+## The shape
+
+```
+snapshot (from the Spore, wasm)     actions (intents, back to the Spore)
+            │                                   ▲
+            ▼                                   │
+      view: Lua → ui.* tree ──measure/layout──► canvas.* primitives
+                                                  │
+                                                  ▼
+                                        Canvas scene → pixels
+```
+
+- **Lua describes.** A view returns a tree: no coordinates, no colours.
+- **The library measures.** `ui.column/row/card/text/code/...` compute flow from
+  theme tokens and call the existing primitives. Adopting a declarative API cost
+  no host change.
+- **Canvas renders.** The host ABI stays `soil:canvas`; the library is a
+  convenience layer over it, not a second renderer.
+
+## What we adopted from the proposal
+
+| Proposal | Here |
+|---|---|
+| Declarative `ui.*` tree | `ui.column`, `ui.row`, `ui.card`, `ui.stack`, `ui.text`, `ui.code`, `ui.diagram`, `ui.bullets`, `ui.quote`, `ui.rule`, `ui.spacer` |
+| Named tokens over raw values | `gap = "sm"`, `style = "title"`, `ink = "muted"`; sizes come from `module.theme` |
+| Layout primitives instead of coordinates | column/row/card flow, measured in the library |
+| Incomplete UI must not blank | already true: a rejected reload keeps the last good scene on screen |
+| Escape hatch stays possible | call `canvas.*` directly, or `raw = true` in a node |
+
+## What we changed, and why
+
+**State does not live in the view.** The proposal keeps `local state = {count=0}`
+and mutates it in `on_click`. Canvas runs a *fresh, sandboxed VM per render*;
+state kept there would vanish on the next frame, and a view that can mutate
+would be a second authority beside the Spore. So:
+
+```lua
+-- view: pure
+ui.button("Save", { variant = "primary", on_click = ui.action("save") })
+
+-- Spore (wasm): receives the action, decides, emits a new snapshot
+```
+
+The general rule is unchanged: **a view is a function of the snapshot.** Actions
+are intents, not callbacks.
+
+**Lua does not call Rust directly.** The proposal exposes `rust.save()` to
+views. In this system the Spore *is* the wasm module; it holds state and
+capabilities. A view that can call the host has become a Spore without a
+manifest. Components inherit the caller's render context and nothing else.
+
+**Memoisation is host work, not Lua work.** "Settled nodes stay stable" cannot
+live in the sandbox: the VM is recreated per render, so there is nothing to keep
+between frames. It has to be a host-side merge keyed by node `id` — which the
+scene already carries. The Lua layer stays pure and cheap; the host does the
+diff.
+
+**No second renderer.** Canvas already composites through wgpu (iced + `fpl-gfx`),
+and `soil:canvas-gpu` is the path for a Spore that owns its pixels. Adding a
+bespoke WGPU renderer beside that would give the system two geometry owners.
+
+**Components cross Spores.** The proposal has no notion of sharing a chrome or a
+list between applications. `docs/components.md` does: CID-locked component sets
+in `spore.lock`, `components.require`, no authority. Until the host resolves
+components, `tools/compose.lua` pre-composes library + view into the one file the
+module host reads — the same artifact, produced early.
+
+## Host work this implies
+
+1. **`components.require`** — resolve the locked set, compile each in the same
+   sandbox, expose by name. Removes `tools/compose.lua`.
+2. **Action intents** — `ui.action(name, payload)` must reach the Spore as an
+   input, not be dropped by the scene validator.
+3. **Id-keyed scene merge** — keep nodes whose id and description are unchanged
+   between renders; replace only dirty ones. Turns "rebuild the whole page" into
+   "patch the page", and makes streaming cheap.
+4. **Partial source tolerance** — a truncated `ui.column {` should render what is
+   complete, not keep the whole previous page. The last-good-scene guard is the
+   fallback, not the feature.
+5. **Text metrics** — the library currently estimates a character width to
+   right-align a status label. Real metrics (or a `measure` host call) would let
+   rows and wrapping stop guessing.
+
+## Still open
+
+- Whether `ui.*` ships as a component (locked per Spore) or as part of the host's
+  Lua prelude. Component is more honest: it can be themed, forked and versioned
+  like anything else.
+- Whether views may keep *ephemeral* state (hover, scroll) in a host-provided
+  table keyed by node id, since the sandbox cannot.
+- Whether the tree is ever sent over the wire as data (Streamdown-style) instead
+  of being evaluated from Lua. Evaluating Lua is the current answer: the source
+  is the stream.
