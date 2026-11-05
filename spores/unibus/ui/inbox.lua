@@ -50,10 +50,11 @@ local function clip(value, limit)
 end
 
 local function label(id, value, size, layout)
+  layout = layout or {}
   return {
     id = id, kind = "text", text = clip(value, 240),
-    style = { size = size, line_height = size + 4, wrap = false },
-    layout = layout or {},
+    style = { size = size, line_height = size + 4, wrap = layout.wrap == true },
+    layout = layout,
   }
 end
 
@@ -138,14 +139,14 @@ local function detail(snapshot)
       },
     },
     {
-      id = "detail-brief", kind = "container", layout = { height = 172, flex_grow = 0, direction = "column", gap = 4, padding = { top = 10, right = 12, bottom = 8, left = 12 } },
+      id = "detail-brief", kind = "container", layout = { height = 188, flex_grow = 0, direction = "column", gap = 5, padding = { top = 12, right = 13, bottom = 10, left = 13 } },
       children = {
         label("detail-brief-label", "AGENT BRIEF", 10, { height = 14 }),
-        label("detail-brief-text", clip(thread.brief or thread.preview, 420), 11, { height = 104, wrap = true }),
+        label("detail-brief-text", thread.brief or thread.preview or "", 11, { height = 132, wrap = true }),
       },
     },
   }
-  return { id = "detail-page", kind = "container", layout = { flex_grow = 1, direction = "column", gap = 10 }, children = children }
+  return { id = "detail-page", kind = "container", layout = { flex_grow = 1, direction = "column", gap = 14 }, children = children }
 end
 
 local function tree(snapshot)
@@ -154,14 +155,13 @@ local function tree(snapshot)
   local wide = W >= 700
   local root = {
     id = "inbox-root", kind = "container",
-    layout = { width = W, height = H, direction = "column", gap = 10, padding = { top = 18, right = 22, bottom = 18, left = 22 } },
+    layout = { width = W, height = H, direction = "column", gap = 8, padding = { top = 12, right = 22, bottom = 18, left = 22 } },
     children = {
-      { id = "inbox-title-row", kind = "container", layout = { direction = "row", height = 38 },
+      { id = "inbox-toolbar", kind = "container", layout = { direction = "row", height = 22 },
         children = {
-          label("inbox-title", snapshot.title or "Inbox", 26, { flex_grow = 1 }),
-          label("inbox-counts", string.format("%d unread  ·  %d attention", count.unread or 0, count.urgent or 0), 10, { width = 210 }),
+          label("inbox-account", (snapshot.account and (snapshot.account.email .. "  ·  " .. (snapshot.account.sync or ""))) or "", 10, { flex_grow = 1 }),
+          label("inbox-counts", string.format("%d unread  ·  %d attention", count.unread or 0, count.urgent or 0), 10, { width = 200 }),
         } },
-      label("inbox-account", (snapshot.account and (snapshot.account.email .. "  ·  " .. (snapshot.account.sync or ""))) or "", 10, { height = 16 }),
       { id = "inbox-search", kind = "container", layout = { height = 36, padding = { left = 12, right = 12, top = 10 } },
         children = { label("inbox-search-text", "⌕  Search mail, people, tags", 10, {}) } },
     },
@@ -231,7 +231,7 @@ function M.render(snapshot)
     if node.kind == "text" and node.style then
       local ink = "text"
       if node.id:find("account") or node.id:find("range") or node.id:find("sort") or node.id:find("meta") or node.id:find("brief%-label") or node.id:find("thread%-label") or node.id:find("msg%-from") or node.id:find("%-preview$") then ink = "muted" end
-      if node.id == "inbox-title" or node.id == "detail-title" then ink = "primary" end
+      if node.id == "detail-title" then ink = "primary" end
       if node.id == "detail-brief-text" then ink = "text" end
       if node.id == "detail-reply" then ink = "background" end
       text(node.id, node.text, node.rect.x, node.rect.y, node.style.size, ink)
