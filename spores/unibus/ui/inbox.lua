@@ -338,6 +338,43 @@ local function detail(snapshot, narrow)
   return ui.column { gap = "sm", pad = ui.gap.md, children = children }
 end
 
+local function state_view(snapshot)
+  local state = snapshot.state or {}
+  local mode = state.mode or "ready"
+  if mode == "ready" then
+    return nil
+  end
+  local copy = {
+    empty = { icon = "check", title = "Inbox zero", body = "No conversations match this view." },
+    loading = { icon = "eye", title = "Syncing", body = "Fetching the latest metadata from the provider." },
+    offline = { icon = "dot", title = "Offline", body = "Showing the last synced snapshot. Actions will queue." },
+    error = { icon = "close", title = "Could not sync", body = state.message or "The provider returned an error." },
+  }
+  local view = copy[mode] or copy.error
+  return ui.row {
+    widths = { 0.24, 0.52, 0.24 },
+    children = {
+      ui.spacer { size = "md" },
+      ui.card {
+        gap = "sm",
+        children = {
+          ui.icon(view.icon, { size = "large", ink = mode == "error" and ROLE.danger or ROLE.quiet }),
+          text(view.title, "heading", ROLE.heading),
+          text(view.body, "body", ROLE.body),
+          ui.row {
+            gap = "xs",
+            children = {
+              pill(mode == "offline" and "Reconnect" or "Retry"),
+              pill("Open settings", { quiet = true }),
+            },
+          },
+        },
+      },
+      ui.spacer { size = "md" },
+    },
+  }
+end
+
 local function header(snapshot)
   local account = snapshot.account or {}
   return ui.bar {
@@ -429,8 +466,10 @@ function M.tree(snapshot)
   snapshot = snapshot or {}
   local layout = snapshot.layout or {}
   local narrow = layout.width_class == "narrow"
-  local main
-  if narrow then
+  local main = state_view(snapshot)
+  if main then
+    -- non-ready state replaces the rail/list/detail
+  elseif narrow then
     if layout.focus == "detail" then
       main = detail(snapshot, true)
     else

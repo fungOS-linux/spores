@@ -55,6 +55,19 @@ assert(narrow_detail:find("← Back", 1, true), "narrow back")
 snapshot.layout.width_class = "wide"
 snapshot.layout.focus = "list"
 
+for mode, needle in pairs({
+  empty = "Inbox zero",
+  loading = "Syncing",
+  offline = "Offline",
+  error = "Could not sync",
+}) do
+  snapshot.state = { mode = mode, message = "provider said no" }
+  local shown = table.concat(values(inbox.tree(snapshot)), "\n")
+  assert(shown:find(needle, 1, true), mode .. " state")
+  assert(not shown:find("MAIL ·", 1, true), mode .. " hides list")
+end
+snapshot.state = { mode = "ready" }
+
 -- Exercise the Canvas path with a recorder. The preview only uses tree().
 local rects, texts = 0, 0
 _G.canvas = {

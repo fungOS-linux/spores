@@ -13,6 +13,7 @@ return {
     sync = "2m ago",
   },
   counts = { unread = 7, urgent = 3, support = 2, drafts = 1 },
+  state = { mode = "ready" },
   selected_id = "support/refund-441",
   layout = {
     list_offset = 0,
