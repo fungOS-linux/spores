@@ -37,6 +37,6 @@ local minified = composed:gsub("\n%s*%-%-[^\n]*", ""):gsub("\n%s*\n", "\n")
 
 local path = out_dir .. "/spore-dev.lua"
 local file = assert(io.open(path, "wb"), "cannot write " .. path)
-file:write(composed)
+file:write(minified)
 file:close()
 print(string.format("wrote %s (%d bytes, %d after minify)", path, #composed, #minified))

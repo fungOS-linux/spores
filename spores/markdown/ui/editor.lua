@@ -19,7 +19,7 @@ local function rail_entry(label, level, active)
     pad = ui.gap.sm,
     ink = "primary",
     opacity = active and 0.16 or 0.0,
-    radius = 4,
+    radius = "sm",
     children = {
       ui.text(label, {
         style = "body",
@@ -132,7 +132,7 @@ ui.render(
                 pad = ui.gap.sm,
                 ink = "primary",
                 opacity = 0.10,
-                radius = 4,
+                radius = "sm",
                 children = {
                   ui.text(
                     "A Markdown reader and editor. The document is data; this file is "

@@ -1,40 +1,119 @@
 -- fungos/ui — declarative UI for Spore views.
 --
--- A view returns a tree; this library measures it, lays it out in flow, and
--- emits Canvas primitives. Everything comes from `module.theme`, so a theme
--- change moves the whole interface and no view names a colour or a pixel.
+-- A view returns a tree; this library lays it out in a **single pass** and emits
+-- Canvas primitives. Everything comes from `module.theme`, so a theme change
+-- moves the whole interface and no view names a colour or a pixel.
 --
--- Two rules keep it honest:
+-- Three rules keep it honest:
 --   1. The view is pure. It receives a snapshot and returns a tree. It holds no
 --      state; state lives in the Spore and arrives in the snapshot.
---   2. Interaction is an *action*, not a callback. `on_click = ui.action("save")`
---      emits an intent into the scene; the Spore decides what it means. A view
---      that could mutate state would be a second authority.
+--   2. Interaction is an *action*, not a callback. `ui.action("save")` emits an
+--      intent into the scene; the Spore decides what it means.
+--   3. Layout is one pass. Every node returns its height and its primitives
+--      together, so a parent never re-measures what a child already drew. Two
+--      passes drift apart the moment a wrap decision differs, and the drift
+--      shows up as overlapping text.
+--
+-- Tokens are the only vocabulary: spacing, radii, text styles, and ink roles are
+-- named, and an unknown name is an error rather than a silent zero.
 
 local ui = {}
 
 -- ---- tokens -------------------------------------------------------------
 
--- 4px base, expressed in projected units for a surface ~1720px tall.
-local U = 1 / 215
-local function px(n) return n * U end
+-- Tokens are **logical pixels**. The host projects an 8-unit square onto the
+-- surface, so units are per-axis: 8 units across the width, 8 down the height.
+-- Converting here, once, is what keeps a themed 26px label 26px tall on any
+-- window; the previous code divided by a constant calibrated to one screen.
+local SPACE = { none = 0, xs = 4, sm = 8, md = 16, lg = 28, xl = 44 }
+local RADIUS = { none = 0, sm = 4, md = 8, lg = 12, pill = 999 }
+local STYLE = {
+  display = "title", title = "title", heading = "large",
+  subheading = "large", body = "body", caption = "micro", mono = "small",
+}
+local INK = {
+  background = true, surface = true, surface_raised = true, surface_sunken = true,
+  border = true, divider = true, text = true, muted = true,
+  primary = true, accent = true, success = true, warning = true, danger = true,
+}
 
-ui.gap = { none = 0, xs = px(4), sm = px(8), md = px(16), lg = px(28), xl = px(44) }
-local gap = ui.gap
+ui.tokens = {
+  space = {},
+  radius = {},
+  style = STYLE,
+  ink = INK,
+  chrome = { titlebar = 28, caption = 18, grip = 8, inset = 4 },
+  motion = { fast = 120, base = 180, slow = 280 },
+}
+ui.tokens.space = SPACE
+ui.tokens.radius = RADIUS
+ui.gap = ui.tokens.space
+ui.radius = ui.tokens.radius
+ui.leading = 1.55
 
-ui.leading = 2.1
-ui.chars = { title = 34, body = 50, caption = 60 }
+local function fail(message, level)
+  error(message, (level or 2) + 1)
+end
 
-local function size_for(theme, style)
-  return ({
-    display = theme.title,
-    title = theme.title,
-    heading = theme.large,
-    subheading = theme.large,
-    body = theme.body,
-    caption = theme.micro,
-    mono = theme.small,
-  })[style or "body"] or theme.body
+-- Rule 1: spacing is a token, or a multiple of the 4px base. Nothing else.
+local function space(value, field)
+  if value == nil then return 0 end
+  if type(value) == "string" then
+    local token = ui.gap[value]
+    if not token then
+      fail(("%s: %q is not a space token (none/xs/sm/md/lg/xl)"):format(field, value), 3)
+    end
+    return token
+  end
+  local steps = value / 4
+  if math.abs(steps - math.floor(steps + 0.5)) > 1e-6 then
+    fail(("%s: %g is not a multiple of the 4px base; use a token"):format(field, value), 3)
+  end
+  return value
+end
+
+-- Rule 1, radii: a token name, or a value that is exactly a token.
+local function radius(value, field)
+  if value == nil then return 0 end
+  if type(value) == "string" then
+    local token = ui.radius[value]
+    if not token then
+      fail(("%s: %q is not a radius token (none/sm/md/lg/pill)"):format(field, value), 3)
+    end
+    return token
+  end
+  for _, token in pairs(ui.radius) do
+    if math.abs(token - value) < 1e-9 then return value end
+  end
+  fail(("%s: %g is not a radius token (none/sm/md/lg/pill)"):format(field, value), 3)
+end
+
+-- Rule 3: colour is a role, never a value.
+local function ink(value, field)
+  if value == nil then return nil end
+  if not INK[value] then
+    local names = {}
+    for name in pairs(INK) do names[#names + 1] = name end
+    table.sort(names)
+    fail(("%s: %q is not an ink role (%s)"):format(field, value, table.concat(names, "/")), 3)
+  end
+  return value
+end
+
+-- Rule 2: text uses a named style.
+local function style(value)
+  value = value or "body"
+  if not STYLE[value] then
+    local names = {}
+    for name in pairs(STYLE) do names[#names + 1] = name end
+    table.sort(names)
+    fail(("unknown text style %q (%s)"):format(value, table.concat(names, "/")), 3)
+  end
+  return value
+end
+
+local function size_for(theme, name)
+  return theme[STYLE[style(name)]]
 end
 
 -- ---- nodes --------------------------------------------------------------
@@ -42,6 +121,14 @@ end
 local function node(kind, props)
   props.kind = kind
   props.children = props.children or {}
+  -- Validate eagerly: a tree that cannot be laid out should fail where it was
+  -- written, not where it is drawn.
+  if props.ink then props.ink = ink(props.ink, kind .. ".ink") end
+  if props.style then props.style = style(props.style) end
+  if props.gap then props.gap = props.gap; space(props.gap, kind .. ".gap") end
+  if props.pad then props.pad = space(props.pad, kind .. ".pad") end
+  if props.h and type(props.h) == "number" then space(props.h, kind .. ".h") end
+  if props.radius then props.radius = radius(props.radius, kind .. ".radius") end
   return props
 end
 
@@ -90,7 +177,7 @@ function ui.button(label, props)
 end
 
 -- A keyboard hint. Same drawing as a button, quieter and monospaced in spirit.
-function ui.kbd(label) return node("button", { label = label, quiet = true }) end
+function ui.kbd(label) return node("button", { label = label, small = true, quiet = true }) end
 
 -- A horizontal band with a background: title bars, toolbars, status lines.
 function ui.bar(props) return node("bar", props or {}) end
@@ -115,14 +202,24 @@ function ui.action(name, payload)
   return { action = name, payload = payload }
 end
 
--- ---- measure ------------------------------------------------------------
+-- ---- text ---------------------------------------------------------------
+
+-- Byte length is not character count: a glyph is one character and three bytes,
+-- and a wrap budget that counts bytes breaks every non-ASCII label.
+local function ulen(value)
+  if utf8 and utf8.len then
+    local count = utf8.len(value)
+    if count then return count end
+  end
+  return #value
+end
 
 local function wrap(text, chars)
   local lines, line = {}, ""
   for word in text:gmatch("%S+") do
     if #line == 0 then
       line = word
-    elseif #line + 1 + #word <= chars then
+    elseif ulen(line) + 1 + ulen(word) <= chars then
       line = line .. " " .. word
     else
       lines[#lines + 1] = line
@@ -133,356 +230,353 @@ local function wrap(text, chars)
   return lines
 end
 
--- Character-count estimate, not metrics. Enough to right-align a status label;
--- never used to decide a wrap.
-local function estimate_width(n, theme)
-  if n.kind ~= "text" then return 0 end
-  local size = n.px or size_for(theme, n.style)
-  return #n.value * size * 0.72 * U
+-- Advance estimate, not metrics: enough to sequence a row and right-align a
+-- status label, never used to decide where a line breaks.
+local function estimate_width(value, size, S)
+  return ulen(value) * size * 0.62 * S.ux
 end
 
--- Character budget derived from the *column* width, not a global constant.
--- 8 body characters per projected unit is calibrated against the rendered page;
--- it is an estimate until the host exposes text metrics, so it is named once
--- here rather than sprinkled through views.
-local CHARS_PER_UNIT = 11
+-- A wrap budget comes from the column in *pixels*, not from a global constant:
+-- the same view on a wider surface fits more characters.
+local function budget(S, size, width)
+  local pixels = width / S.ux
+  return math.max(8, math.floor(pixels / (size * 0.52)))
+end
 
-local function budget(theme, size, width)
-  return math.max(8, math.floor(width * CHARS_PER_UNIT * (theme.body / size)))
+-- ---- primitives ---------------------------------------------------------
+
+local function text_prim(value, size, S, color, x, y)
+  -- Canvas sizes text in pixels and multiplies by the node's depth scale, which
+  -- is 1.25 at the z a flat label sits at. Ask for 1/1.25 of the target so the
+  -- rendered glyph is the size the layout reserved.
+  local scale = math.sqrt(size / (S.theme.body * S.depth))
+  return { text = value, ink = color, translation = { x, y, 0 }, scale = { scale, scale, 1 } }
+end
+
+local function rect_prim(color, opacity, r, x, y, w, h)
+  return { ink = color, opacity = opacity, radius = r or 0, translation = { x, y, -0.5 }, scale = { w, h, 1 } }
+end
+
+local function append(out, prims)
+  for _, prim in ipairs(prims) do out[#out + 1] = prim end
+end
+
+-- Translate a child's primitives into the parent's frame.
+local function place(prims, dx, dy)
+  for _, prim in ipairs(prims) do
+    prim.translation[1] = prim.translation[1] + dx
+    prim.translation[2] = prim.translation[2] + dy
+  end
+  return prims
+end
+
+-- ---- layout -------------------------------------------------------------
+--
+-- One pass, bottom-up. `lay` returns `{ h, p }`: the height this node consumes
+-- and the primitives it draws, both in the node's own frame (origin at its
+-- top-left, content flowing toward -y). A parent places children by shifting
+-- those primitives, so nothing is ever measured twice.
+
+local lay
+
+-- Width in scene units for a pixel count, and height likewise. Two functions,
+-- not one: the host's 8-unit square is stretched to the surface, so a theme at
+-- 1200x1920 has different horizontal and vertical density.
+local function wx(S, n) return n * S.ux end
+local function hy(S, n) return n * S.uy end
+
+local function text_lines(n, S, width)
+  local size = n.px or size_for(S.theme, n.style)
+  return wrap(n.value, n.chars or budget(S, size, width))
 end
 
 -- Intrinsic width of a leaf, in units. Used to sequence a row without metrics.
-local function intrinsic(n, theme)
+local function intrinsic(n, S)
+  local theme = S.theme
   if n.kind == "button" then
-    return estimate_width({ kind = "text", value = n.label, style = n.small and "caption" or "body" }, theme) + 0.46
+    return estimate_width(n.label, n.small and theme.small or theme.body, S) + wx(S, 16)
   elseif n.kind == "text" then
-    return estimate_width(n, theme)
-  elseif n.kind == "kbd" then
-    return 0.5
+    return estimate_width(n.value, n.px or size_for(theme, n.style), S)
   elseif n.kind == "icon" then
-    local size = n.size and theme[n.size] or theme.body
-    return px(size) * 1.1
+    return wx(S, n.size and theme[n.size] or theme.body)
   elseif n.kind == "icon_button" then
     local size = n.size and theme[n.size] or theme.body
-    return px(size) + px(size * 0.9)
+    return wx(S, size * 1.9)
   end
   return 0
 end
 
-local function text_lines(n, theme, width)
-  local size = n.px or size_for(theme, n.style)
-  return wrap(n.value, n.chars or budget(theme, size, width))
+local function lay_text(n, S, width)
+  local name = style(n.style)
+  local size = n.px or S.theme[STYLE[name]]
+  local lines = text_lines(n, S, width)
+  local advance = hy(S, size * ui.leading)
+  local color = n.ink or (name == "title" and "primary" or "text")
+  local prims = {}
+  for index, line in ipairs(lines) do
+    prims[index] = text_prim(line, size, S, color, 0, -(index - 1) * advance)
+  end
+  return { h = #lines * advance, p = prims }
 end
 
--- Forward declaration: row_extent measures children, and measure measures rows.
-local measure
-
--- A row's height is the tallest child measured at *its own* width, otherwise
--- the row reports less height than it draws and the next sibling overlaps it.
-local function row_extent(n, theme, width)
-  local last = #n.children
-  local spacing = gap[n.gap or "none"] or 0
-  local total = width - spacing * (last - 1)
-  local tallest = 0
+local function lay_children(n, S, width)
+  local heights, parts, used = {}, {}, 0
   for index, child in ipairs(n.children) do
-    local child_width = total
-    if n.widths then
-      child_width = total * n.widths[index]
-    else
-      local own = intrinsic(child, theme)
-      if own > 0 then child_width = own end
-    end
-    tallest = math.max(tallest, measure(child, theme, child_width))
+    parts[index] = lay(child, S, width)
+    heights[index] = parts[index].h
+    used = used + parts[index].h
   end
-  return tallest
+  return heights, parts, used
 end
 
-measure = function(n, theme, width)
-  if n.kind == "text" then
-    local size = n.px or size_for(theme, n.style)
-    return #text_lines(n, theme, width) * px(size * ui.leading)
-  elseif n.kind == "rule" then
-    return px(10)
-  elseif n.kind == "fill" then
-    return n.h or 0
-  elseif n.kind == "button" then
-    return px((n.small and theme.small or theme.body) * ui.leading + 14)
-  elseif n.kind == "icon" then
-    return px((n.size and theme[n.size] or theme.body) * ui.leading)
-  elseif n.kind == "icon_button" then
+lay = function(n, S, width)
+  local kind = n.kind
+  local theme = S.theme
+
+  if kind == "text" then
+    return lay_text(n, S, width)
+
+  elseif kind == "rule" then
+    return { h = hy(S, 10), p = { rect_prim("muted", 0.26, 0, 0, hy(S, 4), width, hy(S, 1)) } }
+
+  elseif kind == "fill" then
+    local h = n.h and hy(S, n.h) or 0
+    return { h = h, p = { rect_prim(n.ink or "surface", n.opacity or 0.6,
+                           radius(n.radius, "fill.radius"), 0, 0, n.w and wx(S, n.w) or width, h) } }
+
+  elseif kind == "icon" then
     local size = n.size and theme[n.size] or theme.body
-    return px(size) + px(size * 0.9)
-  elseif n.kind == "bar" then
-    local pad = n.pad or gap.sm
-    local child = 0
-    for _, c in ipairs(n.children) do child = math.max(child, measure(c, theme, width - pad * 2)) end
-    return math.max(n.h or 0, child + pad * 2)
-  elseif n.kind == "spacer" then
-    return gap[n.size or "md"]
-  elseif n.kind == "code" then
-    local lines = 0
-    for _ in (n.source .. "\n"):gmatch("(.-)\n") do lines = lines + 1 end
-    return px(theme.small * 1.8 * (lines + 1) + 8)
-  elseif n.kind == "diagram" then
-    return px(theme.small * 1.8 + 18)
-  elseif n.kind == "bullets" then
-    local height = 0
-    for _, item in ipairs(n.items) do
-      height = height + #wrap(item, n.chars or budget(theme, theme.body, width - 0.34)) * px(theme.body * ui.leading)
-    end
-    return height
-  elseif n.kind == "quote" then
-    return #wrap(n.value, 47) * px(theme.body * ui.leading)
-  elseif n.kind == "column" or n.kind == "card" then
-    local height = 0
-    for index, child in ipairs(n.children) do
-      if index > 1 then height = height + gap[n.gap or "sm"] end
-      height = height + measure(child, theme, width)
-    end
-    if n.kind == "card" then height = height + gap.md end
-    return height
-  elseif n.kind == "row" then
-    return row_extent(n, theme, width)
-  end
-  return 0
-end
+    return { h = hy(S, size * ui.leading),
+             p = { text_prim(n.glyph, size, S, n.ink or "muted", 0, 0) } }
 
--- ---- layout + emit ------------------------------------------------------
-
-local function emit(n, theme, x, y, width, out)
-
-  local function text_at(value, size, ink, indent)
-    local s = math.sqrt(size / theme.body)
-    out[#out + 1] = {
-      id = string.format("t%d", #out + 1),
-      text = value,
-      ink = ink or "text",
-      translation = { x + (indent or 0), y, 0 },
-      scale = { s, s, 1 },
-    }
-  end
-
-  local function rect(id, rx, ry, rw, rh, ink, opacity, radius)
-    out[#out + 1] = {
-      id = id,
-      ink = ink,
-      opacity = opacity,
-      radius = radius or 0,
-      translation = { rx, ry, -0.5 },
-      scale = { rw, rh, 1 },
-    }
-  end
-
-  if n.kind == "text" then
-    local size = n.px or size_for(theme, n.style)
-    for _, line in ipairs(text_lines(n, theme, width)) do
-      text_at(line, size, n.ink or (n.style == "title" and "primary" or "text"))
-      y = y - px(size * ui.leading)
-    end
-    return y
-
-  elseif n.kind == "rule" then
-    rect(string.format("r%d", #out + 1), x, y + px(4), width, 0.003, "muted", 0.26, 0)
-    return y - px(10)
-
-  elseif n.kind == "icon" then
+  elseif kind == "icon_button" then
     local size = n.size and theme[n.size] or theme.body
-    text_at(n.glyph, size, n.ink or "muted")
-    return y - px(size * ui.leading)
-
-  elseif n.kind == "icon_button" then
-    local size = n.size and theme[n.size] or theme.body
-    local side = px(size) + px(size * 0.9)
-    local ink = n.quiet and "surface" or "primary"
+    local side = hy(S, size * 1.9)
+    local wide = wx(S, size * 1.9)
+    local color = n.quiet and "surface" or "primary"
     local opacity = n.quiet and 0.5 or (n.selected and 1.0 or 0.85)
-    rect(string.format("ib%d", #out + 1), x, y - side, side, side, ink, opacity, theme.radius)
-    text_at(n.glyph, size, n.quiet and "muted" or "background", px(size * 0.45))
-    out[#out].translation[2] = y - px(size * 0.55)
-    return y - side
+    return { h = side, p = {
+      rect_prim(color, opacity, radius("md", "icon_button"), 0, -side, wide, side),
+      text_prim(n.glyph, size, S, n.quiet and "muted" or "background",
+                wx(S, size * 0.45), -hy(S, size * 0.55)),
+    } }
 
-  elseif n.kind == "button" then
+  elseif kind == "button" then
     local size = n.small and theme.small or theme.body
     -- A pill is text plus padding: height follows the type size, and the label
     -- is centred in it. Width stays an estimate until the host exposes metrics.
-    local text_h = px(size)
-    local vpad = px(size * 0.45)
-    local hpad = px(size * 0.52)
+    local text_h = hy(S, size)
+    local vpad = hy(S, size * 0.45)
+    local hpad = wx(S, size * 0.52)
     local height = text_h + vpad * 2
-    local width_est = #n.label * size * 0.95 * U + hpad * 2
-    local ink = n.quiet and "surface" or "primary"
+    local label_w = estimate_width(n.label, size, S) + hpad * 2
+    local color = n.quiet and "surface" or "primary"
     local opacity = n.quiet and 0.55 or (n.selected and 1.0 or 0.9)
-    rect(string.format("btn%d", #out + 1), x, y - height, width_est, height, ink, opacity, theme.radius)
-    text_at(n.label, size, n.quiet and "muted" or "background", hpad)
-    out[#out].translation[2] = y - vpad - text_h * 0.92
-    return y - height
+    return { h = height, p = {
+      rect_prim(color, opacity, radius(n.radius or "md", "button"),
+                0, -height, label_w, height),
+      text_prim(n.label, size, S, n.quiet and "muted" or "background",
+                hpad, -vpad - text_h * 0.92),
+    } }
 
-  elseif n.kind == "fill" then
-    rect(n.id or string.format("f%d", #out + 1), x, y, n.w or width, n.h or 0,
-         n.ink or "surface", n.opacity or 0.6, n.radius or 0)
-    return y - (n.h or 0)
-
-  elseif n.kind == "bar" then
-    local pad = n.pad or gap.sm
-    local child_h = 0
-    for _, c in ipairs(n.children) do child_h = math.max(child_h, measure(c, theme, width - pad * 2)) end
-    local height = math.max(n.h or 0, child_h + pad * 2)
-    local bleed = n.bleed or 0
-    rect(string.format("bar%d", #out + 1), x - bleed, y + (n.dy or 0),
-         width + bleed * 2, height, n.ink or "surface", n.opacity or 0.9, n.radius or 0)
+  elseif kind == "bar" then
+    local pad = space(n.pad or "sm", "bar.pad")
+    local heights, parts, used = lay_children(n, S, width - wx(S, pad) * 2)
+    local height = math.max(n.h and hy(S, n.h) or 0, used + hy(S, pad) * 2)
+    local bleed = n.bleed and wx(S, n.bleed) or 0
+    local prims = {
+      rect_prim(n.ink or "surface", n.opacity or 0.9, radius(n.radius, "bar.radius"),
+                -bleed, n.dy and hy(S, n.dy) or 0, width + bleed * 2, height),
+    }
     if n.border then
-      rect(string.format("barb%d", #out + 1), x - bleed,
-           y - height + (n.border_top and height or 0), width + bleed * 2,
-           0.0025, "muted", 0.22, 0)
+      local top = n.border_top and -height or 0
+      prims[#prims + 1] = rect_prim("muted", 0.22, 0, -bleed, top, width + bleed * 2, hy(S, 1))
     end
     -- Children start at the top padding, and the band grows to fit them, so a
     -- bar can never be shorter than its contents.
-    local inner_y = y - pad
-    for _, child in ipairs(n.children) do
-      emit(child, theme, x + pad, inner_y, width - pad * 2, out)
+    local y = -hy(S, pad)
+    for index, part in ipairs(parts) do
+      append(prims, place(part.p, wx(S, pad), y))
+      y = y - (heights[index] or 0)
     end
-    return y - height
+    return { h = height, p = prims }
 
-  elseif n.kind == "spacer" then
-    return y - gap[n.size or "md"]
+  elseif kind == "spacer" then
+    return { h = hy(S, space(n.size or "md", "spacer.size")), p = {} }
 
-  elseif n.kind == "code" then
+  elseif kind == "code" then
     local lines = {}
     for line in (n.source .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = line end
     if lines[#lines] == "" then table.remove(lines) end
-    local height = px(theme.small * 1.8 * (#lines + 1) + 8)
-    rect(string.format("c%d", #out + 1), x - 0.16, y + px(4), width + 0.32, height, "surface", 0.95, theme.radius)
+    local advance = hy(S, theme.small * 1.8)
+    local height = advance * (#lines + 1) + hy(S, 8)
+    local bleed = wx(S, 4)
+    local prims = {
+      rect_prim("surface", 0.95, radius("md", "code"), -bleed, hy(S, 4), width + bleed * 2, height),
+    }
     if n.language and n.language ~= "" then
-      text_at(n.language, theme.micro, "muted", width - 0.6)
+      prims[#prims + 1] = text_prim(n.language, theme.micro, S, "muted", width - wx(S, 40), hy(S, 4))
     end
-    y = y - px(4)
-    for _, line in ipairs(lines) do
-      text_at(line, theme.small, "muted")
-      y = y - px(theme.small * 1.8)
+    for index, line in ipairs(lines) do
+      prims[#prims + 1] = text_prim(line, theme.small, S, "muted", 0, -hy(S, 4) - (index - 1) * advance)
     end
-    return y - px(8)
+    return { h = height, p = prims }
 
-  elseif n.kind == "diagram" then
-    local height = px(theme.small * 1.8 + 18)
-    rect(string.format("d%d", #out + 1), x - 0.16, y + px(4), width + 0.32, height, "surface", 0.55, theme.radius)
-    text_at("[" .. n.format .. "]  " .. n.source, theme.small, "muted", 0.02)
-    return y - height - gap.xs
+  elseif kind == "diagram" then
+    local height = hy(S, theme.small * 1.8 + 24)
+    local bleed = wx(S, 4)
+    return { h = height + hy(S, ui.gap.xs), p = {
+      rect_prim("surface", 0.55, radius("md", "diagram"), -bleed, hy(S, 4), width + bleed * 2, height),
+      text_prim("[" .. n.format .. "]  " .. n.source, theme.small, S, "muted", wx(S, 6), -hy(S, 4)),
+    } }
 
-  elseif n.kind == "bullets" then
+  elseif kind == "bullets" then
+    local advance = hy(S, theme.body * ui.leading)
+    local indent = wx(S, 26)
+    local prims, height = {}, 0
     for _, item in ipairs(n.items) do
-      text_at("•", theme.body, "muted", gap.sm)
-      for _, line in ipairs(wrap(item, n.chars or budget(theme, theme.body, width - 0.34))) do
-        text_at(line, theme.body, "text", 0.34)
-        y = y - px(theme.body * ui.leading)
+      prims[#prims + 1] = text_prim("•", theme.body, S, "muted", wx(S, 8), -height)
+      for _, line in ipairs(wrap(item, n.chars or budget(S, theme.body, width - indent))) do
+        prims[#prims + 1] = text_prim(line, theme.body, S, "text", indent, -height)
+        height = height + advance
       end
     end
-    return y
+    return { h = height, p = prims }
 
-  elseif n.kind == "quote" then
-    local lines = wrap(n.value, n.chars or budget(theme, theme.body, width - 0.25))
-    local height = #lines * px(theme.body * ui.leading)
-    rect(string.format("q%d", #out + 1), x, y, 0.008, height + px(4), "primary", 0.5, 2)
-    for _, line in ipairs(lines) do
-      text_at(line, theme.body, "muted", 0.20)
-      y = y - px(theme.body * ui.leading)
+  elseif kind == "quote" then
+    local advance = hy(S, theme.body * ui.leading)
+    local indent = wx(S, 14)
+    local lines = wrap(n.value, n.chars or budget(S, theme.body, width - indent))
+    local height = #lines * advance
+    local prims = { rect_prim("primary", 0.5, radius("sm", "quote"), 0, 0, wx(S, 2), height + hy(S, 4)) }
+    for index, line in ipairs(lines) do
+      prims[#prims + 1] = text_prim(line, theme.body, S, "muted", indent, -(index - 1) * advance)
     end
-    return y
+    return { h = height, p = prims }
 
-  elseif n.kind == "row" then
+  elseif kind == "row" then
     -- Rows place aligned pairs, or weighted columns when `widths` is given.
-    -- Free horizontal flow would need text metrics, which the host does not
-    -- expose and the library refuses to guess beyond a character estimate.
-    local tallest = row_extent(n, theme, width)
-    local last = #n.children
-    local spacing = gap[n.gap or "none"] or 0
+    local spacing = wx(S, space(n.gap or "none", "row.gap"))
+    local count = #n.children
+    local prims, cursor, tallest = {}, 0, 0
 
     if n.widths then
-      local total = width - spacing * (last - 1)
-      local cursor = x
+      local total = width - spacing * (count - 1)
       for index, child in ipairs(n.children) do
         local child_width = total * n.widths[index]
-        emit(child, theme, cursor, y, child_width, out)
+        local part = lay(child, S, child_width)
+        append(prims, place(part.p, cursor, 0))
         cursor = cursor + child_width + spacing
+        if part.h > tallest then tallest = part.h end
       end
     else
-      local own = {}
-      local used = spacing * (last - 1)
+      local own, used = {}, spacing * (count - 1)
       for index, child in ipairs(n.children) do
-        own[index] = intrinsic(child, theme)
+        own[index] = intrinsic(child, S)
         used = used + own[index]
       end
-      local cursor = n.align == "end" and (x + width - used - gap.xs) or x
+      cursor = n.align == "end" and (width - used - wx(S, 4)) or 0
       for index, child in ipairs(n.children) do
-        local remaining = x + width - cursor
-        emit(child, theme, cursor, y, math.max(own[index], remaining), out)
+        local remaining = width - cursor
+        local part = lay(child, S, math.max(own[index], remaining))
+        append(prims, place(part.p, cursor, 0))
         cursor = cursor + own[index] + spacing
+        if part.h > tallest then tallest = part.h end
       end
     end
-    return y - tallest
+    return { h = tallest, p = prims }
 
-  elseif n.kind == "card" or n.kind == "column" then
-    local top = y
-    local inner = x + (n.pad or 0)
-    local inner_width = width - (n.pad or 0) * 2
-    if n.pad then y = y - n.pad end
-    if n.kind == "card" then
-      local height = measure(n, theme, width)
-      rect(string.format("k%d", #out + 1), x - 0.16, y + px(6), width + 0.32, height - px(6), "surface", 0.9, theme.radius)
-      inner = x + gap.sm
-      inner_width = width - gap.sm * 2
-      y = y - gap.sm
-    end
-
-    -- A column with a fixed height distributes what is left to children marked
-    -- `grow`. That is how a footer stays pinned to the bottom of a fixed frame
-    -- instead of floating after the last line of content.
-    local spacing = gap[n.gap or "sm"] or 0
-    local heights, used = {}, 0
-    for index, child in ipairs(n.children) do
-      heights[index] = measure(child, theme, inner_width)
-      used = used + heights[index]
-    end
+  elseif kind == "column" or kind == "card" or kind == "stack" then
+    local spacing = hy(S, space(n.gap or "sm", kind .. ".gap"))
+    local pad = n.pad or 0
+    if kind == "card" then pad = pad > 0 and pad or ui.gap.sm end
+    local padx, pady = wx(S, pad), hy(S, pad)
+    local inner_width = width - padx * 2
+    local heights, parts, used = lay_children(n, S, inner_width)
     used = used + spacing * (#n.children - 1)
-    local extra = math.max(0, (n.h or 0) - used)
+    local content = used
 
+    -- `grow` children absorb whatever the parent's fixed height leaves over, so
+    -- a footer stays pinned to the bottom instead of floating after the text.
+    local extra = 0
+    local growers = 0
+    for _, child in ipairs(n.children) do
+      if child.grow then growers = growers + 1 end
+    end
+    if n.h and growers > 0 then
+      extra = math.max(0, hy(S, n.h) - pady * 2 - content) / growers
+    end
+
+    local height = math.max(n.h and hy(S, n.h) or 0, content + pady * 2)
+    local prims = {}
+    if kind == "card" then
+      prims[1] = rect_prim("surface", 0.9, radius("md", "card"), -wx(S, 4), 0, width + wx(S, 8), height)
+    end
+    local y = -pady
     for index, child in ipairs(n.children) do
       if index > 1 then y = y - spacing end
-      local before = y
-      y = emit(child, theme, inner, y, inner_width, out)
-      if child.grow and n.h then
-        y = before - (heights[index] + extra)
-      end
+      append(prims, place(parts[index].p, padx, y))
+      y = y - (heights[index] or 0) - (child.grow and extra or 0)
     end
-    if n.kind == "card" then y = y - gap.sm end
-    if n.pad then y = y - n.pad end
-    return y
+    return { h = height, p = prims }
   end
 
-  return y
+  -- Unknown kinds fail loudly: a view that draws nothing is a bug, not a style.
+  fail(("unknown node kind %q"):format(tostring(kind)))
+end
+
+-- ---- render -------------------------------------------------------------
+
+-- A Spore that is handed a surface size directly (a document pane, a test) can
+-- set it here instead of declaring host inputs it does not own.
+function ui.viewport(width, height)
+  ui.viewport_width = tonumber(width)
+  ui.viewport_height = tonumber(height)
+end
+
+-- One pixel horizontally and one vertically, for the surface actually on
+-- screen. There is no single "unit": Canvas stretches its 8-unit square to the
+-- surface, so horizontal and vertical density differ on every window that is
+-- not square, and a text size is a pixel count while a position is a fraction.
+--
+-- The size comes from `module.inputs`, which a widget module declares. A
+-- document Spore does not, so it may pass `ui.viewport(w, h)` itself; absent
+-- both, the layout assumes a portrait document surface and says so here rather
+-- than silently shrinking with the window.
+local function context(theme)
+  local inputs = module and module.inputs
+  local w = math.max(ui.viewport_width or (inputs and inputs.width) or 1200, 1)
+  local h = math.max(ui.viewport_height or (inputs and inputs.height) or 1800, 1)
+  return {
+    theme = theme,
+    ux = 8 / w,
+    uy = 8 / h,
+    -- Canvas multiplies text by scene_node_scale(z); a flat label sits at 1.25.
+    depth = 1.25,
+  }
 end
 
 function ui.render(tree, theme)
-  local out = {}
+  local S = context(theme)
+  local body = lay(tree, S, 8.0)
+  local prims = place(body.p, -4.0, 4.0)
   -- Opaque base: a surface is a window, not a hole in the wallpaper.
-  out[#out + 1] = {
-    id = "bg",
-    ink = "background",
-    opacity = 1,
-    radius = 0,
-    translation = { -4, 4, -1 },
-    scale = { 8, 8, 1 },
-  }
-  emit(tree, theme, -4.0, 4.0, 8.0, out)
+  table.insert(prims, 1, {
+    ink = "background", opacity = 1, radius = 0,
+    translation = { -4, 4, -1 }, scale = { 8, 8, 1 },
+  })
+
   -- Rects first (behind), then text.
-  for _, n in ipairs(out) do
-    if n.opacity ~= nil then
-      canvas.rect({ id = n.id, ink = n.ink, opacity = n.opacity, radius = n.radius,
-                    translation = n.translation, scale = n.scale })
-    end
-  end
-  for _, n in ipairs(out) do
-    if n.opacity == nil then
-      canvas.text({ id = n.id, text = n.text, ink = n.ink,
-                    translation = n.translation, scale = n.scale })
+  local index = 0
+  for _, prim in ipairs(prims) do
+    index = index + 1
+    local id = prim.id or string.format("e%d", index)
+    if prim.opacity ~= nil then
+      canvas.rect({ id = id, ink = prim.ink, opacity = prim.opacity, radius = prim.radius,
+                    translation = prim.translation, scale = prim.scale })
+    else
+      canvas.text({ id = id, text = prim.text, ink = prim.ink,
+                    translation = prim.translation, scale = prim.scale })
     end
   end
 end
