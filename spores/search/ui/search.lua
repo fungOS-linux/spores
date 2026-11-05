@@ -79,20 +79,27 @@ local function human_size(n)
   return string.format("%d%s", math.floor(value + 0.5), units[i])
 end
 
+local function clip(value, limit)
+  value = tostring(value or "")
+  if #value <= limit then return value end
+  return value:sub(1, limit - 1) .. "…"
+end
+
 local function media_line(result)
   local mt = result.media_type or ""
   if mt == "" then mt = result.is_dir and "folder" or "file" end
-  return mt .. "  ·  " .. human_size(result.size)
+  local matched = result.matched_by and ("  ·  " .. result.matched_by) or ""
+  return mt .. "  ·  " .. human_size(result.size) .. matched
 end
 
-local function result_row(result, index)
+local function result_row(result, index, max_chars)
   local kind_glyph = result.is_dir and "▸ " or "· "
   local children = {
-    label("result-" .. index .. "-name", kind_glyph .. result.name, 15),
+    label("result-" .. index .. "-name", kind_glyph .. clip(result.name, max_chars), 15),
     label("result-" .. index .. "-meta", media_line(result), 11),
   }
   if result.snippet and result.snippet ~= "" then
-    children[#children + 1] = label("result-" .. index .. "-snippet", result.snippet, 11, { wrap = true })
+    children[#children + 1] = label("result-" .. index .. "-snippet", clip(result.snippet, max_chars * 2), 11, { wrap = true })
   end
   return {
     id = "result-" .. index,
@@ -107,12 +114,6 @@ local FILTERS = {
   { id = "files", label = "Files" },
   { id = "folders", label = "Folders" },
 }
-
-local function clip(value, limit)
-  value = tostring(value or "")
-  if #value <= limit then return value end
-  return value:sub(1, limit - 1) .. "…"
-end
 
 local function filter_results(results, filter)
   local out = {}
@@ -272,8 +273,9 @@ local function layout_tree(snapshot, state)
   end
 
   -- Main pane: the results list.
+  local max_chars = math.max(24, math.floor((wide and z.results or W) / 8))
   local rows = {}
-  for index = 1, visible do rows[#rows + 1] = result_row(results_for_filter[index], index) end
+  for index = 1, visible do rows[#rows + 1] = result_row(results_for_filter[index], index, max_chars) end
   if #rows == 0 then
     rows[1] = label("results-empty", snapshot.error and "Index unavailable" or "No matches", 13, { height = 28 })
   end
