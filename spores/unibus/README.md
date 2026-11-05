@@ -33,3 +33,15 @@ Preview the UI without a compositor:
 ```sh
 lua tools/preview.lua examples/inbox_snapshot.lua > /tmp/inbox.html
 ```
+
+Preview with a real AgentMail inbox:
+
+```sh
+AGENTMAIL_API_KEY_FILE=~/agentmail_api_key_fungOS.txt \
+  python3 tools/agentmail_snapshot.py /tmp/agentmail_snapshot.lua
+lua tools/preview.lua /tmp/agentmail_snapshot.lua > /tmp/inbox.html
+```
+
+`tools/agentmail_snapshot.py` is a UI preview adapter, not a Soil host. It
+fetches one inbox, maps unread/urgent state, and writes the Lua snapshot
+`ui/inbox.lua` renders. It never prints the key.
