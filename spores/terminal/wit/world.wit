@@ -1,0 +1,15 @@
+// Terminal Spore: Mycelium target directory, one PTY session, one VT surface.
+package fungos:terminal-spore@0.1.0;
+
+world terminal-spore {
+  import soil:mycelium/directory@0.1.0;
+  import soil:mycelium/session@0.1.0;
+  import soil:terminal/surface@0.1.0;
+
+  /// `list` prints the directory; `open <target>` drains one fixture/PTY
+  /// session into the terminal surface.
+  export run: func(args: list<string>) -> result<_, string>;
+
+  /// Return directory + grid snapshot as JSON bytes for the UI.
+  export snapshot: func() -> result<list<u8>, string>;
+}

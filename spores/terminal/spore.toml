@@ -1,0 +1,38 @@
+# Terminal Spore: Mycelium directory + libghostty-compatible VT surface.
+schema = 1
+
+[spore]
+id = "dev.fungos.terminal"
+name = "terminal"
+version = "0.1.0"
+license = "MIT"
+summary = "Browse Mycelium targets and open a terminal session"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { mycelium = "0.1.0", terminal = "0.1.0" }
+
+[module]
+path = "module.wasm"
+
+[ui]
+entry = "ui/terminal.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+surfaces = ["web", "native", "canvas"]
+
+[grants]
+"soil:mycelium.directory" = "list Mycelium targets visible to this Spore"
+"soil:mycelium.shell" = "open a host-mediated SSH PTY to a listed target"
+"soil:mycelium.exec" = "run a non-interactive command on a listed target"
+"soil:terminal" = "present a bounded cell grid and receive normalized input"
+
+[denied]
+# SSH, credentials, routes and host keys stay in the Mycelium host capability.
+transport = ["socket", "quic", "iroh", "ssh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
