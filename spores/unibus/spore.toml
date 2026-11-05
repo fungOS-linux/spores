@@ -1,0 +1,34 @@
+# Initial soil:unibus Spore. See docs/records.md and docs/ai-inbox-spec.md.
+schema = 1
+
+[spore]
+id = "dev.fungos.unibus"
+name = "unibus"
+version = "0.1.0"
+license = "MIT"
+summary = "Mail/chat metadata cached as soil:records, fed by soil:unibus"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { canvas = "1.0.0", records = "0.1.0", unibus = "0.1.0" }
+
+[module]
+path = "module.wasm"
+
+[launch]
+default = "canvas"
+surfaces = ["web", "native", "canvas"]
+
+[grants]
+"soil:unibus.observe" = "poll email.* and chat.* metadata frames"
+"soil:records.read" = "read the local metadata cache"
+"soil:records.write" = "store/update metadata records"
+"soil:records.sync" = "export/apply record changes across devices"
+"soil:canvas" = "present the inbox surface"
+
+[denied]
+# Sending is a separate future grant; this Spore is read-only.
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
