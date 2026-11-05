@@ -18,7 +18,7 @@ return {
   selected_id = "support/refund-441",
   layout = {
     list_offset = 0,
-    list_limit = 8,
+    list_limit = 50,
     cursor_id = "github/mycelium/ci-11793527317",
     focus = "list",
     width_class = "wide",
@@ -218,26 +218,6 @@ return {
         },
       },
     },
-    {
-      id = "email/welcome",
-      collection = "email.message",
-      kind = "mail",
-      title = "Welcome to AgentMail",
-      sender = "AgentMail",
-      preview = "Your inbox is ready. Reply to this message to send mail.",
-      time = "Oct 22",
-      unread = false,
-      urgent = false,
-      status = "done",
-      labels = { "agentmail" },
-      brief = "Onboarding message. No action.",
-      messages = {
-        {
-          from = "AgentMail <hello@agentmail.to>",
-          time = "Oct 22",
-          preview = "You created ajmwagar-agents@agentmail.to a second ago and it’s already receiving mail.",
-        },
-      },
-    },
+
   },
 }

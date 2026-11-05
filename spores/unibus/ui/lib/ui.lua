@@ -94,6 +94,7 @@ function ui.kbd(label) return node("button", { label = label, quiet = true }) en
 
 -- A horizontal band with a background: title bars, toolbars, status lines.
 function ui.bar(props) return node("bar", props or {}) end
+function ui.modal(props) return node("modal", props or {}) end
 
 -- A raw rectangle in token colours. The escape hatch for dividers and
 -- highlights; it takes units, not pixels, so it still follows the surface.
@@ -243,6 +244,8 @@ measure = function(n, theme, width)
     return height
   elseif n.kind == "row" then
     return row_extent(n, theme, width)
+  elseif n.kind == "modal" then
+    return 0
   end
   return 0
 end
@@ -251,24 +254,24 @@ end
 
 local function emit(n, theme, x, y, width, out)
 
-  local function text_at(value, size, ink, indent)
+  local function text_at(value, size, ink, indent, z)
     local s = math.sqrt(size / theme.body)
     out[#out + 1] = {
       id = string.format("t%d", #out + 1),
       text = value,
       ink = ink or "text",
-      translation = { x + (indent or 0), y, 0 },
+      translation = { x + (indent or 0), y, z or 0 },
       scale = { s, s, 1 },
     }
   end
 
-  local function rect(id, rx, ry, rw, rh, ink, opacity, radius)
+  local function rect(id, rx, ry, rw, rh, ink, opacity, radius, z)
     out[#out + 1] = {
       id = id,
       ink = ink,
       opacity = opacity,
       radius = radius or 0,
-      translation = { rx, ry, -0.5 },
+      translation = { rx, ry, z or -0.5 },
       scale = { rw, rh, 1 },
     }
   end
@@ -311,9 +314,20 @@ local function emit(n, theme, x, y, width, out)
     local width_est = #n.label * size * 1.15 * U + hpad * 2
     local ink = n.quiet and "surface" or "primary"
     local opacity = n.quiet and 0.55 or (n.selected and 1.0 or 0.9)
-    rect(string.format("btn%d", #out + 1), x, y - height, width_est, height, ink, opacity, theme.radius)
+    local button_id = n.id or string.format("btn%d", #out + 1)
+    rect(button_id, x, y - height, width_est, height, ink, opacity, theme.radius)
     text_at(n.label, size, n.quiet and "muted" or "background", hpad)
     out[#out].translation[2] = y - vpad - text_h * 0.92
+    if y - height >= -4.001 and y <= 4.001 and x >= -4.001 and x + width_est <= 4.001 then
+      widget.hit {
+        id = button_id .. "-hit",
+        label = "hit",
+        x = x,
+        y = y - height,
+        width = width_est,
+        height = height,
+      }
+    end
     return y - height
 
   elseif n.kind == "fill" then
@@ -340,8 +354,37 @@ local function emit(n, theme, x, y, width, out)
     for _, child in ipairs(n.children) do
       emit(child, theme, x + pad, inner_y, width - pad * 2, out)
     end
+    if n.hit and y - height >= -4.001 and y <= 4.001 and x - bleed >= -4.001 and x - bleed + width + bleed * 2 <= 4.001 then
+      widget.hit {
+        id = n.hit.id or string.format("hit%d", #out + 1),
+        label = "hit",
+        x = x - bleed,
+        y = y - height,
+        width = width + bleed * 2,
+        height = height,
+      }
+    end
     return y - height
 
+  elseif n.kind == "modal" then
+    local pad = n.pad or gap.md
+    rect(string.format("modal-dim%d", #out + 1), -4, 4, 8, 8, "background", 0.72, 0, 1.0)
+    rect(string.format("modal-card%d", #out + 1), n.x or -2.2, n.y or 2.4,
+         n.w or 4.4, n.h or 2.4, "surface", 1.0, theme.radius, 1.1)
+    local inner_y = (n.y or 2.4) - pad
+    for _, child in ipairs(n.children) do
+      local first = #out + 1
+      emit(child, theme, (n.x or -2.2) + pad, inner_y,
+           (n.w or 4.4) - pad * 2, out)
+      for index = first, #out do
+        if out[index].opacity ~= nil then
+          out[index].translation[3] = 1.25
+        else
+          out[index].translation[3] = 1.35
+        end
+      end
+    end
+    return y
   elseif n.kind == "spacer" then
     return y - gap[n.size or "md"]
 

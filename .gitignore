@@ -1,2 +1,6 @@
 /target
 **/*.rs.bk
+
+# Generated live inbox snapshot (metadata from AgentMail)
+spores/unibus/examples/inbox_live.lua
+spores/unibus/tools/__pycache__/

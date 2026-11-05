@@ -68,17 +68,8 @@ local function pill(label, opts)
   })
 end
 
-local function stat(label, value, ink)
-  return ui.column {
-    gap = "none",
-    children = {
-      text(value, "subheading", ink or ROLE.title),
-      text(label, "caption", ROLE.quiet),
-    },
-  }
-end
 
-local function filter_row(filter)
+local function filter_row(filter, index)
   local label = filter.label
   local count = filter.count and tostring(filter.count) or ""
   local ink = filter.selected and ROLE.title or ROLE.body
@@ -91,6 +82,7 @@ local function filter_row(filter)
   }
   if filter.selected then
     return ui.bar {
+      hit = { id = "filter-" .. index },
       pad = ui.gap.xs,
       ink = "primary",
       opacity = 0.14,
@@ -98,10 +90,10 @@ local function filter_row(filter)
       children = { row },
     }
   end
-  return ui.bar { pad = ui.gap.xs, children = { row } }
+  return ui.bar { hit = { id = "filter-" .. index }, pad = ui.gap.xs, children = { row } }
 end
 
-local function thread_row(thread, cursor)
+local function thread_row(thread, cursor, index)
   local unread = thread.unread and true or false
   local title_ink = unread and ROLE.title or ROLE.body
   local labels = thread.labels and ("#" .. table.concat(thread.labels, " #")) or ""
@@ -123,6 +115,7 @@ local function thread_row(thread, cursor)
   }
   if thread.selected then
     return ui.bar {
+      hit = { id = "thread-" .. index },
       pad = ui.gap.xs,
       ink = "primary",
       opacity = 0.10,
@@ -132,6 +125,7 @@ local function thread_row(thread, cursor)
   end
   if cursor then
     return ui.bar {
+      hit = { id = "thread-" .. index },
       pad = ui.gap.xs,
       ink = "primary",
       opacity = 0.05,
@@ -139,7 +133,7 @@ local function thread_row(thread, cursor)
       children = { body },
     }
   end
-  return ui.bar { pad = ui.gap.xs, children = { body } }
+  return ui.bar { hit = { id = "thread-" .. index }, pad = ui.gap.xs, children = { body } }
 end
 
 local function message(msg)
@@ -179,8 +173,8 @@ local function rail(snapshot)
     ui.spacer { size = "xs" },
     text("FILTERS", "caption", ROLE.quiet),
   }
-  for _, filter in ipairs(snapshot.filters or {}) do
-    children[#children + 1] = filter_row(filter)
+  for index, filter in ipairs(snapshot.filters or {}) do
+    children[#children + 1] = filter_row(filter, index)
   end
   children[#children + 1] = ui.spacer { size = "xs" }
   children[#children + 1] = ui.rule {}
@@ -218,7 +212,7 @@ local function list(snapshot)
   for index = first, last do
     local thread = threads[index]
     if thread then
-      children[#children + 1] = thread_row(thread, thread.id == layout.cursor_id)
+      children[#children + 1] = thread_row(thread, thread.id == layout.cursor_id, index)
     end
   end
   if #threads > last then
@@ -270,17 +264,17 @@ local function detail(snapshot, narrow)
       ROLE.primary,
       36
     ) or ui.spacer { size = "none" },
-    ui.row {
-      gap = "xs",
-      children = {
-        narrow and pill("← Back", { quiet = true }) or nil,
+    (function()
+      local actions = {
         pill("Reply"),
         pill("Reply all", { quiet = true }),
         pill("Assign", { quiet = true }),
         pill("Resolve", { quiet = true }),
         ui.icon_button("more", { size = "small", quiet = true }),
-      },
-    },
+      }
+      if narrow then table.insert(actions, 1, pill("← Back", { quiet = true })) end
+      return ui.row { gap = "xs", children = actions }
+    end)(),
     ui.rule {},
     ui.bar {
       pad = ui.gap.sm,
@@ -305,25 +299,7 @@ local function detail(snapshot, narrow)
     children[#children + 1] = ui.rule {}
   end
   if thread.draft then
-    children[#children + 1] = ui.bar {
-      pad = ui.gap.sm,
-      ink = "surface",
-      opacity = 0.7,
-      radius = theme().radius,
-      children = {
-        ui.column {
-          gap = "xs",
-          children = {
-            text("DRAFT · needs approval", "caption", ROLE.warning),
-            text(thread.draft, "body", ROLE.body, 40),
-          },
-        },
-      },
-    }
-    children[#children + 1] = ui.row {
-      gap = "xs",
-      children = { pill("Approve"), pill("Edit", { quiet = true }), pill("Discard", { quiet = true }) },
-    }
+    children[#children + 1] = text("DRAFT · waiting for approval", "caption", ROLE.warning, 40)
   else
     children[#children + 1] = ui.bar {
       pad = ui.gap.sm,
@@ -419,8 +395,6 @@ local function header(snapshot)
               ui.icon_button("columns", { size = "small", quiet = true }),
               ui.icon_button("doc", { size = "small", quiet = true }),
               pill("New"),
-              ui.icon_button("search", { size = "small", quiet = true }),
-              ui.icon_button("more", { size = "small", quiet = true }),
             },
           },
         },
@@ -431,22 +405,19 @@ end
 
 local function summary(snapshot)
   local c = snapshot.counts or {}
+  local line = string.format(
+    "%d unread   ·   %d attention   ·   %d support   ·   %d draft",
+    c.unread or 0,
+    c.urgent or 0,
+    c.support or 0,
+    c.drafts or 0
+  )
   return ui.bar {
-    pad = ui.gap.sm,
+    pad = ui.gap.xs,
     ink = "surface",
     opacity = 0.55,
     border = true,
-    children = {
-      ui.row {
-        widths = { 0.25, 0.25, 0.25, 0.25 },
-        children = {
-          stat("unread", c.unread or 0, ROLE.title),
-          stat("need attention", c.urgent or 0, ROLE.warning),
-          stat("support open", c.support or 0, ROLE.body),
-          stat("agent drafts", c.drafts or 0, ROLE.success),
-        },
-      },
-    },
+    children = { text(line, "caption", ROLE.quiet, 92) },
   }
 end
 
@@ -506,7 +477,32 @@ function M.tree(snapshot)
   }
 end
 
+local function apply_local_event(snapshot)
+  local event = _G.module and _G.module.event
+  if not event or event.kind ~= "activate" then return snapshot end
+  local target = event.target_id or ""
+  local thread_index = tonumber(target:match("^thread%-(%d+)$"))
+  if thread_index then
+    local thread = (snapshot.threads or {})[thread_index]
+    if thread then
+      snapshot.selected_id = thread.id
+      for _, candidate in ipairs(snapshot.threads or {}) do
+        candidate.selected = candidate.id == snapshot.selected_id
+      end
+    end
+  else
+    local filter_index = tonumber(target:match("^filter%-(%d+)$"))
+    if filter_index and (snapshot.filters or {})[filter_index] then
+      for index, filter in ipairs(snapshot.filters or {}) do
+        filter.selected = index == filter_index
+      end
+    end
+  end
+  return snapshot
+end
+
 function M.render(snapshot)
+  snapshot = apply_local_event(snapshot or {})
   ui.render(M.tree(snapshot), theme())
 end
 
