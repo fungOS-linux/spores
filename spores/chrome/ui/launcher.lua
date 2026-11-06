@@ -117,20 +117,36 @@ for n = 0, 5 do
       size_text = k.type.small, rgb = fill, ink = "muted", opacity = fill and 0.92 or 0.16,
       text_ink = fill and "text" or "muted", z = 0.9,
     })
+    -- The title is drawn here, and the hit target is invisible above it. Letting
+    -- the host draw the text meant the row's alignment was the host's business:
+    -- a selected row centred its own label while its neighbours sat left, because
+    -- the two styles disagree about what a label inside a full-width box means.
+    -- A row is a hit target with text on it, not a button that happens to be wide.
+    -- The title gets the room the detail does not need: a row that overlaps its
+    -- own metadata is worse than a truncated name, because you cannot read either.
+    local detail = tostring(i[key .. "-detail"] or "")
+    -- The metadata is capped at what is worth reading: reserving room for a
+    -- 34-character detail cut every title in half to make space for a suffix
+    -- nobody finishes.
+    local shown_detail = detail:sub(1, 22)
+    local detail_room = shown_detail == "" and 0 or #shown_detail * (k.type.micro * 0.58) + 22
+    local title_room = w - 66 - detail_room - 16
+    local title_chars = math.max(8, math.floor(title_room / (k.type.body * 0.52)))
+    local title_text = tostring(title)
+    if #title_text > title_chars then title_text = title_text:sub(1, title_chars - 1) .. "…" end
     widget.label({
-      id = key .. "-glyph-fallback", text = "", x = p.x(0), y = p.y(0), size = k.type.micro,
-      ink = "muted",
+      id = key .. "-title", text = title_text,
+      x = p.x(66), y = p.y(y + (row_height - k.type.body) * 0.5),
+      size = k.type.body, ink = selected and "text" or "text", z = 1,
     })
-    -- A launcher row is read left to right from its mark, so the label hugs the
-    -- left edge instead of floating in the middle of the row.
-    widget.button({
-      id = key, label = title, appearance = "quiet", align = "left",
+    widget.hit({
+      id = key, label = tostring(title):sub(1, 24),
       action = "select", body = { origin = "desktop-launcher" },
-      x = p.x(56), y = p.y(y + 4), width = p.w(w - 76), height = p.h(36),
+      x = p.x(8), y = p.y(y + 2), width = p.w(w - 16), height = p.h(row_height - 4),
       enabled = i[key .. "-available"] == true,
     })
-    if i[key .. "-detail"] and i[key .. "-detail"] ~= "" then
-      local detail = tostring(i[key .. "-detail"]):sub(1, 34)
+    if detail ~= "" then
+      detail = shown_detail
       widget.label({
         id = key .. "-detail", text = detail,
         x = p.x(w - 28 - #detail * (k.type.micro * 0.6)), y = p.y(y + 16),
