@@ -14,6 +14,7 @@ _G.module = {
     hits = {
       { id = "1", title = "Safari", subtitle = "Web browser", source = "apps", kind = "application" },
       { id = "2", title = "safari-log.txt", subtitle = "", source = "vfs", kind = "file" },
+      { id = "3", title = "Terminal", subtitle = "Utilities", source = "apps", kind = "application", icon = ">" },
     },
   },
   theme = {
@@ -50,6 +51,15 @@ assert(#drawn.texts > 0, "no text")
 assert(find_text("Safari"), "hit title not drawn")
 assert(find_text("Web browser"), "hit subtitle not drawn")
 assert(find_text("safari-log.txt"), "file hit not drawn")
+
+-- A row says `App`, never the protocol's `application`.
+assert(find_text("App"), "kind drawn with its short label")
+assert(find_text("File"), "file kind drawn with its short label")
+assert(not find_text("application"), "kind label is the raw protocol word")
+
+-- A host-nominated mark is drawn as given; absent, the title supplies one.
+assert(find_text(">"), "host icon not drawn")
+assert(find_text("S"), "monogram not drawn")
 
 -- Empty query yields an empty state.
 local empty_snapshot = { width = 800, height = 600, query = "", hits = {} }
