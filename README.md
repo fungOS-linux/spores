@@ -49,6 +49,7 @@ spores/chrome              shell regions: top bar, dock, launcher, switcher, con
 spores/spore-browser       installed-Spore browser, launched through soil:spore
 spores/spore-browser-host  wasmtime host for the browser Spore
 spores/dragshift           convert and edit a dropped file from a radial menu
+spores/search              fuzzy search, ranking, and action dispatch
 spores/markdown            Markdown reader/editor
 spores/unibus              mail/chat inbox UI
 spores/terminal            terminal Spore

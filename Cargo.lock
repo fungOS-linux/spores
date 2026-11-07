@@ -1634,6 +1634,10 @@ name = "spore-markdown"
 version = "0.1.0"
 
 [[package]]
+name = "spore-search"
+version = "0.1.0"
+
+[[package]]
 name = "spore-terminal"
 version = "0.1.0"
 dependencies = [
