@@ -1,0 +1,18 @@
+# Spores with a spore.toml but no ui/API.md yet.
+#
+# The Lua API is part of the package ABI (docs/lua-api-contract.md), but these
+# Spores predate the rule. They are tolerated by path so a *new* Spore without
+# docs fails the build immediately. Delete a line when you document the Spore;
+# `tend api-check --baseline tools/api-baseline.txt --strict-baseline` fails
+# while this file is stale, which is what keeps the ratchet turning.
+#
+# Checked by:
+#   tend api-check --root spores --baseline tools/api-baseline.txt
+spores/chrome
+spores/consent
+spores/contacts
+spores/crm
+spores/dfm-report
+spores/media-probe
+spores/mush
+spores/surface-probe
