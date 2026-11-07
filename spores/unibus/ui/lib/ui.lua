@@ -179,7 +179,144 @@ function ui.action(name, payload)
   return { action = name, payload = payload }
 end
 
+-- `widget.hit` has no host implementation; see docs/interaction-gap.md. Call it
+-- when a host provides it, otherwise keep the spec addressable rather than
+-- crashing the module inside Canvas, where `widget` is the theming library.
+ui.pending_hits = {}
+function ui.hit(spec)
+  if type(widget) == "table" and type(widget.hit) == "function" then
+    widget.hit(spec)
+  else
+    ui.pending_hits[#ui.pending_hits + 1] = spec
+  end
+end
+
+-- ---- layout -------------------------------------------------------------
+--
+-- Canvas has no layout service. Its scene API takes absolute transforms and its
+-- module API draws at positions the module computes, so a view that asks the host
+-- to lay out its tree and hand back rects cannot run there. `canvas.layout` is
+-- provided only by the development hosts (tend's fake host, this fixture).
+--
+-- `ui.layout` is the pure-Lua fallback for that absence. It honours the layout
+-- hints the views actually declare (direction, gap, padding, fixed sizes and
+-- flex_grow) and returns the same shape the host does: a flat node list where
+-- every node carries a pixel `rect`. It is deliberately not a stub: the fixture
+-- and Canvas draw the same scene through it. This section is load-bearing and
+-- lives on its own so the composer can inline it without the rest of the kit.
+-- BEGIN-LAYOUT
+
+local function layout_padding(node)
+  local padding = node.layout and node.layout.padding
+  local top, right, bottom, left = 0, 0, 0, 0
+  if type(padding) == "table" then
+    top = padding.top or 0
+    right = padding.right or 0
+    bottom = padding.bottom or 0
+    left = padding.left or 0
+  end
+  return top, right, bottom, left
+end
+
+local function layout_fixed(node, direction)
+  local spec = node.layout or {}
+  local value = direction == "row" and spec.width or spec.height
+  return type(value) == "number" and value or nil
+end
+
+local function layout_default(node)
+  if node.kind == "text" then
+    local size = node.style and node.style.size
+    return type(size) == "number" and (size + 4) or 20
+  end
+  if node.kind == "rule" then return 2 end
+  if node.kind == "spacer" then return 8 end
+  return nil
+end
+
+local function layout_assign(node, x, y, width, height, out)
+  node.rect = { x = x, y = y, width = width, height = height }
+  out[#out + 1] = node
+
+  local children = node.children
+  if type(children) ~= "table" or #children == 0 then return end
+
+  local spec = node.layout or {}
+  local direction = spec.direction or "column"
+  local gap = spec.gap or 0
+  local pad_top, pad_right, pad_bottom, pad_left = layout_padding(node)
+  local content_x, content_y = x + pad_left, y + pad_top
+  local content_w = width - pad_left - pad_right
+  local content_h = height - pad_top - pad_bottom
+
+  local count = #children
+  local total = direction == "row" and content_w or content_h
+  local gaps = gap * math.max(0, count - 1)
+
+  -- A flex child must stay flex. Resolving it to its content height first would
+  -- pin a sender at fourteen pixels and push the timestamp over it, which is
+  -- what the interface actually draws if the grow is ignored.
+  local sizes, fixed, flex_total = {}, 0, 0
+  for index, child in ipairs(children) do
+    local size = layout_fixed(child, direction)
+    if size ~= nil then
+      sizes[index] = size
+      fixed = fixed + size
+    else
+      local grow = child.layout and child.layout.flex_grow or 0
+      if type(grow) == "number" and grow > 0 then
+        sizes[index] = false
+        flex_total = flex_total + grow
+      else
+        local fallback = layout_default(child)
+        if fallback ~= nil then
+          sizes[index] = fallback
+          fixed = fixed + fallback
+        else
+          sizes[index] = false
+        end
+      end
+    end
+  end
+
+  local remaining = math.max(0, total - fixed - gaps)
+  for index, child in ipairs(children) do
+    if sizes[index] == false then
+      local grow = child.layout and child.layout.flex_grow or 0
+      if flex_total > 0 and type(grow) == "number" and grow > 0 then
+        sizes[index] = remaining * (grow / flex_total)
+      else
+        sizes[index] = remaining / math.max(1, count)
+      end
+    end
+  end
+
+  local cursor = 0
+  for index, child in ipairs(children) do
+    local size = sizes[index]
+    if direction == "row" then
+      layout_assign(child, content_x + cursor, content_y, size, content_h, out)
+    else
+      layout_assign(child, content_x, content_y + cursor, content_w, size, out)
+    end
+    cursor = cursor + size + gap
+  end
+end
+
+--- Lay out `tree` in a `width` x `height` surface.
+---
+--- Returns `{ root = <rect>, nodes = <flat list> }`, matching the host's shape so
+--- a view can reach for either without noticing.
+function ui.layout(tree, width, height)
+  assert(type(tree) == "table", "ui.layout needs a tree")
+  local out = {}
+  layout_assign(tree, 0, 0, width or 0, height or 0, out)
+  return { root = tree.rect, nodes = out }
+end
+-- END-LAYOUT
+
 -- ---- measure ------------------------------------------------------------
+
 
 local function wrap(text, chars)
   local lines, line = {}, ""
@@ -382,7 +519,7 @@ local function emit(n, theme, x, y, width, out)
     text_at(n.label, size, n.quiet and "muted" or "background", hpad)
     out[#out].translation[2] = y - vpad - text_h * 0.92
     if y - height >= -4.001 and y <= 4.001 and x >= -4.001 and x + width_est <= 4.001 then
-      widget.hit {
+      ui.hit {
         id = button_id .. "-hit",
         label = "hit",
         x = x,
@@ -418,7 +555,7 @@ local function emit(n, theme, x, y, width, out)
       emit(child, theme, x + pad, inner_y, width - pad * 2, out)
     end
     if n.hit and y - height >= -4.001 and y <= 4.001 and x - bleed >= -4.001 and x - bleed + width + bleed * 2 <= 4.001 then
-      widget.hit {
+      ui.hit {
         id = n.hit.id or string.format("hit%d", #out + 1),
         label = "hit",
         x = x - bleed,
