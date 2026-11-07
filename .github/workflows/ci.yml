@@ -18,3 +18,19 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+
+      # The Lua API is part of the package ABI, so a Spore without ui/API.md is
+      # a build failure. The checker lives in the SDK (`tend api-check`) rather
+      # than being copied here, so there is one implementation of the rule.
+      - name: Check out the Spore tooling
+        uses: actions/checkout@v4
+        with:
+          repository: fungOS-linux/fungos-sdk
+          path: _sdk
+
+      - name: Spore Lua API docs
+        run: |
+          lua5.4 _sdk/tools/tend.lua api-check \
+            --root spores \
+            --baseline tools/api-baseline.txt \
+            --strict-baseline

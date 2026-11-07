@@ -4,12 +4,21 @@ A Spore that shows DFM findings over the model they are about:
 
 * `module.wasm` — a real wgpu 29 render pass on `wasm32-wasip2`. It imports
   standard `wasi:webgpu` plus `soil:canvas-gpu`, draws the mesh into a texture and
-  presents it. No window, no swapchain, no native handle: Canvas owns those.
+  presents it. No window, no swapchain, no native handle: the host owns those, and
+  `launch.surfaces` decides which kind of surface the frame lands on.
 * `ui/report.lua` — the findings as a Lua projection, and the `dfm.note` /
   `dfm.open_native` intents.
 
 Both read the same `model/data.json`, so the list and the render cannot disagree
 about what is flagged. Nothing here re-derives a DFM result.
+
+## Surfaces
+
+`launch.surfaces = ["canvas", "native", "web"]` is three *sources* of the same
+Canvas surface, not three programs. `native` means the host owns a real platform
+window (macOS/Linux/appliance) and the Spore still receives nothing but a texture
+extent and a `present` call — so there is no second binary to build, ship, or
+spawn for a native window, and no reason for one.
 
 ## The scene file
 
