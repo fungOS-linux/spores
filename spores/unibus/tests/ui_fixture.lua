@@ -138,3 +138,25 @@ assert(#inbox.pending_hits == 1, "a delivered hit should not also be queued")
 _G.widget = themed_widget
 
 print("ui: no-hit host ok")
+
+-- Canvas has no layout service either, so a view that asks the host to lay out
+-- its tree cannot run there. Prove the fallback runs, and that it draws the same
+-- copy, by removing the layout stub from the fake host.
+local real_layout = _G.canvas.layout
+_G.canvas.layout = nil
+drawn = { rects = {}, texts = {} }
+
+local laid_ok, laid_error = pcall(inbox.render, snapshot)
+_G.canvas.layout = real_layout
+
+assert(laid_ok, "render failed without canvas.layout: " .. tostring(laid_error))
+assert(#drawn.texts > 0, "the layout fallback drew nothing")
+assert(#drawn.rects > 0, "the layout fallback drew no rects")
+
+local laid_copy = {}
+for _, spec in ipairs(drawn.texts) do laid_copy[#laid_copy + 1] = tostring(spec.text) end
+local laid_text = table.concat(laid_copy, "\n")
+assert(laid_text:find(selected.title, 1, true), "the layout fallback lost the selected thread")
+assert(laid_text:find(account, 1, true), "the layout fallback lost the account")
+
+print("ui: layout fallback ok")
