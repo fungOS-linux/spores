@@ -51,7 +51,7 @@ spores/spore-browser-host  wasmtime host for the browser Spore
 spores/dragshift           convert and edit a dropped file from a radial menu
 spores/search              fuzzy search, ranking, and action dispatch
 spores/markdown            Markdown reader/editor
-spores/unibus              mail/chat inbox UI
+spores/unibus              read-only inbox (dev.fungos.inbox)
 spores/terminal            terminal Spore
 spores/terminal-core       terminal semantics shared by the tmux and host front ends
 spores/terminal-host       native terminal host
@@ -72,7 +72,7 @@ spores/markdown     the Markdown reader/editor Spore
                     src/   semantics and editor state
                     ui/    the Lua UI Canvas renders
                     spore.toml  manifest, grants, launch surfaces
-spores/unibus       initial soil:unibus Spore
+spores/unibus       the inbox Spore (id `dev.fungos.inbox`)
                     src/   record keys/schemas for mail + chat metadata
                     spore.toml  records/unibus grants, read-only
 docs/               host/spore contract, records/sync, AI inbox spec

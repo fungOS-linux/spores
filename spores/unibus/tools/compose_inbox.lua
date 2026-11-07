@@ -154,6 +154,6 @@ local function compose(name, title, view_path, snapshot_path, app_id)
   print(string.format("wrote %s (%d bytes) and %s", path, #composed, manifest_path))
 end
 
-compose("spore-dev-inbox", "Inbox", "ui/inbox.lua", arg[2] or "examples/inbox_mock.lua", "dev.fungos.unibus")
-compose("spore-dev-approval2", "Approve reply", "ui/approval.lua", "examples/approval_mock.lua", "dev.fungos.unibus")
+compose("spore-dev-inbox", "Inbox", "ui/inbox.lua", arg[2] or "examples/inbox_mock.lua", "dev.fungos.inbox")
+compose("spore-dev-approval2", "Approve reply", "ui/approval.lua", "examples/approval_mock.lua", "dev.fungos.inbox")
 compose("spore-dev-contacts", "Contacts", "ui/contacts.lua", arg[3] or "examples/contacts_mock.lua", "dev.fungos.contacts")

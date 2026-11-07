@@ -4,7 +4,7 @@
 -- panes, and the host resolves the actual geometry with measured text.
 
 local M = {}
-M.name = "unibus"
+M.name = "inbox"
 M.version = "0.3.0"
 
 local W, H = 1086, 1569
