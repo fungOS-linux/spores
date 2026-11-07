@@ -1624,6 +1624,10 @@ dependencies = [
 [[package]]
 name = "spore-dragshift"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wit-bindgen",
+]
 
 [[package]]
 name = "spore-markdown"

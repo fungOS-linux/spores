@@ -1,0 +1,11 @@
+package fungos:dragshift@0.1.0;
+
+world dragshift {
+  import soil:canvas@1.0.0;
+
+  /// The state of the radial menu as JSON bytes. Canvas passes this to ui/radial.lua.
+  export snapshot: func() -> result<list<u8>, string>;
+
+  /// Apply a UI action. Returns a fresh snapshot.
+  export act: func(action: string) -> result<list<u8>, string>;
+}
