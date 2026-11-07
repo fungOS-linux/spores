@@ -21,6 +21,19 @@ local function sw(px) return 8 * px / W end
 local function sh(px) return 8 * px / H end
 local function ts(px) return px / ((base() or 16) * 1.25) end
 
+-- See docs/interaction-gap.md: `widget.hit` has no host, so calling it crashed
+-- the module in Canvas. Use it when present, otherwise keep the spec addressable.
+local pending_hits = {}
+local function hit(spec)
+  if type(widget) == "table" and type(widget.hit) == "function" then
+    widget.hit(spec)
+  else
+    pending_hits[#pending_hits + 1] = spec
+  end
+end
+M.pending_hits = pending_hits
+M.hit = hit
+
 local function rect(id, x, y, w, h, ink, opacity, radius)
   canvas.rect {
     id = id, ink = ink or "surface", opacity = opacity or 1.0,
@@ -173,7 +186,7 @@ function M.render(snapshot)
   for index = 1, math.min(#(snapshot.contacts or {}), 18) do
     local row = find(laid, "contact-" .. index)
     if row then
-      widget.hit {
+      hit {
         id = "contact-" .. index,
         label = "hit",
         x = nx(row.rect.x),

@@ -50,6 +50,22 @@ local function clip(value, limit)
   return value:sub(1, limit - 1) .. "…"
 end
 
+-- `widget.hit` has no host implementation: Canvas's `widget` is the theming
+-- library (pixel_space, button, panel, label, badge, metric) and Soil exposes no
+-- hit targets. Calling it crashed this module inside Canvas. Call it when a host
+-- provides it, otherwise record the spec so the row is still addressable by
+-- whatever consumes the scene. See docs/interaction-gap.md.
+local pending_hits = {}
+local function hit(spec)
+  if type(widget) == "table" and type(widget.hit) == "function" then
+    widget.hit(spec)
+  else
+    pending_hits[#pending_hits + 1] = spec
+  end
+end
+M.pending_hits = pending_hits
+M.hit = hit
+
 local function label(id, value, size, layout)
   layout = layout or {}
   return {
@@ -303,7 +319,7 @@ function M.render(snapshot)
     for index = 1, visible do
       local row = find(laid, "thread-" .. index)
       if row then
-        widget.hit { id = "thread-" .. index, label = "hit",
+        hit { id = "thread-" .. index, label = "hit",
           x = nx(row.rect.x), y = ny(row.rect.y), width = sw(row.rect.width), height = sh(row.rect.height) }
       end
     end

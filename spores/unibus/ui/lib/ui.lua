@@ -179,6 +179,18 @@ function ui.action(name, payload)
   return { action = name, payload = payload }
 end
 
+-- `widget.hit` has no host implementation; see docs/interaction-gap.md. Call it
+-- when a host provides it, otherwise keep the spec addressable rather than
+-- crashing the module inside Canvas, where `widget` is the theming library.
+ui.pending_hits = {}
+function ui.hit(spec)
+  if type(widget) == "table" and type(widget.hit) == "function" then
+    widget.hit(spec)
+  else
+    ui.pending_hits[#ui.pending_hits + 1] = spec
+  end
+end
+
 -- ---- measure ------------------------------------------------------------
 
 local function wrap(text, chars)
@@ -382,7 +394,7 @@ local function emit(n, theme, x, y, width, out)
     text_at(n.label, size, n.quiet and "muted" or "background", hpad)
     out[#out].translation[2] = y - vpad - text_h * 0.92
     if y - height >= -4.001 and y <= 4.001 and x >= -4.001 and x + width_est <= 4.001 then
-      widget.hit {
+      ui.hit {
         id = button_id .. "-hit",
         label = "hit",
         x = x,
@@ -418,7 +430,7 @@ local function emit(n, theme, x, y, width, out)
       emit(child, theme, x + pad, inner_y, width - pad * 2, out)
     end
     if n.hit and y - height >= -4.001 and y <= 4.001 and x - bleed >= -4.001 and x - bleed + width + bleed * 2 <= 4.001 then
-      widget.hit {
+      ui.hit {
         id = n.hit.id or string.format("hit%d", #out + 1),
         label = "hit",
         x = x - bleed,
