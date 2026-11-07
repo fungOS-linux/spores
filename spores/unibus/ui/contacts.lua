@@ -106,7 +106,7 @@ local function layout_tree(snapshot)
       layout = { height = row_h, padding = { top = 9, right = 10, bottom = 7, left = 10 } },
       children = {
         label("contact-" .. index .. "-name", contact.name, name),
-        label("contact-" .. index .. "-org", contact.org ~= "" and contact.org or (contact.title ~= "" and contact.title or "—"), small),
+        label("contact-" .. index .. "-org", (contact.org or "") ~= "" and contact.org or ((contact.title or "") ~= "" and contact.title or "—"), small),
       },
     }
   end
@@ -127,7 +127,7 @@ local function layout_tree(snapshot)
   if selected then
     detail_children[1] = label("contacts-detail-name", selected.name, math.max(24, b * 1.7), { height = 42 })
     local role = selected.org or ""
-    if selected.title ~= "" then role = role .. (role ~= "" and "  ·  " or "") .. selected.title end
+    if (selected.title or "") ~= "" then role = role .. (role ~= "" and "  ·  " or "") .. selected.title end
     detail_children[2] = label("contacts-detail-role", role ~= "" and role or "—", small, { height = 20 })
     detail_children[3] = { id = "contacts-detail-rule", kind = "rule", layout = { height = 1 } }
     detail_children[4] = label("contacts-detail-section", "CONTACT", small, { height = 22 })
@@ -139,8 +139,8 @@ local function layout_tree(snapshot)
     for _, value in ipairs(selected.emails or {}) do detail("EMAIL  ·  " .. value, "text") end
     for _, value in ipairs(selected.phones or {}) do detail("PHONE  ·  " .. value, "text") end
     for _, value in ipairs(selected.addresses or {}) do detail("ADDRESS  ·  " .. value, "text") end
-    if selected.birthday ~= "" then detail("BIRTHDAY  ·  " .. selected.birthday, "text") end
-    if selected.note ~= "" then
+    if (selected.birthday or "") ~= "" then detail("BIRTHDAY  ·  " .. selected.birthday, "text") end
+    if (selected.note or "") ~= "" then
       row = row + 1
       detail_children[row] = label("contacts-detail-note", selected.note, small, { height = 120 })
     end

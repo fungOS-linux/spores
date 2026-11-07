@@ -74,15 +74,47 @@ if not found:
 
 # The inbox is the live surface. The approval module remains installed for the
 # next action-routing milestone, but it is not placed over live mail by default.
-document["surfaces"] = [surface for surface in document.get("surfaces", []) if surface.get("id") == "md"]
-# Construct the placement rather than filtering existing ones: a document that
+# Contacts takes the second half of the frame rather than replacing the inbox:
+# both are the running dev surface, and neither is hidden behind a tab.
+document["surfaces"] = [
+    surface for surface in document.get("surfaces", [])
+    if surface.get("id") in ("md", "contacts")
+]
+if not any(surface.get("id") == "contacts" for surface in document["surfaces"]):
+    document["surfaces"].append({
+        "id": "contacts",
+        "title": "Contacts",
+        "content": {
+            "kind": "widget",
+            "spec": {
+                "schema_version": 2,
+                "id": "contacts",
+                "kind": "module",
+                "module": "spore-dev-contacts",
+                "inputs": {},
+                "theme": None,
+                "refresh_ms": None,
+                "chrome": "frameless",
+                "data": data,
+            },
+        },
+        "inputs": [],
+    })
+# Construct the placements rather than filtering existing ones: a document that
 # has no placed surface (or a layout of kind "empty") would otherwise produce
 # zero placements, which a canvas layout refuses.
-document.setdefault("layout", {})["placements"] = [{
-    "surface_id": "md",
-    "bounds": {"x": 0.03, "y": 0.04, "width": 0.94, "height": 0.92},
-    "layer": 0,
-}]
+document.setdefault("layout", {})["placements"] = [
+    {
+        "surface_id": "md",
+        "bounds": {"x": 0.03, "y": 0.04, "width": 0.58, "height": 0.92},
+        "layer": 0,
+    },
+    {
+        "surface_id": "contacts",
+        "bounds": {"x": 0.63, "y": 0.04, "width": 0.34, "height": 0.92},
+        "layer": 0,
+    },
+]
 # A live document can have layout.kind "empty" (for example when the stored
 # workspace failed to parse and Canvas started blank). Placements under that kind
 # are ignored, so the surface exists but renders nothing.
@@ -99,5 +131,8 @@ finally:
     os.unlink(path)
 PY
 
-printf 'workspace save spore-dev\n' | canvasctl
+# The workspace is named for its project: this document's project_id is "dock",
+# so saving as "spore-dev" is rejected. The document is already applied live, so
+# a save that cannot be named is not worth failing the install over.
+printf 'workspace save dock\n' | canvasctl || echo "workspace not saved (name must match project_id)" >&2
 echo "installed $MODULES/spore-dev-inbox.{json,lua} and spore-dev-approval2.{json,lua}"
