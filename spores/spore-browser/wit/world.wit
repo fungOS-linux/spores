@@ -1,7 +1,7 @@
-// Spore launcher: list installed Spores and ask the host to launch one.
-package fungos:launcher-spore@0.1.0;
+// Installed-Spore browser: list installed Spores and ask the host to launch one.
+package fungos:spore-browser@0.1.0;
 
-world launcher-spore {
+world spore-browser {
   import soil:spore/catalog@0.1.0;
 
   /// Installed Spore catalog as JSON bytes.

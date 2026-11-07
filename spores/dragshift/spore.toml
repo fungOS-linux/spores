@@ -1,0 +1,54 @@
+# DragShift as a Spore. See docs/dragshift.md.
+#
+# A grant is a statement of intent reviewed with the pull request, not a
+# capability the Spore can widen at runtime.
+
+schema = 1
+
+[spore]
+id = "dev.fungos.dragshift"
+name = "dragshift"
+version = "0.1.0"
+license = "MIT"
+summary = "Convert and edit a dropped file from a radial menu"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { canvas = "1.0.0", "vfs" = "1.0.0", "vfs-mut" = "0.1.0" }
+
+[module]
+# Produced by the Soil guest build. Not built yet: this pass lands the operation
+# model and its tests, and `soil-spore check` will refuse the package until the
+# wasm is checked in beside this manifest.
+path = "module.wasm"
+
+[ui]
+# Not written yet. The ring is the whole identity of this Spore and `fungos.ui`
+# has no radial or mesh node, so the view waits on a primitive rather than
+# shipping a list that pretends to be a menu. See docs/dragshift.md.
+entry = "ui/radial.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+surfaces = ["canvas", "native"]
+
+[grants]
+"soil:canvas" = "present the radial menu and the tool surfaces"
+"soil:vfs" = "read the dropped source by workspace path"
+"soil:vfs-mut" = "write the result beside it"
+"soil:notify" = "report what changed and offer Undo"
+"soil:appdata" = "settings and undo receipts"
+"soil:time" = "progress animation"
+
+[denied]
+# Stated explicitly so a reviewer sees intent, not merely absence.
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+
+[presentation]
+badge = "D"
+color = "#7ad0c8"

@@ -137,6 +137,24 @@ function ui.row(props) return node("row", props or {}) end
 function ui.card(props) return node("card", props or {}) end
 function ui.stack(props) return node("stack", props or {}) end
 
+-- A ring of slices.
+--
+-- `slices` is a list of `{ id, label, available, body }`. The ring has no
+-- polygon primitive to draw with, so each slice is a short run of rotated rects
+-- laid along its arc: Canvas takes a real quaternion per node, so this is
+-- geometry rather than a picture of geometry, and a slice can be hovered and
+-- pressed like any other control.
+--
+-- `diameter` is in pixels. `inner` is the fraction of the radius that is hole
+-- (0.46 is a ring; 0 is a pie). `selected` is a 1-based index. `segments` trades
+-- nodes for smoothness; every slice costs `segments + 1` nodes plus one hit
+-- region, and Canvas bounds a scene at 1024.
+function ui.radial(slices, props)
+  props = props or {}
+  props.slices = slices or {}
+  return node("radial", props)
+end
+
 function ui.text(value, props)
   props = props or {}
   props.value = value
@@ -270,6 +288,14 @@ local function place(prims, dx, dy)
   return prims
 end
 
+-- A rotation about Z, as the quaternion Canvas takes (xyzw). Only Z is offered:
+-- a scene node tilted out of the surface plane is a 3D transform this library
+-- has no vocabulary for, and silently accepting a table would hide that.
+local function quat_z(angle)
+  local half = angle * 0.5
+  return { 0, 0, math.sin(half), math.cos(half) }
+end
+
 -- ---- layout -------------------------------------------------------------
 --
 -- One pass, bottom-up. `lay` returns `{ h, p }`: the height this node consumes
@@ -341,6 +367,99 @@ local function lay_children(n, S, width)
   return heights, parts, used
 end
 
+-- A ring of slices, laid out in one pass like anything else.
+--
+-- One radius for both axes, deliberately: a rotated rect only stays a rect in a
+-- square frame, so sizing the ring by the smaller axis keeps it circular in
+-- pixels instead of letting the surface's aspect ratio shear every slice.
+local function lay_radial(n, S)
+  local theme = S.theme
+  local slices = n.slices or {}
+  local count = #slices
+  local diameter = n.diameter or theme.body * 46
+  local radius = math.min(wx(S, diameter * 0.5), hy(S, diameter * 0.5))
+  local inner = math.max(0, math.min(0.85, n.inner or 0.46))
+  local band = radius * (1 - inner)
+  local middle_radius = radius * (1 + inner) * 0.5
+  local height = radius * 2 + band
+  local cx, cy = radius, -(radius + band * 0.5)
+  if count == 0 then
+    return { h = height, p = {} }
+  end
+
+  local step = (n.sweep or (math.pi * 2)) / count
+  local segments = math.max(1, math.min(12, n.segments or 6))
+  local sub = step / segments
+  -- Slight overlap so neighbouring segments meet at the seam rather than
+  -- leaving a hairline the eye reads as a gap between slices.
+  local segment_length = middle_radius * sub * 1.35
+  local prims = {}
+
+  for index, slice in ipairs(slices) do
+    local start = -math.pi / 2 + (index - 1) * step
+    local middle = start + step * 0.5
+    local available = slice.available ~= false
+    local selected = n.selected == index
+    local ink = selected and "primary" or "surface"
+    local opacity
+    if not available then
+      opacity = 0.18
+    else
+      opacity = selected and 0.95 or 0.72
+    end
+
+    for segment = 1, segments do
+      local angle = start + (segment - 0.5) * sub
+      prims[#prims + 1] = {
+        ink = ink, opacity = opacity, radius = 0,
+        translation = {
+          cx + math.cos(angle) * middle_radius,
+          cy + math.sin(angle) * middle_radius,
+          -0.5,
+        },
+        scale = { segment_length, band, 1 },
+        rotation = quat_z(angle + math.pi / 2),
+      }
+    end
+
+    local size = selected and theme.small or theme.micro
+    local label = tostring(slice.label or "")
+    local label_ink = "text"
+    if not available then
+      label_ink = "muted"
+    elseif selected then
+      label_ink = "background"
+    end
+    prims[#prims + 1] = text_prim(
+      label, size, S, label_ink,
+      cx + math.cos(middle) * middle_radius - estimate_width(label, size, S) * 0.5
+        + wx(S, size * 0.35),
+      cy + math.sin(middle) * middle_radius - hy(S, size * 0.35)
+    )
+
+    if n.action and widget and widget.button then
+      prims[#prims + 1] = {
+        button = {
+          id = slice.id,
+          label = label,
+          action = n.action,
+          body = slice.body or { id = slice.id, value = slice.id },
+          enabled = available,
+          appearance = "invisible",
+        },
+        translation = {
+          cx + math.cos(middle) * middle_radius - segment_length * 0.5,
+          cy + math.sin(middle) * middle_radius + band * 0.5,
+          0,
+        },
+        scale = { segment_length, band, 1 },
+      }
+    end
+  end
+
+  return { h = height, p = prims }
+end
+
 -- The invariant that would have caught the toolbar bug: a node's primitives must
 -- stay inside the box it claimed. Checked only when `ui.debug` is set, because
 -- the message costs bytes in every module that never trips it.
@@ -379,6 +498,9 @@ lay_node = function(n, S, width)
 
   if kind == "text" then
     return lay_text(n, S, width)
+
+  elseif kind == "radial" then
+    return lay_radial(n, S)
 
   elseif kind == "rule" then
     return { h = hy(S, 10), p = { rect_prim("muted", 0.26, 0, 0, hy(S, 4), width, hy(S, 1)) } }
@@ -669,7 +791,8 @@ function ui.render(tree, theme)
       -- already registered above
     elseif prim.opacity ~= nil then
       canvas.rect({ id = id, ink = prim.ink, opacity = prim.opacity, radius = prim.radius,
-                    translation = prim.translation, scale = prim.scale })
+                    translation = prim.translation, scale = prim.scale,
+                    rotation = prim.rotation })
     else
       canvas.text({ id = id, text = prim.text, ink = prim.ink,
                     translation = prim.translation, scale = prim.scale })

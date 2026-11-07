@@ -1,7 +1,7 @@
 [workspace]
 # spores/contacts is its own workspace root (it pins wit-bindgen separately and
 # builds to its own target dir), so it is deliberately absent from this list.
-members = ["spores/markdown", "spores/unibus", "spores/launcher", "spores/terminal-core", "spores/terminal", "spores/terminal-host", "spores/launcher-host"]
+members = ["spores/dragshift", "spores/markdown", "spores/unibus", "spores/spore-browser", "spores/terminal-core", "spores/terminal", "spores/terminal-host", "spores/spore-browser-host"]
 resolver = "3"
 
 [workspace.package]

@@ -944,16 +944,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "launcher-host"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "soil-spore-host",
- "wasmtime",
- "wasmtime-wasi",
-]
-
-[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1614,12 +1604,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "spore-launcher"
+name = "spore-browser"
 version = "0.1.0"
 dependencies = [
  "serde_json",
  "wit-bindgen",
 ]
+
+[[package]]
+name = "spore-browser-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "soil-spore-host",
+ "wasmtime",
+ "wasmtime-wasi",
+]
+
+[[package]]
+name = "spore-dragshift"
+version = "0.1.0"
 
 [[package]]
 name = "spore-markdown"

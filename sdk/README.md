@@ -16,9 +16,9 @@ so with a version, not with a divergent copy.
 
 ## What lives here
 
-- `ui.lua` — the library: `column`, `row`, `card`, `stack`, `text`, `rule`,
-  `code`, `diagram`, `bullets`, `quote`, `bar`, `fill`, `button`, `kbd`, `icon`,
-  `icon_button`, plus the layout pass (`lay`) and the token helpers.
+- `ui.lua` — the library: `column`, `row`, `card`, `stack`, `radial`, `text`,
+  `rule`, `code`, `diagram`, `bullets`, `quote`, `bar`, `fill`, `button`, `kbd`,
+  `icon`, `icon_button`, plus the layout pass (`lay`) and the token helpers.
 - `package.toml` — name, version, entry.
 
 ## Rules the library enforces

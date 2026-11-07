@@ -1,4 +1,4 @@
-//! Wasmtime host for the installed Spore launcher.
+//! Wasmtime host for the installed-Spore browser.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -9,7 +9,7 @@ use wasmtime::component::HasSelf;
 use wasmtime::{Engine, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
-wasmtime::component::bindgen!({ path: "wit", world: "launcher-spore" });
+wasmtime::component::bindgen!({ path: "wit", world: "spore-browser" });
 
 struct State {
     catalog: SporeCatalog,
@@ -148,8 +148,8 @@ fn main() -> Result<()> {
         root = args.next().ok_or_else(|| anyhow!("--root needs a path"))?;
     }
     let command = args.next().unwrap_or_else(|| "list".into());
-    let module =
-        std::env::var("LAUNCHER_SPORE").unwrap_or_else(|_| "spores/launcher/module.wasm".into());
+    let module = std::env::var("SPORE_BROWSER")
+        .unwrap_or_else(|_| "spores/spore-browser/module.wasm".into());
 
     let catalog = SporeCatalog::scan(&root).context("scan Spore catalog")?;
     let engine = Engine::default();
@@ -172,7 +172,7 @@ fn main() -> Result<()> {
             table: ResourceTable::new(),
         },
     );
-    let bindings = LauncherSpore::instantiate(&mut store, &component, &linker)
+    let bindings = SporeBrowser::instantiate(&mut store, &component, &linker)
         .map_err(anyhow::Error::from)
         .context("instantiate launcher Spore")?;
     match command.as_str() {

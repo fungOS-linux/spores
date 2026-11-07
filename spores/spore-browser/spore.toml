@@ -1,9 +1,9 @@
-# Installed Spore launcher. The host owns discovery and execution.
+# Installed-Spore browser. The host owns discovery and execution.
 schema = 1
 
 [spore]
-id = "dev.fungos.launcher"
-name = "launcher"
+id = "dev.fungos.spore-browser"
+name = "spore-browser"
 version = "0.1.0"
 license = "MIT"
 summary = "Browse installed Spores and launch one bounded surface"
@@ -18,7 +18,7 @@ abi = { spore = "0.1.0", canvas = "1.0.0" }
 path = "module.wasm"
 
 [ui]
-entry = "ui/launcher.lua"
+entry = "ui/browser.lua"
 jit = true
 hot_reload = true
 
@@ -29,7 +29,7 @@ surfaces = ["canvas", "web", "native"]
 [grants]
 "soil:spore.catalog" = "list installed Spore packages"
 "soil:spore.launch" = "launch a declared Spore surface"
-"soil:canvas" = "present the launcher"
+"soil:canvas" = "present the browser"
 
 [denied]
 transport = ["socket", "quic", "iroh"]

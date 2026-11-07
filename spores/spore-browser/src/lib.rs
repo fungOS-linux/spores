@@ -1,8 +1,8 @@
-//! Installed Spore launcher.
+//! Installed-Spore browser.
 
 use serde_json::json;
 
-wit_bindgen::generate!({ path: "wit", world: "launcher-spore", generate_all });
+wit_bindgen::generate!({ path: "wit", world: "spore-browser", generate_all });
 
 use soil::spore::catalog;
 

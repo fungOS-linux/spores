@@ -1,6 +1,6 @@
 [package]
-name = "spore-launcher"
-description = "Installed Spore launcher"
+name = "spore-browser"
+description = "Installed-Spore browser"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

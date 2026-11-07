@@ -45,16 +45,23 @@ storage boundary is already the real one.
 ## Spores here
 
 ```text
-spores/markdown        Markdown reader/editor
-spores/unibus          mail/chat inbox UI
-spores/terminal        terminal Spore
-spores/crm             CRM Spore over namespaced records
-spores/contacts        personal contacts + explicit CRM projections
-spores/notify          notification tray and ringer
-spores/consent         system consent popup
-spores/mush            sandboxed VFS shell
-spores/media-probe     soil:media fixture
-spores/surface-probe   soil:surface-import fixture
+spores/chrome              shell regions: top bar, dock, launcher, switcher, control center, window
+spores/spore-browser       installed-Spore browser, launched through soil:spore
+spores/spore-browser-host  wasmtime host for the browser Spore
+spores/dragshift           convert and edit a dropped file from a radial menu
+spores/markdown            Markdown reader/editor
+spores/unibus              mail/chat inbox UI
+spores/terminal            terminal Spore
+spores/terminal-core       terminal semantics shared by the tmux and host front ends
+spores/terminal-host       native terminal host
+spores/crm                 CRM Spore over namespaced records
+spores/contacts            personal contacts + explicit CRM projections
+spores/notify              notification tray and ringer
+spores/consent             system consent popup
+spores/dfm-report          DFM report renderer
+spores/mush                sandboxed VFS shell
+spores/media-probe         soil:media fixture
+spores/surface-probe       soil:surface-import fixture
 ```
 
 ## Layout
