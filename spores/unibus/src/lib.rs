@@ -34,6 +34,45 @@ impl Guest for Component {
     fn snapshot() -> Result<Vec<u8>, String> {
         Ok(snapshot_json()?.into_bytes())
     }
+
+    fn act(action: String) -> Result<Vec<u8>, String> {
+        let value: Value =
+            serde_json::from_str(&action).map_err(|error| format!("action JSON: {error}"))?;
+        let verb = value["verb"].as_str().unwrap_or("");
+        let target = value["target"].as_str().unwrap_or("");
+        if verb.is_empty() || target.is_empty() {
+            return Err("action needs verb and target".into());
+        }
+        let status = match verb {
+            "read" => Some("seen"),
+            "unread" => Some("new"),
+            "archive" => Some("archived"),
+            _ => None,
+        };
+        for entry in scan("conversation") {
+            let Ok(mut record) = serde_json::from_slice::<Value>(&entry.body) else {
+                continue;
+            };
+            let id = record["id"].as_str().unwrap_or("").to_string();
+            if id != target && !id.ends_with(&format!("/{target}")) {
+                continue;
+            }
+            if let Some(status) = status {
+                record["status"] = json!(status);
+            } else if verb == "tag" {
+                let tag = value["tag"].as_str().unwrap_or("");
+                if !tag.is_empty() {
+                    let mut labels = record["labels"].as_array().cloned().unwrap_or_default();
+                    if !labels.iter().any(|item| item.as_str() == Some(tag)) {
+                        labels.push(json!(tag));
+                    }
+                    record["labels"] = Value::Array(labels);
+                }
+            }
+            upsert("conversation", &id, "conversation.v1", &record)?;
+        }
+        Ok(snapshot_json()?.into_bytes())
+    }
 }
 
 fn seed(args: &[String]) -> Result<(), String> {

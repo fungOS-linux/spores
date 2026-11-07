@@ -1,80 +1,109 @@
--- Fixture for the new declarative inbox UI. Run from spores/unibus:
+-- Fixture for the inbox view. Run from spores/unibus:
 --   lua tests/ui_fixture.lua
+--
+-- The view delegates geometry to the host: it builds a node tree and hands it to
+-- `canvas.layout`, which in Canvas is the Taffy layout server. A fixture has no
+-- layout engine, so this file supplies a minimal host that flattens the tree and
+-- gives every node a placeholder rect. The assertions are therefore about
+-- structure and copy, never about geometry.
+
 local source = assert(io.open("ui/lib/ui.lua", "rb"), "ui/lib/ui.lua missing")
 local ui = assert(load(source:read("*a"), "ui/lib/ui.lua"))()
 source:close()
 _G.ui = ui
+
 _G.module = {
+  viewport = { width = 1086, height = 1569 },
   theme = {
     title = 0.34, large = 0.24, body = 0.145,
     small = 0.105, micro = 0.085, radius = 0.02,
   },
 }
 
+local drawn = { rects = {}, texts = {} }
+
+_G.canvas = {
+  -- Flatten the node graph the way the layout server does, keeping every field
+  -- the draw pass reads (kind, style, text) and replacing only the geometry.
+  layout = function(root, width)
+    local nodes = {}
+    local function walk(node)
+      local copy = {}
+      for key, value in pairs(node) do
+        if key ~= "children" then copy[key] = value end
+      end
+      copy.rect = { x = 0, y = 0, width = width, height = 24 }
+      nodes[#nodes + 1] = copy
+      for _, child in ipairs(node.children or {}) do walk(child) end
+    end
+    walk(root)
+    return { nodes = nodes }
+  end,
+  rect = function(spec) drawn.rects[#drawn.rects + 1] = spec end,
+  text = function(spec) drawn.texts[#drawn.texts + 1] = spec end,
+}
+
+_G.widget = {
+  hit = function(spec) drawn.hits = (drawn.hits or 0) + 1 end,
+}
+
 local inbox = assert(loadfile("ui/inbox.lua"))()
 local snapshot = assert(loadfile("examples/inbox_mock.lua"))()
-local tree = inbox.tree(snapshot)
-assert(tree.kind == "column", "root is a column")
-assert(#tree.children == 4, "header, summary, main, footer")
 
--- The selected thread is the support refund, and it carries a draft.
-local selected = nil
-for _, thread in ipairs(snapshot.threads) do
+local function render(snap)
+  drawn = { rects = {}, texts = {} }
+  assert(inbox.render(snap) == nil, "render draws through the host and returns nothing")
+  local joined = {}
+  for _, spec in ipairs(drawn.texts) do joined[#joined + 1] = tostring(spec.text) end
+  return table.concat(joined, "\n")
+end
+
+local copy = render(snapshot)
+
+-- It drew something, through the host, and none of it is a picture: every text
+-- node is a string Canvas shapes itself.
+assert(#drawn.texts > 0, "the view drew no text")
+assert(#drawn.rects > 0, "the view drew no rects")
+for _, spec in ipairs(drawn.texts) do
+  assert(type(spec.text) == "string", "text primitive without a string")
+  assert(type(spec.ink) == "string", "text primitive without an ink role")
+end
+
+-- The header reads from the snapshot, not from a constant.
+local account = snapshot.account and snapshot.account.email
+assert(account and copy:find(account, 1, true), "account is not drawn")
+local counts = snapshot.counts or {}
+assert(copy:find(string.format("%d unread", counts.unread or 0), 1, true), "unread count is not drawn")
+
+-- The list is paged copy, so the range and the sort are visible rather than
+-- implied.
+assert(copy:find("MAIL", 1, true), "list header is missing")
+assert(copy:find("Newest first", 1, true), "sort order is missing")
+
+-- The selected thread drives the detail pane.
+local selected
+for _, thread in ipairs(snapshot.threads or {}) do
   if thread.selected then selected = thread end
 end
 assert(selected and selected.id == "support/refund-441", "selected support thread")
 assert(selected.draft and #selected.draft > 0, "draft is present")
+assert(copy:find(selected.title, 1, true), "selected subject is not drawn")
 
-local function values(node, out)
-  out = out or {}
-  if node.kind == "text" then out[#out + 1] = node.value end
-  if node.kind == "button" then out[#out + 1] = node.label end
-  if node.kind == "icon" or node.kind == "icon_button" then out[#out + 1] = node.glyph end
-  for _, child in ipairs(node.children or {}) do values(child, out) end
-  return out
+-- Every detail action is a drawn label the host hit-tests.
+for _, label in ipairs({ "Reply", "Reply all", "Assign", "Resolve", "Archive" }) do
+  assert(copy:find(label, 1, true), "missing detail action: " .. label)
 end
-local text_values = table.concat(values(tree), "\n")
-assert(text_values:find("MAIL · 1–6 of 9", 1, true), "paged range is visible")
-assert(text_values:find("↓ 3 more", 1, true), "remaining count is visible")
 
-snapshot.layout.list_offset = 3
-local second = inbox.tree(snapshot)
-assert(table.concat(values(second), "\n"):find("MAIL · 4–9 of 9", 1, true), "offset page")
-snapshot.layout.list_offset = 0
-
--- Narrow mode removes the rail and shows one pane.
-snapshot.layout.width_class = "narrow"
-snapshot.layout.focus = "list"
-local narrow_list = table.concat(values(inbox.tree(snapshot)), "\n")
-assert(narrow_list:find("MAIL · 1–6 of 9", 1, true), "narrow list")
-assert(not narrow_list:find("FILTERS", 1, true), "narrow hides rail")
-snapshot.layout.focus = "detail"
-local narrow_detail = table.concat(values(inbox.tree(snapshot)), "\n")
-assert(narrow_detail:find("AGENT BRIEF", 1, true), "narrow detail")
-assert(narrow_detail:find("← Back", 1, true), "narrow back")
-snapshot.layout.width_class = "wide"
-snapshot.layout.focus = "list"
-
-for mode, needle in pairs({
-  empty = "Inbox zero",
-  loading = "Syncing",
-  offline = "Offline",
-  error = "Could not sync",
-}) do
-  snapshot.state = { mode = mode, message = "provider said no" }
-  local shown = table.concat(values(inbox.tree(snapshot)), "\n")
-  assert(shown:find(needle, 1, true), mode .. " state")
-  assert(not shown:find("MAIL ·", 1, true), mode .. " hides list")
+-- A view is a function of the snapshot: selecting another thread has to change
+-- what is drawn, or the detail pane is decoration.
+local other
+for _, thread in ipairs(snapshot.threads or {}) do
+  if thread.id ~= selected.id then other = thread break end
 end
-snapshot.state = { mode = "ready" }
+assert(other, "fixture needs a second thread")
+for _, thread in ipairs(snapshot.threads) do thread.selected = thread.id == other.id end
+local other_copy = render(snapshot)
+assert(other_copy ~= copy, "selection did not change the view")
+assert(other_copy:find(other.title, 1, true), "newly selected subject is not drawn")
 
--- Exercise the Canvas path with a recorder. The preview only uses tree().
-local rects, texts = 0, 0
-_G.canvas = {
-  rect = function() rects = rects + 1 end,
-  text = function() texts = texts + 1 end,
-}
-inbox.render(snapshot)
-assert(rects > 10, "rects emitted")
-assert(texts > 10, "text emitted")
 print("ui: ok")

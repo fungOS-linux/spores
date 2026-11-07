@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "id": "control-center-v1",
+  "title": "Control center",
+  "inputs": [
+    {
+      "id": "width",
+      "kind": "number",
+      "required": false
+    },
+    {
+      "id": "height",
+      "kind": "number",
+      "required": false
+    },
+    {
+      "id": "clock",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "date",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "workspace",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "surfaces",
+      "kind": "number",
+      "required": false
+    },
+    {
+      "id": "focused",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "battery",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "sources",
+      "kind": "number",
+      "required": false
+    },
+    {
+      "id": "window0",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "window1",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "window2",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "window3",
+      "kind": "text",
+      "required": false
+    },
+    {
+      "id": "window4",
+      "kind": "text",
+      "required": false
+    }
+  ],
+  "capabilities": {
+    "write_scene": true,
+    "read_inputs": [
+      "width",
+      "height",
+      "clock",
+      "date",
+      "workspace",
+      "surfaces",
+      "focused",
+      "battery",
+      "sources",
+      "window0",
+      "window1",
+      "window2",
+      "window3",
+      "window4"
+    ],
+    "read_theme": true
+  },
+  "actions": [
+    {
+      "id": "launcher",
+      "destination": "canvas.shell",
+      "kind": "select"
+    },
+    {
+      "id": "dismiss",
+      "destination": "canvas.shell",
+      "kind": "select"
+    },
+    {
+      "id": "apps",
+      "destination": "canvas.shell",
+      "kind": "select"
+    },
+    {
+      "id": "projects",
+      "destination": "canvas.shell",
+      "kind": "select"
+    }
+  ]
+}

@@ -10,4 +10,7 @@ world unibus-spore {
 
   /// Return the UI snapshot as JSON bytes. Canvas passes this to ui/inbox.lua.
   export snapshot: func() -> result<list<u8>, string>;
+
+  /// Apply a UI action: read, unread, archive, or tag. Returns a fresh snapshot.
+  export act: func(action: string) -> result<list<u8>, string>;
 }

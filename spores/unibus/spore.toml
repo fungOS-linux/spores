@@ -24,6 +24,9 @@ hot_reload = true
 
 [launch]
 default = "canvas"
+# The composed Lua UI Canvas launches for this app. Composition writes it into
+# the runtime modules directory; the launcher opens it as a window.
+canvas_module = "spore-dev-inbox"
 surfaces = ["web", "native", "canvas"]
 
 [grants]
@@ -37,3 +40,46 @@ surfaces = ["web", "native", "canvas"]
 # Sending is a separate future grant; this Spore is read-only.
 transport = ["socket", "quic", "iroh"]
 host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+
+[[actions]]
+id = "mail.read"
+title = "Mark read"
+input = "mail/thread-ref@1"
+requires = ["soil:records.write"]
+callers = ["human", "agent"]
+expose = ["ui", "socket", "mcp", "dcp"]
+idempotent = true
+
+[[actions]]
+id = "mail.unread"
+title = "Mark unread"
+input = "mail/thread-ref@1"
+requires = ["soil:records.write"]
+callers = ["human", "agent"]
+expose = ["ui", "socket", "mcp", "dcp"]
+idempotent = true
+
+[[actions]]
+id = "mail.archive"
+title = "Archive"
+input = "mail/thread-ref@1"
+requires = ["soil:records.write"]
+callers = ["human", "agent"]
+expose = ["ui", "socket", "mcp", "dcp"]
+idempotent = true
+
+[[actions]]
+id = "mail.tag"
+title = "Tag thread"
+input = "mail/tag@1"
+requires = ["soil:records.write"]
+callers = ["human", "agent"]
+expose = ["ui", "socket", "mcp", "dcp"]
+idempotent = true
+
+[presentation]
+# A launcher row needs to be recognisable without reading it. A monogram is a
+# character, not an asset: it cannot go missing on someone else's machine, and it
+# reads at the size a launcher actually draws.
+badge = "I"
+color = "#6ea8fe"

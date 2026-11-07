@@ -38,6 +38,18 @@ The old node-tree preview remains at `tools/preview.lua` for the legacy view.
 The new UI is `ui/inbox.lua` + `ui/lib/ui.lua`; the feature plan is
 [`docs/inbox-ui-plan.md`](docs/inbox-ui-plan.md).
 
+Run it in the current Canvas `spore-dev` workspace:
+
+```sh
+./tools/install_spore_dev_inbox.sh
+```
+
+The installer composes `spore-dev-inbox.{json,lua}` into the Canvas runtime
+(under 32 KiB) and points the workspace surface at it. `spore-dev.lua` stays
+owned by the markdown composer, so the two views do not overwrite each other.
+Layout state supports `layout.rail_collapsed` and `layout.detail_collapsed`;
+the header column/document affordances are the controls. Press routing is M2.
+
 Preview with a real AgentMail inbox:
 
 ```sh

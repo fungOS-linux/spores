@@ -1,0 +1,54 @@
+# Shell chrome as a Spore. See fungOS-linux/soil docs/spore-package.md.
+#
+# Chrome is a region, not a window: the host keeps the extent, the input routing
+# and the fallback, and this package owns the composition. Every region it claims
+# has a built-in implementation, so removing this package restores the default
+# shell instead of leaving a hole in the desktop.
+schema = 1
+
+[spore]
+id = "dev.fungos.chrome"
+name = "chrome"
+version = "0.1.0"
+license = "MIT"
+summary = "Top bar, dock, launcher and switcher for the Canvas shell"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { canvas = "1.0.0" }
+
+# No module: this Spore is a composition, not a program. Its behaviour is the
+# host's -- what it owns is what the shell looks like.
+# The host-composed entry, kept so the package is a Spore like any other.
+[ui]
+entry = "ui/top-bar.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+surfaces = ["canvas"]
+
+[grants]
+"soil:canvas" = "present shell regions"
+
+[chrome]
+regions = ["top-bar", "dock", "launcher", "switcher", "control-center", "window"]
+
+[chrome.sources]
+top-bar = "ui/top-bar.lua"
+dock = "ui/dock.lua"
+launcher = "ui/launcher.lua"
+switcher = "ui/switcher.lua"
+control-center = "ui/control-center-v1.lua"
+window = "ui/window.lua"
+
+[presentation]
+badge = "C"
+color = "#8b9dff"
+
+[denied]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]

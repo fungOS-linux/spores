@@ -91,7 +91,7 @@ fn ui_parses_and_renders_a_fixture() {
 #[test]
 fn changing_the_ui_changes_only_its_digest() {
     let original = spore_markdown::Ui::source();
-    let restyled = original.replace("heading = \"primary\"", "heading = \"accent\"");
+    let restyled = original.replace("ink = \"primary\"", "ink = \"accent\"");
     assert_ne!(restyled, original, "fixture must actually change");
     assert_ne!(
         spore_markdown::ui::digest(&restyled),

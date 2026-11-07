@@ -6,6 +6,7 @@
 return {
   revision = 42,
   title = "Inbox",
+  search = "",
   sort = "Newest first",
   account = {
     email = "ajmwagar-agents@agentmail.to",
@@ -17,10 +18,12 @@ return {
   selected_id = "support/refund-441",
   layout = {
     list_offset = 0,
-    list_limit = 6,
+    list_limit = 50,
     cursor_id = "github/mycelium/ci-11793527317",
     focus = "list",
     width_class = "wide",
+    rail_collapsed = true,
+    detail_collapsed = false,
   },
   filters = {
     { id = "all", label = "All mail", count = 24 },
@@ -81,13 +84,8 @@ return {
           time = "09:29",
           preview = "Thanks Maya — I can see both charges and I’m confirming the duplicate now. I’ll refund it today and send the reference.",
         },
-        {
-          from = "Maya Chen <maya@example.com>",
-          time = "09:33",
-          preview = "Thank you. Please keep the annual plan active — I only want the duplicate reversed.",
-        },
       },
-      draft = "Hi Maya — the duplicate $240 charge is refunded (ref rf_441_2). Your annual plan remains active through next year. I’ve also added a one-month credit for the trouble.",
+      draft = "Hi Maya — the duplicate $240 charge is refunded (ref rf_441_2). Your annual plan stays active; I added a one-month credit.",
     },
     {
       id = "support/login-882",
@@ -220,26 +218,6 @@ return {
         },
       },
     },
-    {
-      id = "email/welcome",
-      collection = "email.message",
-      kind = "mail",
-      title = "Welcome to AgentMail",
-      sender = "AgentMail",
-      preview = "Your inbox is ready. Reply to this message to send mail.",
-      time = "Oct 22",
-      unread = false,
-      urgent = false,
-      status = "done",
-      labels = { "agentmail" },
-      brief = "Onboarding message. No action.",
-      messages = {
-        {
-          from = "AgentMail <hello@agentmail.to>",
-          time = "Oct 22",
-          preview = "You created ajmwagar-agents@agentmail.to a second ago and it’s already receiving mail.",
-        },
-      },
-    },
+
   },
 }
