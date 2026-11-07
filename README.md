@@ -42,6 +42,21 @@ Spores never see paths. A document is an opaque `DocId` resolved through
 compiled against a `Vfs` trait with an in-memory implementation, so the
 storage boundary is already the real one.
 
+## Spores here
+
+```text
+spores/markdown        Markdown reader/editor
+spores/unibus          mail/chat inbox UI
+spores/terminal        terminal Spore
+spores/crm             CRM Spore over namespaced records
+spores/contacts        personal contacts + explicit CRM projections
+spores/notify          notification tray and ringer
+spores/consent         system consent popup
+spores/mush            sandboxed VFS shell
+spores/media-probe     soil:media fixture
+spores/surface-probe   soil:surface-import fixture
+```
+
 ## Layout
 
 ```text
