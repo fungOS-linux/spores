@@ -253,16 +253,29 @@ local function layout_assign(node, x, y, width, height, out)
   local total = direction == "row" and content_w or content_h
   local gaps = gap * math.max(0, count - 1)
 
+  -- A flex child must stay flex. Resolving it to its content height first would
+  -- pin a sender at fourteen pixels and push the timestamp over it, which is
+  -- what the interface actually draws if the grow is ignored.
   local sizes, fixed, flex_total = {}, 0, 0
   for index, child in ipairs(children) do
-    local size = layout_fixed(child, direction) or layout_default(child)
+    local size = layout_fixed(child, direction)
     if size ~= nil then
       sizes[index] = size
       fixed = fixed + size
     else
-      sizes[index] = false
       local grow = child.layout and child.layout.flex_grow or 0
-      if type(grow) == "number" and grow > 0 then flex_total = flex_total + grow end
+      if type(grow) == "number" and grow > 0 then
+        sizes[index] = false
+        flex_total = flex_total + grow
+      else
+        local fallback = layout_default(child)
+        if fallback ~= nil then
+          sizes[index] = fallback
+          fixed = fixed + fallback
+        else
+          sizes[index] = false
+        end
+      end
     end
   end
 
