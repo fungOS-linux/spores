@@ -1,0 +1,19 @@
+[package]
+name = "dfm-report-guest"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone on purpose: a Spore module is built against its own dependency set,
+# not the host workspace next door.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wgpu = { version = "29", default-features = false, features = ["wgsl"] }
+wgpu-wasi-webgpu = { git = "https://github.com/fungOS-linux/wgpu-wasi-webgpu", rev = "88938bb" }
+wit-bindgen = "0.57"
+serde_json = "1"
+bytemuck = { version = "1", features = ["derive"] }

@@ -1,0 +1,37 @@
+schema = 1
+
+[spore]
+id = "dev.fungos.dfm"
+name = "dfm-report"
+version = "0.2.0"
+license = "Apache-2.0 OR MIT"
+summary = "DFM findings for a model, with the flagged geometry rendered in the Spore itself"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { webgpu = "0.3.0-rc.2", canvas-gpu = "0.1.0" }
+
+[module]
+path = "module.wasm"
+
+[ui]
+entry = "ui/report.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+surfaces = ["canvas", "native", "web"]
+
+[assets]
+scene = { path = "model/data.json", media_type = "application/json" }
+
+[grants]
+"wasi:webgpu" = "render the model into one Canvas-owned frame"
+"soil:canvas-gpu" = "hand that frame to Canvas, which owns the window"
+"soil:vfs" = "read the bundled DFM scene the renderer draws"
+
+[denied]
+"soil:http" = ["findings are host-supplied; the Spore has no network path"]
+"wasi:filesystem" = ["the host owns the workspace root"]

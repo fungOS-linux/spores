@@ -1,0 +1,10 @@
+// The DFM 3D view as a Spore guest: standard wasi:webgpu, presented to Canvas.
+// No window, no swapchain, no native handle — only a texture and a frame.
+package fungos:dfm-3d@0.1.0;
+
+world runner {
+  include wasi:webgpu/imports@0.3.0-rc.2;
+  import soil:canvas-gpu/surface@0.1.0;
+
+  export run: async func() -> u32;
+}
