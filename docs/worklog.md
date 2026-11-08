@@ -175,6 +175,36 @@ event, keyed by `id`, in collection `worklog.event`, with the event as the body.
 When records exist, the file is imported and the file format disappears; the
 schema does not change.
 
+## Transport is Unibus's job
+
+`soil:unibus` already defines the envelope this receiver reimplements: a `frame`
+of `{ kind, producer, issued-at-ms, body }` where the body is opaque and "the
+Spore owns the schema"; `poll(kinds, cursor, limit)` returning an opaque cursor
+and `stale` when that cursor predates the host's retention window; and `publish`
+gated on `soil:unibus.publish`. A cursor, a retention window and a signed
+producer are exactly what this crate grew on its own, and that duplication is not
+meant to survive.
+
+The split that should hold:
+
+| Concern | Owner |
+| --- | --- |
+| Envelope, cursor, retention, delivery, signatures | `soil:unibus` |
+| Event body schema (`fungos.worklog/event@1`) | this crate |
+| Normalizing a producer's payload into that body | this crate |
+| Rendering the timeline | `dev.fungos.worklog` |
+
+So `fungos.worklog.event.v1` becomes a **frame kind**: a Marbles or GitHub
+publisher normalizes and publishes it — the same shape as the Confluence adapter
+in [`ai-inbox-spec.md`](ai-inbox-spec.md) — and the Spore becomes
+`soil:unibus.observe` + `soil:records`, which is the inbox's already-working
+pattern.
+
+This binary exists because no Soil host implements `soil:unibus` or
+`soil:records` yet, so something has to hold a cursor today. It is **demoted, not
+deleted**: keep the schema, the normalizer and the ordering rules, and lose the
+socket, the secret file and the append-only store when a host lands.
+
 ## The Spore
 
 `dev.fungos.worklog` is read-only. It holds no producer capability, no socket,

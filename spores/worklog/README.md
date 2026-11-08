@@ -78,6 +78,10 @@ lua tests/ui_fixture.lua             # the view against the committed snapshot
 
 ## Known gaps
 
+- **The transport is provisional.** Envelope, cursor, retention and delivery are
+  `soil:unibus`'s job; this crate reimplements them only because no Soil host
+  exists yet. See "Transport is Unibus's job" in [`docs/worklog.md`](../../docs/worklog.md)
+  for the split that should replace it.
 - **Marbles rows are terse.** The `marbles.event/1` envelope carries no actor and
   no detail text, so a row reads `closed spores/spores-42` attributed to
   `marbles`. `docs/worklog.md` names the exact Marbles change that fixes it; the
