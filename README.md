@@ -52,6 +52,7 @@ spores/dragshift           convert and edit a dropped file from a radial menu
 spores/search              fuzzy search, ranking, and action dispatch
 spores/markdown            Markdown reader/editor
 spores/unibus              read-only inbox (dev.fungos.inbox)
+spores/worklog             cross-tool timeline (dev.fungos.worklog)
 spores/terminal            terminal Spore
 spores/terminal-core       terminal semantics shared by the tmux and host front ends
 spores/terminal-host       native terminal host
@@ -75,6 +76,10 @@ spores/markdown     the Markdown reader/editor Spore
 spores/unibus       the inbox Spore (id `dev.fungos.inbox`)
                     src/   record keys/schemas for mail + chat metadata
                     spore.toml  records/unibus grants, read-only
+spores/worklog      the worklog Spore (id `dev.fungos.worklog`) + receiver
+                    src/   fungos.worklog/event@1: normalize, order, store
+                    ui/    the timeline view Canvas renders
+                    tools/compose_worklog.lua  compose it into a module
 docs/               host/spore contract, records/sync, AI inbox spec
 ```
 

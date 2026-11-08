@@ -1,159 +1,31 @@
--- Compose the unibus inbox into a single Canvas module.
+-- Compose the inbox views into single Canvas modules.
 --
 -- Canvas strips load/require/package from the sandbox, so the view library, the
--- view, and the mock snapshot are pre-composed. Delete this tool when Canvas
--- resolves components itself.
+-- view, and the mock snapshot are pre-composed. The rules live in
+-- tools/compose_lua.lua; this file is the list of what to compose.
 --
---   lua tools/compose_inbox.lua "<Canvas runtime modules dir>"
+--   lua tools/compose_inbox.lua "<Canvas runtime modules dir>" [inbox snapshot] [contacts snapshot]
+
+local script = arg[0] or "tools/compose_inbox.lua"
+-- Resolve the repository root from wherever this was invoked: `<repo>/spores/<spore>/tools/`.
+local spore = script:match("^(.*)/tools/[^/]+$") or "."
+local compose = dofile(spore .. "/../../tools/compose_lua.lua")
 
 local out_dir = assert(arg[1], "usage: compose_inbox.lua <modules dir>")
+local ui_lib = "ui/lib/ui.lua"
 
-local style_path = os.getenv("UI_STYLE") or ((os.getenv("HOME") or "") .. "/.config/fungos/ui.lua")
-local style_file = io.open(style_path, "rb")
-local style_source = style_file and style_file:read("*a") or "return {}"
-if style_file then style_file:close() end
-
-local function read(path)
-  local file = assert(io.open(path, "rb"), "missing " .. path)
-  local text = file:read("*a")
-  file:close()
-  return text
+local function install(name, title, view, snapshot, app_id)
+  compose.install {
+    name = name,
+    title = title,
+    out_dir = out_dir,
+    view = view,
+    snapshot = snapshot,
+    ui_lib = ui_lib,
+    app_id = app_id,
+  }
 end
 
--- Canvas caps a module source at 32 KiB. Strip comments and blank lines; the
--- authored files stay readable and the installed artifact stays bounded.
-local function strip_comments(source)
-  local out = {}
-  local index, length = 1, #source
-  local quote = nil
-  while index <= length do
-    local char = source:sub(index, index)
-    if quote then
-      out[#out + 1] = char
-      if char == "\\" then
-        index = index + 1
-        out[#out + 1] = source:sub(index, index)
-      elseif char == quote then
-        quote = nil
-      end
-      index = index + 1
-    elseif char == '"' or char == "'" then
-      quote = char
-      out[#out + 1] = char
-      index = index + 1
-    elseif char == "-" and source:sub(index + 1, index + 1) == "-" then
-      while index <= length and source:sub(index, index) ~= "\n" do
-        index = index + 1
-      end
-    else
-      out[#out + 1] = char
-      index = index + 1
-    end
-  end
-  local lines = {}
-  for raw in table.concat(out):gmatch("([^\n]*)\n?") do
-    local line = raw:gsub("^%s+", ""):gsub("%s+$", "")
-    if line ~= "" then lines[#lines + 1] = line end
-  end
-  return table.concat(lines, "\n")
-end
-
-local library = strip_comments(read("ui/lib/ui.lua"))
-
--- Canvas's globals are readonly. Supply the library as a local upvalue instead
--- of assigning _G.ui, and drop the view's global assertion.
-local marker = 'local ui = assert(_G.ui, "ui library not composed")'
-
-local function compose(name, title, view_path, snapshot_path, app_id)
-  local view = strip_comments(read(view_path))
-  local snapshot = strip_comments(read(snapshot_path))
-  local at = view:find(marker, 1, true)
-  if at then
-    view = view:sub(1, at - 1) .. "-- ui supplied by composer" .. view:sub(at + #marker)
-  end
-
-  -- The library is ~21 KB and Canvas caps a module at 32 KiB, so what gets
-  -- inlined is decided by what the view actually references. None of these views
-  -- used the kit at all at first; now they use `ui.layout` for the fallback
-  -- Canvas lacks, which is a small self-contained section. A view that only
-  -- needs layout gets just that, not the whole library.
-  local function layout_section()
-    local lines, inside = {}, false
-    for line in read("ui/lib/ui.lua"):gmatch("([^\n]*)\n?") do
-      -- Plain find, not a pattern: `-` is magic in Lua patterns and would
-      -- silently match nothing, leaving an empty section.
-      if line:find("BEGIN-LAYOUT", 1, true) then inside = true
-      elseif line:find("END-LAYOUT", 1, true) then inside = false
-      elseif inside then lines[#lines + 1] = line end
-    end
-    assert(#lines > 0, "layout section not found in ui/lib/ui.lua")
-    return strip_comments(table.concat(lines, "\n"))
-  end
-
-  local use_ui = view:find("ui%.") ~= nil
-  local needs_full_ui = false
-  for name in view:gmatch("ui%.([%a_][%w_]*)") do
-    if name ~= "layout" then needs_full_ui = true break end
-  end
-
-  local ui_chunk, configure_chunk
-  if not use_ui then
-    ui_chunk = "local ui = nil"
-    configure_chunk = "-- no ui library: configure skipped"
-  elseif needs_full_ui then
-    ui_chunk = table.concat({ "local ui = (function()", library, "end)()" }, "\n")
-    configure_chunk = "ui.configure(user_style, " .. string.format("%q", app_id or "") .. ")"
-  else
-    ui_chunk = table.concat({ "local ui = {}", "(function()", layout_section(), "end)()" }, "\n")
-    configure_chunk = "-- layout only: configure skipped"
-  end
-
-  local composed = table.concat({
-    "-- generated by tools/compose_inbox.lua from ui/lib/ui.lua + " .. view_path,
-    "-- do not edit here; edit the sources and re-run the tool",
-    ui_chunk,
-    "local snapshot = (function()",
-    snapshot,
-    "end)()",
-    "local user_style = (function()",
-    style_source,
-    "end)()",
-    configure_chunk,
-    "local view = (function(ui)",
-    view,
-    "end)(ui)",
-    "view.render(snapshot)",
-    "",
-  }, "\n")
-
-
-  local path = out_dir .. "/" .. name .. ".lua"
-  -- Canvas caps a module source at 32 KiB. Discover that here, where the snapshot
-  -- can still be trimmed, instead of at install time in the host, where the module
-  -- is simply refused and nothing renders.
-  if #composed > 32768 then
-    io.stderr:write(string.format(
-      "compose_inbox: %s\n  is %d bytes; Canvas caps a module at 32768 bytes.\n"
-        .. "  Trim the snapshot before composing (tools/agentmail_inbox_snapshot.py).",
-      path, #composed))
-    os.exit(1)
-  end
-  local file = assert(io.open(path, "wb"), "cannot write " .. path)
-  file:write(composed)
-  file:close()
-
-  local manifest = table.concat({
-    '{"schema_version":1,"id":"' .. name .. '","title":"' .. title .. '",',
-    '"inputs":[],"resources":[],',
-    '"capabilities":{"write_scene":true,"read_inputs":[],"read_theme":true}}',
-  })
-  local manifest_path = out_dir .. "/" .. name .. ".json"
-  file = assert(io.open(manifest_path, "wb"), "cannot write " .. manifest_path)
-  file:write(manifest)
-  file:close()
-  print(string.format("wrote %s (%d bytes) and %s", path, #composed, manifest_path))
-end
-
-compose("spore-dev-inbox", "Inbox", "ui/inbox.lua", arg[2] or "examples/inbox_mock.lua", "dev.fungos.inbox")
-compose("spore-dev-approval2", "Approve reply", "ui/approval.lua", "examples/approval_mock.lua", "dev.fungos.inbox")
-compose("spore-dev-contacts", "Contacts", "ui/contacts.lua", arg[3] or "examples/contacts_mock.lua", "dev.fungos.contacts")
+install("spore-dev-inbox", "Inbox", "ui/inbox.lua", arg[2] or "examples/inbox_mock.lua", "dev.fungos.inbox")
+install("spore-dev-approval2", "Approve reply", "ui/approval.lua", "examples/approval_mock.lua", "dev.fungos.inbox")
+install("spore-dev-contacts", "Contacts", "ui/contacts.lua", arg[3] or "examples/contacts_mock.lua", "dev.fungos.contacts")
