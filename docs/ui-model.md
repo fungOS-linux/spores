@@ -34,6 +34,12 @@ one pass, no host measurement, so the same tree previews and tests without a
 compositor. The dashboard nodes in this document use the portable path; a Spore
 that needs measured flex layout can call `canvas.layout` directly.
 
+Dense time series are bounded before they become scene nodes. `ui.lttb` keeps the
+endpoints and the dominant point in each bucket; `ui.chart` applies it to series
+that exceed the chart's mark count, and `ui.chart_window` keeps a streaming
+window without mutating the snapshot. This is the portable counterpart of the
+native host's resident dense-buffer decimation.
+
 ## What we adopted from the proposal
 
 | Proposal | Here |

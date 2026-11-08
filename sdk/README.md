@@ -20,6 +20,9 @@ migration debt, and should not be used as the source of truth for new work.
   `rule`, `code`, `diagram`, `bullets`, `quote`, `bar`, `fill`, `button`, `kbd`,
   `icon`, `icon_button`, plus the dashboard nodes `stat`, `gauge`, `table`, and
   `chart`, and the layout pass (`lay`) and token helpers.
+- `ui.lttb(points, threshold)` and `ui.chart_window(points, count)` — dense-series
+  decimation and streaming window helpers. `ui.chart` uses LTTB automatically
+  before it emits marks; set `decimate = false` to keep uniform sampling.
 - `package.toml` — name, version, entry.
 
 Dashboard nodes are ordinary tree nodes. They consume the same ink, space, radius,
@@ -29,7 +32,8 @@ can register host-owned hit regions with `action`, `row_action`, `legend_action`
 and `plot_action`. Actions are optional, so a headless preview or a non-Canvas host
 still renders the same tree.
 
-`spores/gallery` is the fixture-driven catalog and screenshot for these nodes.
+`spores/gallery` is the fixture-driven catalog and screenshot for these nodes,
+including the five-panel ChartGPU fixture.
 
 ## Rules the library enforces
 

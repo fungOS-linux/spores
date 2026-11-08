@@ -235,8 +235,10 @@ function ui.quote(value) return node("quote", { value = value }) end
 -- `gauge`: title, value, min, max, unit, decimals, segments, thresholds, status.
 -- `table`: title, subtitle, status, columns, rows, row_h, row_action, row_key.
 -- `chart`: title, subtitle, status, series, x/y bounds, threshold, selection,
---          legend_action, plot_action. All action fields are optional and use
---          host-owned hit regions; the view never receives a callback.
+--          columns, decimate, max_points, caps, legend_gap, legend_action,
+--          plot_action.
+--          All action fields are optional and use host-owned hit regions; the
+--          view never receives a callback.
 function ui.stat(props) return node("stat", props or {}) end
 function ui.gauge(props) return node("gauge", props or {}) end
 function ui.table(props) return node("table", props or {}) end
@@ -573,6 +575,67 @@ local function sample_points(points, count)
   return out
 end
 
+--- Largest-Triangle-Three-Buckets downsampling for dense series.
+--
+-- The chart keeps the endpoints and the visually dominant point in each bucket,
+-- so a downsampled incident still shows its spike instead of losing it between
+-- uniform samples. The returned points are the caller's own point objects.
+--
+-- @derives-from github:fungOS-linux/fungos-sdk@c104db3 -- LTTB ported from lua/fungos/chart.lua
+function ui.lttb(points, threshold)
+  points = points or {}
+  local count = #points
+  threshold = math.floor(tonumber(threshold) or count)
+  if count < 3 or threshold < 3 or threshold >= count then return points end
+  local data = {}
+  for index, point in ipairs(points) do
+    local x, y = point_xy(point)
+    if x == nil then return points end
+    data[index] = { x = x, y = y, source = point }
+  end
+  local sampled = { data[1] }
+  local every = (count - 2) / (threshold - 2)
+  local anchor = 1
+  for bucket = 1, threshold - 2 do
+    local range_start = math.floor((bucket - 1) * every) + 2
+    local range_end = math.min(math.floor(bucket * every) + 2, count - 1)
+    local avg_start = math.floor(bucket * every) + 2
+    local avg_end = math.min(math.floor((bucket + 1) * every) + 2, count)
+    local avg_x, avg_y, avg_n = 0, 0, 0
+    for index = avg_start, avg_end do
+      avg_x = avg_x + data[index].x
+      avg_y = avg_y + data[index].y
+      avg_n = avg_n + 1
+    end
+    if avg_n > 0 then avg_x, avg_y = avg_x / avg_n, avg_y / avg_n end
+    local ax, ay = data[anchor].x, data[anchor].y
+    local best_area, best_index = -1, range_start
+    for index = range_start, range_end do
+      local area = math.abs((ax - avg_x) * (data[index].y - ay)
+        - (ax - data[index].x) * (avg_y - ay)) * 0.5
+      if area > best_area then best_area, best_index = area, index end
+    end
+    sampled[#sampled + 1] = data[best_index]
+    anchor = best_index
+  end
+  sampled[#sampled + 1] = data[count]
+  local out = {}
+  for index, point in ipairs(sampled) do out[index] = point.source end
+  return out
+end
+
+--- Keep the newest `count` points without mutating the snapshot. Streaming is
+-- a Spore concern; this is the pure windowing helper a live view calls first.
+function ui.chart_window(points, count)
+  points = points or {}
+  count = math.max(1, math.floor(tonumber(count) or 240))
+  local out = {}
+  for index = math.max(1, #points - count + 1), #points do
+    out[#out + 1] = points[index]
+  end
+  return out
+end
+
 local function lay_stat(n, S, width)
   local theme = S.theme
   local height = hy(S, n.h or 136)
@@ -856,17 +919,27 @@ local function lay_chart(n, S, width)
     end
   end
   local columns = math.max(2, math.floor(tonumber(n.columns) or 12))
+  local target = columns
+  if n.max_points then
+    target = math.min(target, math.max(3, math.floor(tonumber(n.max_points) or target)))
+  end
   local col_w = plot_w / columns
   for series_index, item in ipairs(series) do
     local ink_name = ink(item.ink or "primary", "chart.series.ink")
-    for column, point in ipairs(sample_points(item.points, columns)) do
+    local points = item.points or {}
+    if n.decimate ~= false and item.decimate ~= false and #points > target then
+      points = ui.lttb(points, target)
+    end
+    for column, point in ipairs(sample_points(points, columns)) do
       local value = math.max(y_min, math.min(y_max, point.y))
       local py = sy(value)
       local bar_h = math.max(hy(S, 1), py - bottom)
       prims[#prims + 1] = rect_prim(ink_name, tonumber(item.opacity) or 0.26, 0,
         left + (column - 1) * col_w, py, math.max(wx(S, 1), col_w - wx(S, 1)), bar_h)
-      prims[#prims + 1] = rect_prim(ink_name, 1, radius("sm", "chart.cap"),
-        left + (column - 1) * col_w, py, math.max(wx(S, 1), col_w - wx(S, 1)), hy(S, 2))
+      if n.caps ~= false and item.caps ~= false then
+        prims[#prims + 1] = rect_prim(ink_name, 1, radius("sm", "chart.cap"),
+          left + (column - 1) * col_w, py, math.max(wx(S, 1), col_w - wx(S, 1)), hy(S, 2))
+      end
     end
   end
   hit_region(prims, {
@@ -889,7 +962,7 @@ local function lay_chart(n, S, width)
       w = legend_w + wx(S, 8), h = hy(S, theme.micro * 1.8),
       enabled = item.enabled,
     })
-    legend_x = legend_x + legend_w + wx(S, 18)
+    legend_x = legend_x + legend_w + wx(S, n.legend_gap or 22)
   end
   return { h = height, p = prims }
 end

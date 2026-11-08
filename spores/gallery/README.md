@@ -21,6 +21,21 @@ not metrics, alerts, or authority.
 The view uses one fixture (`ui/gallery.lua`) so a visual change is a deliberate
 change to the component, not a change in live data.
 
+## ChartGPU fixture
+
+![ChartGPU decimated panels](chartgpu.png)
+
+`ui/chartgpu.lua` ports the five-panel ChartGPU fixture into ordinary `ui.chart`
+nodes. Each series has 120 source points, decimated with LTTB to 8 columns before
+the scene is emitted. `caps = false` keeps one rect per mark so all five panels
+fit the default Canvas budget.
+
+Run it headlessly with:
+
+```sh
+lua tests/chartgpu_fixture.lua
+```
+
 ## Run
 
 ```sh
@@ -28,10 +43,11 @@ cd spores/gallery
 lua tests/gallery_fixture.lua
 ```
 
-The fixture stubs `canvas.rect`, `canvas.text`, and `widget.button`, enables
-`ui.debug` so each node must draw inside the box it claimed, and asserts that
-every dashboard primitive and hit region was emitted. It runs without a
-compositor.
+The fixtures stub `canvas.rect`, `canvas.text`, and `widget.button`, enable
+`ui.debug` so each node must draw inside the box it claimed, and assert that
+every dashboard primitive and hit region was emitted. They run without a
+compositor. The gallery test also covers LTTB endpoints/spike preservation and
+the streaming window helper.
 
 To preview in Canvas, compose `sdk/ui/ui.lua` with `ui/gallery.lua` into a module
 and give the module manifest action grants for `inspect-stat`, `inspect-gauge`,

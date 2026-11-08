@@ -49,5 +49,25 @@ assert(count_buttons("inspect-gauge") == 1, "gauge hit region missing")
 assert(count_buttons("open-service") == 4, "table row hit regions missing")
 assert(count_buttons("toggle-series") == 3, "legend hit regions missing")
 assert(count_buttons("select-range") == 1, "chart selection hit region missing")
+
+-- Dense series are decimated before they become bars. LTTB must keep the
+-- endpoints and the dominant spike, not average it away.
+local dense = {}
+for index = 1, 5000 do
+  local x = index / 5000
+  dense[index] = { x = x, y = math.sin(x * 20) + (index == 2500 and 4 or 0) }
+end
+local reduced = ui.lttb(dense, 200)
+assert(#reduced == 200, "lttb should honor the threshold")
+assert(reduced[1] == dense[1] and reduced[#reduced] == dense[#dense], "lttb should keep endpoints")
+local spike = false
+for _, point in ipairs(reduced) do
+  if point == dense[2500] then spike = true end
+end
+assert(spike, "lttb should keep a dominant spike")
+assert(#ui.lttb(dense, 6000) == 5000, "lttb should leave small series alone")
+assert(#ui.chart_window(dense, 100) == 100, "chart window should keep the newest points")
+assert(ui.chart_window(dense, 100)[1] == dense[4901], "chart window should start at the right point")
+
 print(string.format("gallery: ok (%d rects, %d texts, %d hit regions)",
   #drawn.rects, #drawn.texts, #drawn.buttons))
