@@ -25,10 +25,15 @@ change to the component, not a change in live data.
 
 ![ChartGPU decimated panels](chartgpu.png)
 
-`ui/chartgpu.lua` ports the five-panel ChartGPU fixture into ordinary `ui.chart`
-nodes. Each series has 120 source points, decimated with LTTB to 8 columns before
-the scene is emitted. `caps = false` keeps one rect per mark so all five panels
-fit the default Canvas budget.
+`ui/chartgpu.lua` is the portable fallback for the five-panel ChartGPU layout.
+It uses ordinary `ui.chart` nodes: each series has 120 source points, decimated
+with LTTB to 8 columns before the scene is emitted, and `caps = false` keeps one
+rect per mark so all five panels fit the default Canvas budget.
+
+This is **not** the native GraphGPU host. The live 60 Hz version is the
+`chartgpu-dashboard` Spore in `~/src/spores/spores/chartgpu-dashboard`, run through
+`soil-viz`; it uses resident streams and a GPU renderer rather than one rect per
+mark.
 
 Run it headlessly with:
 

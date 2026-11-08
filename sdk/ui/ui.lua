@@ -893,9 +893,14 @@ local function lay_chart(n, S, width)
   end
   for index = 0, 2 do
     local value = x_min + (x_max - x_min) * index / 2
-    local text = value_format(value, n.x_decimals)
-    prims[#prims + 1] = text_prim(text, theme.micro, S, "muted",
-      sx(value) - estimate_width(text, theme.micro, S) / 2, bottom - hy(S, 14))
+    -- The bottom-left x tick and the bottom y tick share a corner. The y tick
+    -- carries the scale and the x tick carries nothing extra at x_min, so keep
+    -- the former and drop the latter instead of drawing two labels on top.
+    if not (index == 0 and x_min == 0) then
+      local text = value_format(value, n.x_decimals)
+      prims[#prims + 1] = text_prim(text, theme.micro, S, "muted",
+        sx(value) - estimate_width(text, theme.micro, S) / 2, bottom - hy(S, 14))
+    end
   end
   if n.selection then
     local from = math.max(x_min, math.min(x_max, tonumber(n.selection.x0) or x_min))

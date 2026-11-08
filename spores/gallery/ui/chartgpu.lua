@@ -66,6 +66,7 @@ local function panel(id, spec)
     x_decimals = 0,
     columns = 8,
     caps = false,
+    legend_gap = 30,
     h = 820,
     pad = "sm",
   })
