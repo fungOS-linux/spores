@@ -93,6 +93,26 @@ point. This is the current static fallback. It is not 1:1:
 
 Keep it as a headless/portable fallback, not as the live demo.
 
+## Budget
+
+The frontier Canvas already answers the 256-node question:
+
+- `canvas-soil-scene` (`pi/soil-scene`): `DEFAULT_MAX_NODES = 1_024` and
+  `DEFAULT_SOURCE_BYTES = 256 * 1024`.
+- The Canvas currently running here still has `256` nodes and `64 KiB`; a
+  300-node probe is rejected with `Canvas Lua scene exceeds its node limit`, and
+  a 1100-node probe is rejected by the source-byte limit.
+- `fungos-sdk/tools/tend.lua` still defaults to `256` nodes and `64 KiB`. Raising
+  the host alone leaves `tend` rejecting the same scene before it is written.
+
+So the change is not a new ceiling: the hard cap is already 1,024. It is aligning
+the running Canvas and `tend` with the frontier defaults. A 1024-node module also
+needs the 256 KiB source budget; source bytes, not node count, is what the large
+probe hit first.
+
+This does **not** make the point cloud a Lua tree. A 20k-point cloud is still a
+GPU resource/lease; node headroom only helps ordinary retained UI.
+
 ## Recommendation
 
 Start with Option A. It preserves the native look and 60 Hz behavior, it uses
