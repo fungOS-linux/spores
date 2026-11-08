@@ -35,6 +35,18 @@ local INK = {
   background = true, surface = true, surface_raised = true, surface_sunken = true,
   border = true, divider = true, text = true, muted = true,
   primary = true, accent = true, success = true, warning = true, danger = true,
+  info = true,
+}
+-- Canvas's Lua scene ABI has a smaller semantic palette than the UI vocabulary.
+-- Keep the richer token names for component authors, but normalize them before
+-- they reach canvas.rect/canvas.text. Otherwise a tree that previews correctly
+-- in the native test harness is rejected by the compositor.
+local INK_ALIAS = {
+  accent = "info",
+  surface_raised = "surface",
+  surface_sunken = "background",
+  border = "muted",
+  divider = "muted",
 }
 
 ui.tokens = {
@@ -97,7 +109,7 @@ local function ink(value, field)
     table.sort(names)
     fail(("%s: %q is not an ink role (%s)"):format(field, value, table.concat(names, "/")), 3)
   end
-  return value
+  return INK_ALIAS[value] or value
 end
 
 -- Rule 2: text uses a named style.
@@ -214,6 +226,25 @@ function ui.bullets(items, props)
 end
 
 function ui.quote(value) return node("quote", { value = value }) end
+
+-- Dashboard primitives. These are ordinary tree nodes: the one-pass layout
+-- owns their geometry, the token vocabulary owns their colour and spacing, and
+-- ui.render emits the same canvas.rect/text primitives as every other node.
+--
+-- `stat`: label, value, unit, decimals, delta, delta_ink, status, action.
+-- `gauge`: title, value, min, max, unit, decimals, segments, thresholds, status.
+-- `table`: title, subtitle, status, columns, rows, row_h, row_action, row_key.
+-- `chart`: title, subtitle, status, series, x/y bounds, threshold, selection,
+--          legend_action, plot_action. All action fields are optional and use
+--          host-owned hit regions; the view never receives a callback.
+function ui.stat(props) return node("stat", props or {}) end
+function ui.gauge(props) return node("gauge", props or {}) end
+function ui.table(props) return node("table", props or {}) end
+function ui.chart(series, props)
+  props = props or {}
+  props.series = series or props.series or {}
+  return node("chart", props)
+end
 
 -- An interaction intent. The Spore receives it; the view never runs it.
 function ui.action(name, payload)
@@ -344,6 +375,30 @@ local function control_id(n)
   return (action:gsub("[^%w%-_]", "-")):sub(1, 48)
 end
 
+-- A hit region is scene data, not a second renderer. Composite dashboard nodes
+-- use the same host-owned control path as `button`: draw the card, then put an
+-- invisible control over it so a Spore receives an action instead of a click
+-- callback. Keep this optional so headless previews and non-Canvas hosts still
+-- render the same tree.
+local function hit_region(prims, spec)
+  if not (spec and spec.action and widget and widget.button) then return end
+  local w = tonumber(spec.w) or 0
+  local h = tonumber(spec.h) or 0
+  if w <= 0 or h <= 0 then return end
+  prims[#prims + 1] = {
+    button = {
+      id = spec.id,
+      label = spec.label,
+      action = spec.action,
+      body = spec.body or {},
+      enabled = spec.enabled ~= false,
+      appearance = "hit",
+    },
+    translation = { spec.x or 0, spec.y or 0, 0 },
+    scale = { w, h, 1 },
+  }
+end
+
 local function lay_text(n, S, width)
   local name = style(n.style)
   local size = n.px or S.theme[STYLE[name]]
@@ -445,7 +500,7 @@ local function lay_radial(n, S)
           action = n.action,
           body = slice.body or { id = slice.id, value = slice.id },
           enabled = available,
-          appearance = "invisible",
+          appearance = "hit",
         },
         translation = {
           cx + math.cos(middle) * middle_radius - segment_length * 0.5,
@@ -457,6 +512,385 @@ local function lay_radial(n, S)
     end
   end
 
+  return { h = height, p = prims }
+end
+
+-- ---- dashboard nodes ----------------------------------------------------
+
+local function status_ink(value, fallback)
+  local name = tostring(value or ""):lower()
+  if name == "ok" or name == "healthy" or name == "live" or name == "ready"
+    or name == "success" or name == "active" then
+    return ink("success", "status.ink")
+  elseif name == "warn" or name == "warning" or name == "degraded"
+    or name == "pending" or name == "lagging" then
+    return ink("warning", "status.ink")
+  elseif name == "error" or name == "critical" or name == "crit" or name == "down"
+    or name == "failed" or name == "failing" then
+    return ink("danger", "status.ink")
+  end
+  return ink(fallback or "muted", "status.ink")
+end
+
+local function threshold_ink(value, steps, base)
+  local name = base or "success"
+  for _, step in ipairs(steps or {}) do
+    if value >= (tonumber(step.value) or 0) then name = step.ink or name end
+  end
+  return ink(name, "threshold.ink")
+end
+
+local function value_format(value, decimals, unit)
+  local out
+  if type(value) == "number" then
+    out = string.format("%." .. tostring(math.max(0, math.floor(decimals or 0))) .. "f", value)
+  else
+    out = tostring(value or "")
+  end
+  if unit and unit ~= "" then out = out .. tostring(unit) end
+  return out
+end
+
+local function point_xy(point)
+  if type(point) ~= "table" then return nil end
+  local x, y = point.x or point[1], point.y or point[2]
+  x, y = tonumber(x), tonumber(y)
+  if x == nil or y == nil then return nil end
+  return x, y
+end
+
+local function sample_points(points, count)
+  local out = {}
+  if #(points or {}) == 0 then return out end
+  for index = 1, count do
+    local at = 1
+    if count > 1 and #points > 1 then
+      at = 1 + math.floor((index - 1) * (#points - 1) / (count - 1) + 0.5)
+    end
+    local x, y = point_xy(points[at])
+    if x ~= nil then out[#out + 1] = { x = x, y = y } end
+  end
+  return out
+end
+
+local function lay_stat(n, S, width)
+  local theme = S.theme
+  local height = hy(S, n.h or 136)
+  local pad = wx(S, space(n.pad or "md", "stat.pad"))
+  local prims = {
+    rect_prim(n.ink or "surface", 0.9, radius(n.radius or "md", "stat.radius"),
+      -wx(S, 4), 0, width + wx(S, 8), height),
+  }
+  local label = tostring(n.label or "Metric")
+  prims[#prims + 1] = text_prim(label, theme.small, S, "muted", pad, -hy(S, 12))
+  if n.status and tostring(n.status) ~= "" then
+    local status = tostring(n.status)
+    local status_w = estimate_width(status, theme.micro, S)
+    prims[#prims + 1] = text_prim(status, theme.micro, S,
+      status_ink(n.status, n.status_ink), width - pad - status_w, -hy(S, 12))
+  end
+  local value = value_format(n.value, n.decimals)
+  prims[#prims + 1] = text_prim(value, theme.title, S,
+    ink(n.value_ink or "text", "stat.value_ink"), pad, -hy(S, 30))
+  if n.unit and tostring(n.unit) ~= "" then
+    prims[#prims + 1] = text_prim(tostring(n.unit), theme.micro, S, "muted",
+      pad, -height + hy(S, 38))
+  end
+  if n.delta and tostring(n.delta) ~= "" then
+    local delta_ink = n.delta_ink or ((tonumber(n.delta) or 0) >= 0 and "success" or "danger")
+    prims[#prims + 1] = text_prim(tostring(n.delta), theme.micro, S,
+      ink(delta_ink, "stat.delta_ink"), pad, -height + hy(S, 18))
+  end
+  hit_region(prims, {
+    id = control_id(n), action = n.action, body = n.body, label = label,
+    x = -wx(S, 4), y = 0, w = width + wx(S, 8), h = height,
+    enabled = n.enabled,
+  })
+  return { h = height, p = prims }
+end
+
+local function lay_gauge(n, S, width)
+  local theme = S.theme
+  local height = hy(S, n.h or 184)
+  local pad = wx(S, space(n.pad or "md", "gauge.pad"))
+  local value = tonumber(n.value) or 0
+  local lo = tonumber(n.min) or 0
+  local hi = tonumber(n.max) or 100
+  if hi == lo then hi = lo + 1 end
+  local prims = {
+    rect_prim(n.ink or "surface", 0.9, radius(n.radius or "md", "gauge.radius"),
+      -wx(S, 4), 0, width + wx(S, 8), height),
+  }
+  if n.title and tostring(n.title) ~= "" then
+    prims[#prims + 1] = text_prim(tostring(n.title), theme.small, S, "text", pad, -hy(S, 12))
+  end
+  if n.status and tostring(n.status) ~= "" then
+    local status = tostring(n.status)
+    local status_w = estimate_width(status, theme.micro, S)
+    prims[#prims + 1] = text_prim(status, theme.micro, S,
+      status_ink(n.status, n.status_ink), width - pad - status_w, -hy(S, 12))
+  end
+  local track_y = -height + hy(S, 30)
+  local track_x = pad
+  local track_w = width - pad * 2
+  local track_h = hy(S, 10)
+  local track_ink = threshold_ink(value, n.thresholds)
+  prims[#prims + 1] = text_prim(value_format(value, n.decimals, n.unit), theme.large, S,
+    track_ink, pad, -hy(S, 34))
+  prims[#prims + 1] = rect_prim(ink("surface_sunken", "gauge.track.ink"), 0.9, radius("sm", "gauge.track"),
+    track_x, track_y, track_w, track_h)
+  local segments = math.max(2, math.floor(tonumber(n.segments) or 12))
+  local seg_w = track_w / segments
+  for index = 1, segments do
+    local mid = lo + (hi - lo) * (index - 0.5) / segments
+    if mid <= value then
+      prims[#prims + 1] = rect_prim(threshold_ink(mid, n.thresholds), 0.92,
+        radius("sm", "gauge.segment"), track_x + (index - 1) * seg_w,
+        track_y, math.max(wx(S, 1), seg_w - wx(S, 1)), track_h)
+    end
+  end
+  prims[#prims + 1] = text_prim(value_format(lo, n.decimals, n.unit), theme.micro, S,
+    "muted", track_x, track_y - hy(S, 14))
+  local max_text = value_format(hi, n.decimals, n.unit)
+  prims[#prims + 1] = text_prim(max_text, theme.micro, S, "muted",
+    track_x + track_w - estimate_width(max_text, theme.micro, S), track_y - hy(S, 14))
+  hit_region(prims, {
+    id = control_id(n), action = n.action, body = n.body,
+    label = n.title and tostring(n.title) or "gauge",
+    x = -wx(S, 4), y = 0, w = width + wx(S, 8), h = height,
+    enabled = n.enabled,
+  })
+  return { h = height, p = prims }
+end
+
+local function lay_table(n, S, width)
+  local theme = S.theme
+  local pad = wx(S, space(n.pad or "md", "table.pad"))
+  local gap = wx(S, space(n.gap or "sm", "table.gap"))
+  local rows = n.rows or {}
+  local columns = n.columns or {}
+  if #columns == 0 then
+    return { h = hy(S, n.h or 80), p = {
+      rect_prim(n.ink or "surface", 0.9, radius(n.radius or "md", "table.radius"),
+        -wx(S, 4), 0, width + wx(S, 8), hy(S, n.h or 80)),
+    } }
+  end
+  local row_px = space(n.row_h or 24, "table.row_h")
+  local header = hy(S, 20)
+  local heading = (n.title and hy(S, theme.small * 1.5) or 0)
+    + (n.subtitle and hy(S, theme.micro * 1.5) or 0)
+  local computed = hy(S, 16) * 2 + heading + header + #rows * hy(S, row_px) + hy(S, 10)
+  local height = n.h and hy(S, n.h) or computed
+  local prims = {
+    rect_prim(n.ink or "surface", 0.9, radius(n.radius or "md", "table.radius"),
+      -wx(S, 4), 0, width + wx(S, 8), height),
+  }
+  local y = -hy(S, 16)
+  local header_y = y
+  if n.title and tostring(n.title) ~= "" then
+    prims[#prims + 1] = text_prim(tostring(n.title), theme.small, S, "text", pad, y)
+    y = y - hy(S, theme.small * 1.5)
+  end
+  if n.subtitle and tostring(n.subtitle) ~= "" then
+    prims[#prims + 1] = text_prim(tostring(n.subtitle), theme.micro, S, "muted", pad, y)
+    y = y - hy(S, theme.micro * 1.5)
+  end
+  if n.status and tostring(n.status) ~= "" then
+    local status = tostring(n.status)
+    prims[#prims + 1] = text_prim(status, theme.micro, S,
+      status_ink(n.status, n.status_ink),
+      width - pad - estimate_width(status, theme.micro, S), header_y)
+  end
+  local total = 0
+  for _, column in ipairs(columns) do total = total + (tonumber(column.width) or 1) end
+  local usable = width - pad * 2 - gap * (#columns - 1)
+  local xs, widths = {}, {}
+  local cursor = pad
+  for index, column in ipairs(columns) do
+    xs[index] = cursor
+    widths[index] = usable * (tonumber(column.width) or 1) / total
+    cursor = cursor + widths[index] + gap
+  end
+  for index, column in ipairs(columns) do
+    prims[#prims + 1] = text_prim(tostring(column.label or column.key or ""),
+      theme.micro, S, "muted", xs[index], y)
+  end
+  y = y - header
+  prims[#prims + 1] = rect_prim(ink("divider", "table.divider.ink"), 0.35, 0,
+    pad, y, width - pad * 2, hy(S, 1))
+  y = y - hy(S, 6)
+  local available = math.max(0, math.floor((height + y + hy(S, 14)) / hy(S, row_px)))
+  for row_index = 1, math.min(#rows, available) do
+    local row = rows[row_index]
+    if row_index % 2 == 0 then
+      prims[#prims + 1] = rect_prim(ink("surface_raised", "table.row.ink"), 0.28, radius("sm", "table.row"),
+        pad - wx(S, 4), y, width - pad * 2 + wx(S, 8), hy(S, row_px))
+    end
+    for index, column in ipairs(columns) do
+      local value = row[column.key]
+      if column.kind == "status" then
+        local status = tostring(value or "")
+        if status ~= "" then
+          prims[#prims + 1] = rect_prim(status_ink(status, column.status_ink), 1,
+            radius("pill", "table.status"), xs[index], y + hy(S, 5), wx(S, 6), hy(S, 6))
+          prims[#prims + 1] = text_prim(status, theme.micro, S,
+            status_ink(status, column.status_ink), xs[index] + wx(S, 10), y)
+        end
+      else
+        local text = tostring(value or "")
+        if text ~= "" then
+          local x = xs[index]
+          if column.align == "right" then
+            x = x + widths[index] - estimate_width(text, theme.micro, S) - wx(S, 8)
+          end
+          prims[#prims + 1] = text_prim(text, theme.micro, S,
+            ink(column.ink or "text", "table.ink"), x, y)
+        end
+      end
+    end
+    if n.row_action then
+      local key = n.row_key and row[n.row_key] or row_index
+      local row_id = (n.id or "table") .. "-row-" .. row_index
+      if key ~= nil then
+        row_id = row_id .. "-" .. (tostring(key):gsub("[^%w%-_]", "-"):sub(1, 48))
+      end
+      hit_region(prims, {
+        id = row_id, action = n.row_action, body = row,
+        label = tostring(key or row_index), x = pad - wx(S, 4), y = y,
+        w = width - pad * 2 + wx(S, 8), h = hy(S, row_px),
+        enabled = row.enabled,
+      })
+    end
+    y = y - hy(S, row_px)
+  end
+  return { h = height, p = prims }
+end
+
+local function lay_chart(n, S, width)
+  local theme = S.theme
+  local height = hy(S, n.h or 420)
+  local pad = wx(S, space(n.pad or "md", "chart.pad"))
+  local prims = {
+    rect_prim(n.ink or "surface", 0.9, radius(n.radius or "md", "chart.radius"),
+      -wx(S, 4), 0, width + wx(S, 8), height),
+  }
+  local y = -hy(S, 12)
+  local header_y = y
+  if n.title and tostring(n.title) ~= "" then
+    prims[#prims + 1] = text_prim(tostring(n.title), theme.small, S, "text", pad, y)
+    y = y - hy(S, theme.small * 1.5)
+  end
+  if n.subtitle and tostring(n.subtitle) ~= "" then
+    prims[#prims + 1] = text_prim(tostring(n.subtitle), theme.micro, S, "muted", pad, y)
+    y = y - hy(S, theme.micro * 1.5)
+  end
+  if n.status and tostring(n.status) ~= "" then
+    local status = tostring(n.status)
+    prims[#prims + 1] = text_prim(status, theme.micro, S,
+      status_ink(n.status, n.status_ink),
+      width - pad - estimate_width(status, theme.micro, S), header_y)
+  end
+  local left = pad + wx(S, 30)
+  local right = width - pad
+  local bottom = -height + hy(S, 52)
+  local top = y - hy(S, 4)
+  local plot_w = math.max(wx(S, 16), right - left)
+  local plot_h = math.max(hy(S, 16), top - bottom)
+  prims[#prims + 1] = rect_prim(ink("surface_sunken", "chart.plot.ink"), 0.8, radius("sm", "chart.plot"),
+    left, top, plot_w, plot_h)
+  local series = n.series or {}
+  local x_min, x_max = tonumber(n.x_min), tonumber(n.x_max)
+  local y_min, y_max = tonumber(n.y_min), tonumber(n.y_max)
+  for _, item in ipairs(series) do
+    for _, point in ipairs(item.points or {}) do
+      local px, py = point_xy(point)
+      if px ~= nil then
+        x_min = x_min and math.min(x_min, px) or px
+        x_max = x_max and math.max(x_max, px) or px
+        y_min = y_min and math.min(y_min, py) or py
+        y_max = y_max and math.max(y_max, py) or py
+      end
+    end
+  end
+  x_min, x_max = x_min or 0, x_max or 1
+  y_min, y_max = y_min or 0, y_max or 1
+  if x_min == x_max then x_max = x_min + 1 end
+  if y_min == y_max then y_max = y_min + 1 end
+  local function sx(value) return left + (value - x_min) / (x_max - x_min) * plot_w end
+  local function sy(value) return bottom + (value - y_min) / (y_max - y_min) * plot_h end
+  for index = 0, 3 do
+    local gy = top - plot_h * index / 3
+    prims[#prims + 1] = rect_prim("muted", 0.08, 0, left, gy, plot_w, hy(S, 1))
+  end
+  for index = 0, 2 do
+    local value = y_min + (y_max - y_min) * index / 2
+    local text = value_format(value, n.y_decimals, n.unit)
+    prims[#prims + 1] = text_prim(text, theme.micro, S, "muted",
+      left - estimate_width(text, theme.micro, S) - wx(S, 6), sy(value) - hy(S, 4))
+  end
+  for index = 0, 2 do
+    local value = x_min + (x_max - x_min) * index / 2
+    local text = value_format(value, n.x_decimals)
+    prims[#prims + 1] = text_prim(text, theme.micro, S, "muted",
+      sx(value) - estimate_width(text, theme.micro, S) / 2, bottom - hy(S, 14))
+  end
+  if n.selection then
+    local from = math.max(x_min, math.min(x_max, tonumber(n.selection.x0) or x_min))
+    local to = math.max(x_min, math.min(x_max, tonumber(n.selection.x1) or x_max))
+    if from > to then from, to = to, from end
+    prims[#prims + 1] = rect_prim("primary", 0.12, 0, sx(from), top,
+      math.max(wx(S, 1), sx(to) - sx(from)), plot_h)
+  end
+  if n.threshold then
+    local value = tonumber(n.threshold.value)
+    if value ~= nil then
+      local ty = sy(math.max(y_min, math.min(y_max, value)))
+      local threshold_ink_name = ink(n.threshold.ink or "warning", "chart.threshold.ink")
+      prims[#prims + 1] = rect_prim(threshold_ink_name, 0.7, 0,
+        left, ty, plot_w, hy(S, 1))
+      if n.threshold.label and tostring(n.threshold.label) ~= "" then
+        local text = tostring(n.threshold.label)
+        prims[#prims + 1] = text_prim(text, theme.micro, S, threshold_ink_name,
+          right - estimate_width(text, theme.micro, S), ty - hy(S, 10))
+      end
+    end
+  end
+  local columns = math.max(2, math.floor(tonumber(n.columns) or 12))
+  local col_w = plot_w / columns
+  for series_index, item in ipairs(series) do
+    local ink_name = ink(item.ink or "primary", "chart.series.ink")
+    for column, point in ipairs(sample_points(item.points, columns)) do
+      local value = math.max(y_min, math.min(y_max, point.y))
+      local py = sy(value)
+      local bar_h = math.max(hy(S, 1), py - bottom)
+      prims[#prims + 1] = rect_prim(ink_name, tonumber(item.opacity) or 0.26, 0,
+        left + (column - 1) * col_w, py, math.max(wx(S, 1), col_w - wx(S, 1)), bar_h)
+      prims[#prims + 1] = rect_prim(ink_name, 1, radius("sm", "chart.cap"),
+        left + (column - 1) * col_w, py, math.max(wx(S, 1), col_w - wx(S, 1)), hy(S, 2))
+    end
+  end
+  hit_region(prims, {
+    id = (n.id or "chart") .. "-plot", action = n.plot_action,
+    body = { x_min = x_min, x_max = x_max, selection = n.selection },
+    label = n.title and tostring(n.title) or "chart",
+    x = left, y = top, w = plot_w, h = plot_h, enabled = n.enabled,
+  })
+  local legend_x = pad
+  for index, item in ipairs(series) do
+    local label = tostring(item.label or ("series " .. index))
+    local ink_name = ink(item.ink or "primary", "chart.legend.ink")
+    prims[#prims + 1] = text_prim(label, theme.micro, S, ink_name, legend_x, bottom - hy(S, 34))
+    local legend_w = estimate_width(label, theme.micro, S)
+    hit_region(prims, {
+      id = (n.id or "chart") .. "-legend-" .. index,
+      action = n.legend_action,
+      body = { series = item.id or index, label = label, ink = item.ink },
+      label = label, x = legend_x, y = bottom - hy(S, 34),
+      w = legend_w + wx(S, 8), h = hy(S, theme.micro * 1.8),
+      enabled = item.enabled,
+    })
+    legend_x = legend_x + legend_w + wx(S, 18)
+  end
   return { h = height, p = prims }
 end
 
@@ -534,7 +968,7 @@ lay_node = function(n, S, width)
           action = n.action,
           body = n.body,
           enabled = n.enabled ~= false,
-          appearance = "invisible",
+          appearance = "hit",
         },
         translation = { 0, 0, 0 }, scale = { wide, side, 1 },
       }
@@ -569,7 +1003,7 @@ lay_node = function(n, S, width)
           action = n.action,
           body = n.body,
           enabled = n.enabled ~= false,
-          appearance = "invisible",
+          appearance = "hit",
         },
         translation = { 0, 0, 0 }, scale = { label_w, height, 1 },
       }
@@ -650,6 +1084,18 @@ lay_node = function(n, S, width)
       prims[#prims + 1] = text_prim(line, theme.body, S, "muted", indent, -(index - 1) * advance)
     end
     return { h = height, p = prims }
+
+  elseif kind == "stat" then
+    return lay_stat(n, S, width)
+
+  elseif kind == "gauge" then
+    return lay_gauge(n, S, width)
+
+  elseif kind == "table" then
+    return lay_table(n, S, width)
+
+  elseif kind == "chart" then
+    return lay_chart(n, S, width)
 
   elseif kind == "row" then
     -- Rows place aligned pairs, or weighted columns when `widths` is given.

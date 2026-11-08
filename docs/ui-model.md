@@ -1,7 +1,8 @@
 # UI model
 
-Status: adopted, partly implemented. `spores/markdown/ui/lib/ui.lua` is the
-first implementation; the rest is host work.
+Status: adopted, partly implemented. `sdk/ui/ui.lua` is the canonical library;
+`spores/gallery` is the fixture-driven component catalog. The older per-Spore
+copies in `markdown` and `unibus` are migration debt, not the source of truth.
 
 This reconciles a declarative-UI proposal with the constraints the system
 already has: Canvas owns layout and pixels, `soil:canvas` is the guest ABI, a
@@ -26,11 +27,18 @@ snapshot (from the Spore, wasm)     actions (intents, back to the Spore)
 - **Canvas renders.** The host ABI stays `soil:canvas`; the library is a
   convenience layer over it, not a second renderer.
 
+There are two layout paths, and they answer different questions. `canvas.layout`
+is the host path: it solves a flex tree through `soil-layout` (taffy) with measured
+text, and `unibus` uses it for its inbox. `sdk/ui/ui.lua` is the portable Lua path:
+one pass, no host measurement, so the same tree previews and tests without a
+compositor. The dashboard nodes in this document use the portable path; a Spore
+that needs measured flex layout can call `canvas.layout` directly.
+
 ## What we adopted from the proposal
 
 | Proposal | Here |
 |---|---|
-| Declarative `ui.*` tree | `ui.column`, `ui.row`, `ui.card`, `ui.stack`, `ui.text`, `ui.code`, `ui.diagram`, `ui.bullets`, `ui.quote`, `ui.rule`, `ui.spacer` |
+| Declarative `ui.*` tree | `ui.column`, `ui.row`, `ui.card`, `ui.stack`, `ui.text`, `ui.code`, `ui.diagram`, `ui.bullets`, `ui.quote`, `ui.rule`, `ui.spacer`, `ui.stat`, `ui.gauge`, `ui.table`, `ui.chart` |
 | Named tokens over raw values | `gap = "sm"`, `style = "title"`, `ink = "muted"`; sizes come from `module.theme` |
 | Layout primitives instead of coordinates | column/row/card flow, measured in the library |
 | Incomplete UI must not blank | already true: a rejected reload keeps the last good scene on screen |
@@ -86,9 +94,10 @@ module host reads — the same artifact, produced early.
 4. **Partial source tolerance** — a truncated `ui.column {` should render what is
    complete, not keep the whole previous page. The last-good-scene guard is the
    fallback, not the feature.
-5. **Text metrics** — the library currently estimates a character width to
-   right-align a status label. Real metrics (or a `measure` host call) would let
-   rows and wrapping stop guessing.
+5. **Text metrics** — Canvas exposes `canvas.measure_text`, but the portable
+   library still estimates a character width to sequence rows and right-align
+   labels. Adopting measured widths in the one-pass layout is a separate change;
+   it would improve long labels without changing the tree shape.
 
 ## Still open
 
