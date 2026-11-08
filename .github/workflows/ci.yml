@@ -27,6 +27,11 @@ jobs:
         with:
           repository: fungOS-linux/fungos-sdk
           path: _sdk
+          # The SDK's default branch is `master`; `tend api-check` and the
+          # documented-action check landed on `main`. Without this, the step
+          # below ran a `tend` that does not implement the subcommand and died
+          # with `missing view: api-check` before reading a single Spore's docs.
+          ref: main
 
       - name: Spore Lua API docs
         run: |

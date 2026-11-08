@@ -13,6 +13,8 @@ spores/consent
 spores/contacts
 spores/crm
 spores/dfm-report
+spores/dragshift
 spores/media-probe
 spores/mush
+spores/search
 spores/surface-probe
