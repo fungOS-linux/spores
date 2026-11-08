@@ -1,0 +1,42 @@
+schema = 1
+
+[spore]
+id = "dev.fungos.git"
+name = "git"
+version = "0.1.0"
+license = "MIT"
+summary = "Landing queue: finished work awaiting a merge decision"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { canvas = "1.0.0", records = "0.1.0" }
+
+[ui]
+entry = "ui/review.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+surfaces = ["canvas", "native", "web"]
+
+[grants]
+# Read-only presentation. The queue is a projection of tracker state, which
+# arrives as records; the view names intents and never performs one.
+"soil:records.read" = "read the review queue records"
+"soil:canvas" = "present the landing queue surface"
+
+[denied]
+# v0 proposes decisions; something with authority executes them. A view that
+# could merge would be a second authority over the work graph, and the tracker
+# already is the one.
+"soil:records.write" = ["the queue is derived, never stored"]
+"soil:http" = ["v0 talks to no forge; PR state arrives in the snapshot"]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+
+[presentation]
+badge = "G"
+color = "#f0a35e"
