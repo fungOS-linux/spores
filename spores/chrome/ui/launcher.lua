@@ -139,9 +139,10 @@ for n = 0, 5 do
       x = p.x(66), y = p.y(y + (row_height - k.type.body) * 0.5),
       size = k.type.body, ink = selected and "text" or "text", z = 1,
     })
-    widget.hit({
+    widget.button({
       id = key, label = tostring(title):sub(1, 24),
       action = "select", body = { origin = "desktop-launcher" },
+      appearance = "quiet",
       x = p.x(8), y = p.y(y + 2), width = p.w(w - 16), height = p.h(row_height - 4),
       enabled = i[key .. "-available"] == true,
     })

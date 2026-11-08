@@ -4,8 +4,6 @@
 //! snapshots (via soil:search), and the Spore returns ranked locators.
 //! This makes the ranking algorithm live-reloadable and per-user via soil:appdata.
 
-use std::cmp::Ordering;
-
 /// A simplified version of a search hit from `soil:search`.
 #[derive(Debug, Clone)]
 pub struct SearchHit {
@@ -89,7 +87,7 @@ pub fn rank_hits(
         ranked.push((hit, rank_score));
     }
 
-    ranked.sort_by(|a, b| b.1.cmp(&a.1));
+    ranked.sort_by_key(|item| std::cmp::Reverse(item.1));
     ranked
 }
 
@@ -111,7 +109,10 @@ mod tests {
     #[test]
     fn alias_exact_match_beats_exact_title_match() {
         let hits = vec![hit("app-1", "Safari", 100), hit("app-2", "Chrome", 100)];
-        let aliases = vec![Alias { shorthand: "c".into(), target_id: "app-2".into() }];
+        let aliases = vec![Alias {
+            shorthand: "c".into(),
+            target_id: "app-2".into(),
+        }];
         let frecency = HashMap::new();
         let ranked = rank_hits(hits, &frecency, &aliases, "c");
         assert_eq!(ranked[0].0.id, "app-2");
@@ -121,7 +122,13 @@ mod tests {
     fn frecency_boosts_recently_used_items() {
         let hits = vec![hit("app-1", "Safari", 100), hit("app-2", "Chrome", 100)];
         let mut frecency = HashMap::new();
-        frecency.insert("app-2".into(), Frecency { uses: 5, last_used_at_ms: 900_000 });
+        frecency.insert(
+            "app-2".into(),
+            Frecency {
+                uses: 5,
+                last_used_at_ms: 900_000,
+            },
+        );
         let aliases = vec![];
         let ranked = rank_hits(hits, &frecency, &aliases, "c");
         assert_eq!(ranked[0].0.id, "app-2");

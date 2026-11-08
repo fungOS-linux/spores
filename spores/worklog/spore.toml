@@ -1,0 +1,46 @@
+schema = 1
+
+[spore]
+id = "dev.fungos.worklog"
+name = "worklog"
+version = "0.1.0"
+license = "MIT"
+summary = "Read-only timeline of what happened across Marbles, GitHub and threads"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { canvas = "1.0.0", records = "0.1.0" }
+
+[ui]
+entry = "ui/worklog.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+# The composed Lua UI Canvas launches for this app. Composition writes it into
+# the runtime modules directory; the launcher opens it as a window.
+canvas_module = "spore-dev-worklog"
+surfaces = ["canvas", "native", "web"]
+
+[grants]
+# Read-only by grant set, not by intention. The receiver that ingests webhooks
+# is a host-side process; nothing in this Spore can write an event, reach a
+# network, or see a secret. That is what makes "who wrote this row?" answerable.
+"soil:records.read" = "read the worklog.event collection"
+"soil:canvas" = "present the worklog surface"
+
+[denied]
+# No producer capability: ingesting is the receiver's job.
+"soil:records.write" = ["a viewer that could also write makes the log unprovable"]
+"soil:records.sync" = ["sync is a store concern; this Spore reads one store"]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+
+[presentation]
+# A launcher row needs to be recognisable without reading it. A monogram is a
+# character, not an asset: it cannot go missing on someone else's machine.
+badge = "W"
+color = "#8fbf7f"

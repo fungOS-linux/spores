@@ -1,8 +1,22 @@
-# unibus Spore
+# inbox Spore
 
-Initial `soil:unibus` app. It consumes bounded mail/chat metadata from the
-Unibus and stores it as `soil:records` entries so the inbox survives restarts
-and syncs across devices.
+Read-only inbox app over `soil:unibus` metadata. It consumes bounded mail/chat
+metadata from the bus and stores it as `soil:records` entries so the inbox
+survives restarts and syncs across devices.
+
+**The Spore id is `dev.fungos.inbox`, not `dev.fungos.unibus`.** `soil:unibus.*`
+is a host capability this Spore is a *client* of, exactly the way `soil:records`
+is. Naming the Spore after the bus would read as owning it, and the app that
+composes and sends mail (`dev.fungos.mail`, not built yet) has to be a different
+Spore with a different grant set — otherwise "can this app send?" can only be
+answered by reading the view. The directory is still `spores/unibus/` and the
+crate still `spore-unibus`; only the identity the host reads has moved.
+
+> Renaming a Spore id is not free. `ui.configure(style, app_id)` resolves
+> per-app theme overrides by id, so a personal `~/.config/fungos/ui.lua` that
+> keys `app["dev.fungos.unibus"]` has to be rekeyed to `app["dev.fungos.inbox"]`
+> or it silently stops applying. Records are keyed by collection, not by app id,
+> so the metadata cache is unaffected.
 
 - **Read-only.** No `soil:unibus.publish`; sending is a future, separate grant.
 - **Metadata only.** `email.message.v1` / `chat.message.v1` bodies are metadata;

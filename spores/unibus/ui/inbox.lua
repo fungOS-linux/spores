@@ -4,7 +4,7 @@
 -- panes, and the host resolves the actual geometry with measured text.
 
 local M = {}
-M.name = "unibus"
+M.name = "inbox"
 M.version = "0.3.0"
 
 local W, H = 1086, 1569
@@ -26,18 +26,27 @@ local function sw(px) return 8 * px / W end
 local function sh(px) return 8 * px / H end
 local function ts(px) return px / ((base() or 16) * 1.25) end
 
-local function rect(id, x, y, w, h, ink, opacity, radius)
+-- Canvas rejects ink roles it does not know rather than falling back to body
+-- text. The theme has eight roles; a surface the theme does not name has to be
+-- spelled with one of them. The background rect below used "background", which
+-- rendered nothing at all: the whole module was rejected.
+local INK = { surface = "muted", background = "muted" }
+local function ink(name)
+  return INK[name] or name
+end
+
+local function rect(id, x, y, w, h, role, opacity, radius)
   canvas.rect {
-    id = id, ink = ink or "surface", opacity = opacity or 1.0,
+    id = id, ink = ink(role or "surface"), opacity = opacity or 1.0,
     radius = radius or 8,
     translation = { nx(x), ny(y), Z },
     scale = { sw(math.max(1, w)), sh(math.max(1, h)), 1 },
   }
 end
 
-local function text(id, value, x, y, px, ink, z)
+local function text(id, value, x, y, px, role, z)
   canvas.text {
-    id = id, text = tostring(value or ""), ink = ink or "text",
+    id = id, text = tostring(value or ""), ink = ink(role or "text"),
     translation = { nx(x), ny(y), z or (Z + 0.1) },
     scale = { ts(px), ts(px), 1 },
   }
@@ -48,6 +57,30 @@ local function clip(value, limit)
   if value == "" then return "—" end
   if #value <= limit then return value end
   return value:sub(1, limit - 1) .. "…"
+end
+
+-- `widget.hit` has no host implementation: Canvas's `widget` is the theming
+-- library (pixel_space, button, panel, label, badge, metric) and Soil exposes no
+-- hit targets. Calling it crashed this module inside Canvas. Call it when a host
+-- provides it, otherwise record the spec so the row is still addressable by
+-- whatever consumes the scene. See docs/interaction-gap.md.
+local pending_hits = {}
+local function hit(spec)
+  if type(widget) == "table" and type(widget.hit) == "function" then
+    widget.hit(spec)
+  else
+    pending_hits[#pending_hits + 1] = spec
+  end
+end
+M.pending_hits = pending_hits
+M.hit = hit
+
+-- Canvas has no layout service (see docs/interaction-gap.md). Prefer the host's
+-- `canvas.layout` when one provides it, otherwise lay the tree out in Lua. The
+-- fallback is a real layout, so the fixture and Canvas draw the same scene.
+local function layout(tree, width, height)
+  if canvas and canvas.layout then return canvas.layout(tree, width, height) end
+  return ui.layout(tree, width, height)
 end
 
 local function label(id, value, size, layout)
@@ -253,7 +286,7 @@ function M.render(snapshot)
   use_viewport()
   snapshot = apply_event(snapshot or {})
   local visible = math.min(#(snapshot.threads or {}), 14)
-  local laid = canvas.layout(tree(snapshot), W, H)
+  local laid = layout(tree(snapshot), W, H)
 
   rect("inbox-bg", 0, 0, W, H, "background", 1.0, 0)
   local search = find(laid, "inbox-search")
@@ -303,7 +336,7 @@ function M.render(snapshot)
     for index = 1, visible do
       local row = find(laid, "thread-" .. index)
       if row then
-        widget.hit { id = "thread-" .. index, label = "hit",
+        hit { id = "thread-" .. index, label = "hit",
           x = nx(row.rect.x), y = ny(row.rect.y), width = sw(row.rect.width), height = sh(row.rect.height) }
       end
     end

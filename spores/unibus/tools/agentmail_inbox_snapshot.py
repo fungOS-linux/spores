@@ -121,7 +121,10 @@ def main() -> int:
         latest = thread_messages[0]
         subject = clean(latest.get("subject") or "(no subject)", 140)
         sender = latest.get("from") or ""
-        preview = clean(latest.get("preview") or "", 220)
+        # The list clips to 62 chars and the detail pane wraps one brief, so a
+        # long preview is bytes the module cannot use. The composed module is
+        # capped at 32 KiB by Canvas and the snapshot is inlined into it.
+        preview = clean(latest.get("preview") or "", 100)
         is_unread = any("unread" in (item.get("labels") or []) for item in thread_messages)
         is_urgent = any(
             word in subject.lower()
@@ -133,32 +136,31 @@ def main() -> int:
         messages_out = []
         for item in thread_messages[:8]:
             msg_stamp, msg_iso = when(item.get("timestamp", ""))
+            # No per-message preview: nothing renders it. With 8 messages per
+            # thread at 320 chars this was roughly a third of the snapshot, and
+            # the snapshot is inlined into the composed Canvas module, which is
+            # capped at 32 KiB. Thread previews (below) are the only ones the
+            # view draws.
             messages_out.append(
                 {
                     "from": item.get("from") or "",
                     "time": msg_stamp,
-                    "preview": clean(item.get("preview") or "", 320),
                 }
             )
         threads.append(
             {
-                "id": f"agentmail/{inbox_id}/{thread_id}",
-                "collection": "email.message",
-                "kind": "mail",
+                "id": f"agentmail/{inbox_id}/[REDACTED]",
                 "title": subject,
                 "sender": sender_name(sender),
                 "preview": preview,
                 "time": stamp,
-                "observed_at": iso,
                 "unread": is_unread,
                 "urgent": is_urgent,
-                "status": "open",
-                "priority": "high" if is_urgent else "normal",
                 "labels": labels_for(latest, subject, sender),
-                "brief": preview,
                 "messages": messages_out,
             }
         )
+
 
     threads.sort(key=lambda item: item.get("observed_at") or "", reverse=True)
     selected = next((thread for thread in threads if thread["unread"]), threads[0] if threads else None)
