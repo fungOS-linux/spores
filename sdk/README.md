@@ -19,7 +19,8 @@ migration debt, and should not be used as the source of truth for new work.
 - `ui.lua` — the library: `column`, `row`, `card`, `stack`, `radial`, `text`,
   `rule`, `code`, `diagram`, `bullets`, `quote`, `bar`, `fill`, `button`, `kbd`,
   `icon`, `icon_button`, plus the dashboard nodes `stat`, `gauge`, `table`, and
-  `chart`, and the layout pass (`lay`) and token helpers.
+  `chart`, and `host_surface` for a host-owned GPU/scene layer. The layout pass
+  (`lay`) and token helpers stay in the same file.
 - `ui.lttb(points, threshold)` and `ui.chart_window(points, count)` — dense-series
   decimation and streaming window helpers. `ui.chart` uses LTTB automatically
   before it emits marks; set `decimate = false` to keep uniform sampling.
@@ -33,7 +34,9 @@ and `plot_action`. Actions are optional, so a headless preview or a non-Canvas h
 still renders the same tree.
 
 `spores/gallery` is the fixture-driven catalog and screenshot for these nodes,
-including the five-panel ChartGPU fixture.
+including the five-panel ChartGPU fixture. `ui.host_surface` is the Lua-side
+placement point for a native GPU lease; the host must grant the resource and
+provide `canvas.host_resource`.
 
 ## Rules the library enforces
 

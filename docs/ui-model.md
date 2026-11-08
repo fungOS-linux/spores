@@ -44,7 +44,7 @@ native host's resident dense-buffer decimation.
 
 | Proposal | Here |
 |---|---|
-| Declarative `ui.*` tree | `ui.column`, `ui.row`, `ui.card`, `ui.stack`, `ui.text`, `ui.code`, `ui.diagram`, `ui.bullets`, `ui.quote`, `ui.rule`, `ui.spacer`, `ui.stat`, `ui.gauge`, `ui.table`, `ui.chart` |
+| Declarative `ui.*` tree | `ui.column`, `ui.row`, `ui.card`, `ui.stack`, `ui.text`, `ui.code`, `ui.diagram`, `ui.bullets`, `ui.quote`, `ui.rule`, `ui.spacer`, `ui.stat`, `ui.gauge`, `ui.table`, `ui.chart`, `ui.host_surface` |
 | Named tokens over raw values | `gap = "sm"`, `style = "title"`, `ink = "muted"`; sizes come from `module.theme` |
 | Layout primitives instead of coordinates | column/row/card flow, measured in the library |
 | Incomplete UI must not blank | already true: a rejected reload keeps the last good scene on screen |

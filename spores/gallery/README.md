@@ -39,6 +39,7 @@ Run it headlessly with:
 
 ```sh
 lua tests/chartgpu_fixture.lua
+lua tests/host_surface_fixture.lua
 ```
 
 ## Run

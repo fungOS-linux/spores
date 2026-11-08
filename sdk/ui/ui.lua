@@ -248,6 +248,18 @@ function ui.chart(series, props)
   return node("chart", props)
 end
 
+-- A host-owned surface placed in the Lua layout. `resource` names a manifest
+-- grant; the host resolves it to a scene, texture, or device surface. The view
+-- never sees a texture handle or pixels, and the library never draws over it.
+function ui.host_surface(resource, props)
+  if type(resource) ~= "string" or resource == "" then
+    fail("ui.host_surface needs a non-empty resource alias", 2)
+  end
+  props = props or {}
+  props.resource = resource
+  return node("host_surface", props)
+end
+
 -- An interaction intent. The Spore receives it; the view never runs it.
 function ui.action(name, payload)
   return { action = name, payload = payload }
@@ -986,7 +998,7 @@ lay = function(n, S, width)
       -- A rect's scale is a length; a text's scale is a font multiplier, so its
       -- drawn height has to be recovered from the size it asked for.
       local extent
-      if prim.opacity ~= nil or prim.button then
+      if prim.opacity ~= nil or prim.button or prim.host then
         extent = prim.scale[2]
       else
         extent = hy(S, prim.scale[1] * prim.scale[1] * S.theme.body * S.depth)
@@ -1021,6 +1033,14 @@ lay_node = function(n, S, width)
     local h = n.h and hy(S, n.h) or 0
     return { h = h, p = { rect_prim(n.ink or "surface", n.opacity or 0.6,
                            radius(n.radius, "fill.radius"), 0, 0, n.w and wx(S, n.w) or width, h) } }
+
+  elseif kind == "host_surface" then
+    local h = n.h and hy(S, n.h) or hy(S, n.default_h or 240)
+    local id = n.id or ("host-" .. tostring(n.resource))
+    return { h = h, p = { {
+      host = { id = id, resource = n.resource },
+      translation = { 0, 0, 0 }, scale = { width, h, 1 },
+    } } }
 
   elseif kind == "icon" then
     local size = n.size and theme[n.size] or theme.body
@@ -1304,6 +1324,17 @@ function ui.render(tree, theme)
         enabled = spec.enabled,
         appearance = spec.appearance,
       })
+    elseif prim.host then
+      if not canvas.host_resource then
+        fail("host_surface needs canvas.host_resource; this host is too old", 2)
+      end
+      local spec = prim.host
+      canvas.host_resource({
+        id = spec.id,
+        resource = spec.resource,
+        translation = prim.translation,
+        scale = prim.scale,
+      })
     end
   end
 
@@ -1311,7 +1342,7 @@ function ui.render(tree, theme)
   for _, prim in ipairs(prims) do
     index = index + 1
     local id = prim.id or string.format("e%d", index)
-    if prim.button then
+    if prim.button or prim.host then
       -- already registered above
     elseif prim.opacity ~= nil then
       canvas.rect({ id = id, ink = prim.ink, opacity = prim.opacity, radius = prim.radius,
