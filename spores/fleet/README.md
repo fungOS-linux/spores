@@ -84,6 +84,10 @@ The topology card is `ui.graph`:
 - **Positions are data.** `spore-fleet` lays out one row per site and a host row
   to its right; the library draws the coordinates it is given. A force layout or
   a GPU layout can replace the producer without touching the view.
+- **Only sites and live peers are named.** A stale dot is a fact (the row
+  exists); its name is not what a wall needs, and the attention table carries it.
+  The library fits each remaining label to the gap it actually has, and the
+  producer no longer truncates names before the library can measure them.
 - **Edges are rotated rects**, one node per edge, so the same graph renders on
   Canvas's current rect/text ABI, in the browser and in the preview.
 - **A GPU producer takes over by grant.** The producer names
@@ -101,7 +105,7 @@ degrading them to `Group` — see
 
 ## The wall budget
 
-The fixture is **254 primitives**, under the stock Canvas cap of 256. That
+The fixture is **251 primitives**, under the stock Canvas cap of 256. That
 number is an assertion in `tests/ui_fixture.lua`: a view that grows one more
 panel has to give something up, not discover the limit on the wall.
 

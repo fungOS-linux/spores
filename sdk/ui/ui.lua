@@ -345,6 +345,10 @@ end
 -- the action body, so only the pixels are lost.
 local function fit_text(value, size, S, width)
   local text = tostring(value or "")
+  -- The estimate is 0.62em and a real face can be wider. Fitting to the exact
+  -- column means a cell that passes the estimate by two pixels and touches its
+  -- neighbour on the wall; 94% is the margin that keeps the gutter a gutter.
+  width = width * 0.94
   if width <= 0 or estimate_width(text, size, S) <= width then return text end
   for count = ulen(text) - 1, 1, -1 do
     local head = text
@@ -355,6 +359,27 @@ local function fit_text(value, size, S, width)
       head = string.sub(text, 1, count)
     end
     local candidate = head .. "…"
+    if estimate_width(candidate, size, S) <= width then return candidate end
+  end
+  return "…"
+end
+
+-- The same cut from the other end. Dense rows are full of shared prefixes
+-- (`fpl-beachhead-1`, `fpl-beachhead-2`); truncating the head turns two
+-- different peers into the same label. The suffix is the part that tells them
+-- apart, so keep it and spend the ellipsis on the prefix.
+local function fit_text_tail(value, size, S, width)
+  local text = tostring(value or "")
+  if width <= 0 then return "…" end
+  if estimate_width(text, size, S) <= width then return text end
+  local chars = ulen(text)
+  for count = chars - 1, 1, -1 do
+    local start = chars - count + 1
+    if utf8 and utf8.offset then
+      local offset = utf8.offset(text, start)
+      if offset then start = offset end
+    end
+    local candidate = "…" .. string.sub(text, start)
     if estimate_width(candidate, size, S) <= width then return candidate end
   end
   return "…"
@@ -737,8 +762,17 @@ local function lay_stat(n, S, width)
   prims[#prims + 1] = text_prim(value, theme.title, S,
     ink(n.value_ink or "text", "stat.value_ink"), pad, -hy(S, 30))
   if n.unit and tostring(n.unit) ~= "" then
-    prims[#prims + 1] = text_prim(tostring(n.unit), theme.micro, S, "muted",
-      pad, -height + hy(S, 38))
+    -- The unit belongs to the number, not to the card's bottom edge. Beside the
+    -- value and on its baseline is one reading; a unit pinned to the floor makes
+    -- the reader collect two separate facts from two corners of the card.
+    local value_w = estimate_width(value, theme.title, S)
+    local unit = fit_text(tostring(n.unit), theme.micro, S,
+      math.max(0, width - pad * 2 - value_w - wx(S, 6)))
+    if unit ~= "" and unit ~= "…" then
+      prims[#prims + 1] = text_prim(unit, theme.micro, S, "muted",
+        pad + value_w + wx(S, 6),
+        -hy(S, 30 + (theme.title - theme.micro) * 0.8))
+    end
   end
   if n.delta and tostring(n.delta) ~= "" then
     local delta_ink = n.delta_ink or ((tonumber(n.delta) or 0) >= 0 and "success" or "danger")
@@ -856,19 +890,33 @@ local function lay_table(n, S, width)
     cursor = cursor + widths[index] + gap
   end
   for index, column in ipairs(columns) do
-    prims[#prims + 1] = text_prim(
-      fit_text(tostring(column.label or column.key or ""), theme.micro, S, widths[index]),
-      theme.micro, S, "muted", xs[index], y)
+    -- A right-aligned column right-aligns its heading too. A heading pinned left
+    -- over a column of right-aligned numbers is two axes in one column, and the
+    -- reader has to check which one the number belongs to.
+    local label = fit_text(tostring(column.label or column.key or ""), theme.micro, S, widths[index])
+    local x = xs[index]
+    if column.align == "right" then
+      x = x + widths[index] - estimate_width(label, theme.micro, S) - wx(S, 8)
+    end
+    prims[#prims + 1] = text_prim(label, theme.micro, S, "muted", x, y)
   end
   y = y - header
   prims[#prims + 1] = rect_prim(ink("divider", "table.divider.ink"), 0.35, 0,
     pad, y, width - pad * 2, hy(S, 1))
   y = y - hy(S, 6)
   local available = math.max(0, math.floor((height + y + hy(S, 14)) / hy(S, row_px)))
+  -- Cells sit on the row's centre line, not its top edge. A 20px row with a
+  -- 15px face leaves two pixels above and five below at the top, which reads as
+  -- every row sagging; centring costs one subtraction.
+  local cell_drop = hy(S, math.max(0, (row_px - theme.micro) * 0.35))
   for row_index = 1, math.min(#rows, available) do
     local row = rows[row_index]
+    local cell_y = y - cell_drop
     if n.zebra ~= false and row_index % 2 == 0 then
-      prims[#prims + 1] = rect_prim(ink("surface_raised", "table.row.ink"), 0.28, radius("sm", "table.row"),
+      -- `surface_raised` aliases to `surface`, so a zebra painted in it is the
+      -- card painted on itself: 28% of nothing. The sunken ground is a different
+      -- colour in every palette, which is what makes alternating rows read.
+      prims[#prims + 1] = rect_prim(ink("surface_sunken", "table.row.ink"), 0.5, radius("sm", "table.row"),
         pad - wx(S, 4), y, width - pad * 2 + wx(S, 8), hy(S, row_px))
     end
     for index, column in ipairs(columns) do
@@ -878,9 +926,9 @@ local function lay_table(n, S, width)
           math.max(0, widths[index] - wx(S, 12)))
         if status ~= "" then
           prims[#prims + 1] = rect_prim(status_ink(status, column.status_ink), 1,
-            radius("pill", "table.status"), xs[index], y + hy(S, 5), wx(S, 6), hy(S, 6))
+            radius("pill", "table.status"), xs[index], cell_y + hy(S, 5), wx(S, 6), hy(S, 6))
           prims[#prims + 1] = text_prim(status, theme.micro, S,
-            status_ink(status, column.status_ink), xs[index] + wx(S, 10), y)
+            status_ink(status, column.status_ink), xs[index] + wx(S, 10), cell_y)
         end
       else
         local text = fit_text(tostring(value or ""), theme.micro, S,
@@ -891,7 +939,7 @@ local function lay_table(n, S, width)
             x = x + widths[index] - estimate_width(text, theme.micro, S) - wx(S, 8)
           end
           prims[#prims + 1] = text_prim(text, theme.micro, S,
-            ink(column.ink or "text", "table.ink"), x, y)
+            ink(column.ink or "text", "table.ink"), x, cell_y)
         end
       end
     end
@@ -1108,22 +1156,38 @@ local function lay_graph(n, S, width)
   end
   local left, right = pad, width - pad
   local legend = n.legend or {}
-  local bottom = -height + hy(S, (#legend > 0) and 44 or 28)
+  local label_size = theme[n.label_size or "micro"] or theme.micro
+  local labels = n.labels ~= false
+  local has_below = false
+  if labels then
+    for _, item in ipairs(nodes) do
+      if item.label_position == "below" and item.label and tostring(item.label) ~= "" then
+        has_below = true
+        break
+      end
+    end
+  end
+  local field_bottom = -height + hy(S, (#legend > 0) and 44 or 28)
+  -- A below label hangs under its dot. Mapping 0 to the field's bottom edge
+  -- would clamp the last row's label onto its own rail, so the mapping stops a
+  -- line short and the field is still painted underneath the labels.
+  local bottom = field_bottom + (has_below and hy(S, label_size * 1.6) or 0)
   local top = y - hy(S, 6)
   local plot_w = math.max(wx(S, 16), right - left)
   local plot_h = math.max(hy(S, 16), top - bottom)
+  local field_h = math.max(hy(S, 16), top - field_bottom)
 
   if n.resource and tostring(n.resource) ~= "" then
     -- The producer owns every pixel after this point, including the labels.
     prims[#prims + 1] = {
       host = { id = n.id or ("graph-" .. tostring(n.resource)), resource = n.resource },
-      translation = { left, top, 0 }, scale = { plot_w, plot_h, 1 },
+      translation = { left, top, 0 }, scale = { plot_w, field_h, 1 },
     }
     return { h = height, p = prims }
   end
 
   prims[#prims + 1] = rect_prim("surface_sunken", 0.55, radius("sm", "graph.plot"),
-    left, top, plot_w, plot_h)
+    left, top, plot_w, field_h)
   local placed = graph_positions(nodes)
   local function px(x) return left + x * plot_w end
   local function py(graph_y) return bottom + graph_y * plot_h end
@@ -1136,7 +1200,7 @@ local function lay_graph(n, S, width)
     end
   end
 
-  local edge_width = hy(S, n.edge_width or 1.4)
+  local edge_width = hy(S, n.edge_width or 1.2)
   for _, edge in ipairs(edges) do
     local a, b = placed[tostring(edge.source)], placed[tostring(edge.target)]
     if a and b then
@@ -1147,7 +1211,7 @@ local function lay_graph(n, S, width)
         local stale = edge.state == "stale"
         prims[#prims + 1] = {
           ink = ink(edge.ink or n.edge_ink or "muted", "graph.edge.ink"),
-          opacity = tonumber(edge.opacity) or (stale and 0.08 or n.edge_opacity or 0.24),
+          opacity = tonumber(edge.opacity) or (stale and 0.07 or n.edge_opacity or 0.16),
           radius = radius("pill", "graph.edge"),
           translation = { x1, y1, -0.6 },
           scale = { length, edge_width, 1 },
@@ -1161,9 +1225,42 @@ local function lay_graph(n, S, width)
 
   local size = tonumber(n.node_size) or 7
   local halo = tonumber(n.halo_size) or 2.6
-  local sx, sy = wx(S, size), hy(S, size)
   local target_w, target_h = wx(S, 18), hy(S, 18)
-  local label_size = theme[n.label_size or "micro"] or theme.micro
+  -- How much room a below label has before it meets its neighbour's label, or
+  -- the edge of the plot. Centred labels need the centre-to-centre gap, not
+  -- half of it; the edge case needs twice the distance to the edge.
+  local function below_limit(item, point)
+    local nearest = math.huge
+    for _, other in ipairs(nodes) do
+      if other ~= item and other.label_position == "below" and other.label then
+        local other_point = placed[tostring(other.id)]
+        if other_point and math.abs(other_point.y - point.y) < 0.001 then
+          local distance = math.abs(px(other_point.x) - px(point.x))
+          if distance > 0.001 then nearest = math.min(nearest, distance) end
+        end
+      end
+    end
+    local edge = math.min(px(point.x) - left, right - px(point.x)) * 2
+    -- A label that exactly fills the gap is two labels touching at their
+    -- bounding boxes. Leave a visible gutter; the suffix is cheaper than the
+    -- wall of text reading as one word.
+    return math.min(nearest, edge) - wx(S, 10)
+  end
+  -- Two peers with the same fitted head in one row are one label drawn twice.
+  -- Count the heads first so the duplicate can keep its distinguishing suffix.
+  local below_heads = {}
+  if labels and has_below then
+    for _, item in ipairs(nodes) do
+      local point = placed[tostring(item.id)]
+      if point and item.label_position == "below" and item.label and tostring(item.label) ~= "" then
+        local head = fit_text(tostring(item.label), label_size, S,
+          math.max(0, below_limit(item, point)))
+        local key = tostring(math.floor(point.y * 1000 + 0.5)) .. "|" .. head
+        below_heads[key] = (below_heads[key] or 0) + 1
+      end
+    end
+  end
+  local below_drawn = {}
   for _, item in ipairs(nodes) do
     local point = placed[tostring(item.id)]
     if point then
@@ -1171,6 +1268,10 @@ local function lay_graph(n, S, width)
       local state = tostring(item.state or "live")
       local color = ink(item.ink or n.node_ink or "primary", "graph.node.ink")
       local opacity = tonumber(item.opacity) or (state == "stale" and 0.4 or 0.95)
+      -- A node's own size is hierarchy: a site dot is a parent, a peer dot is
+      -- a child. One global size makes nine rows of equals.
+      local node_size = tonumber(item.size) or size
+      local sx, sy = wx(S, node_size), hy(S, node_size)
       -- A halo is one extra node per dot, so it is opt-in: a graph of thirty
       -- peers pays for the glow on the ones that are live, not on all of them.
       if item.halo then
@@ -1179,26 +1280,55 @@ local function lay_graph(n, S, width)
       end
       prims[#prims + 1] = rect_prim(color, opacity, radius("pill", "graph.node"),
         x - sx * 0.5, y + sy * 0.5, sx, sy)
-      if n.labels ~= false and item.label and tostring(item.label) ~= "" then
+      if labels and item.label and tostring(item.label) ~= "" then
         local label = tostring(item.label)
-        local label_w = estimate_width(label, label_size, S)
         -- A layered graph puts hosts in a row, so their labels hang below the
         -- dot; a star graph puts them beside it. The producer knows which
         -- shape it drew, and one rule for both is how labels land on top of
         -- their neighbours.
         local position = item.label_position or (point.x > 0.5 and "left" or "right")
+        -- A label is annotation, not content: muted until the producer asks for
+        -- emphasis. Bright labels on a dark plot compete with the dots and turn
+        -- a graph into a wall of hostnames.
+        local label_ink = ink(item.label_ink or n.label_ink or "muted", "graph.label.ink")
         local lx, ly
         if position == "below" then
-          lx, ly = x - label_w * 0.5, y - hy(S, label_size * 1.7)
+          local original = label
+          local limit = math.max(0, below_limit(item, point))
+          label = fit_text(original, label_size, S, limit)
+          local key = tostring(math.floor(point.y * 1000 + 0.5)) .. "|" .. label
+          if (below_heads[key] or 0) > 1 then
+            label = fit_text_tail(original, label_size, S, limit)
+          end
+          -- Two rows can still carry the same text (a stale identity and a
+          -- live one for the same host, say). One label between the two dots
+          -- is less noise than the same word printed twice; the dots and the
+          -- table keep the fact that there are two.
+          local seen = tostring(math.floor(point.y * 1000 + 0.5)) .. "|" .. label
+          if below_drawn[seen] then
+            label = nil
+          else
+            below_drawn[seen] = true
+          end
+          if label then
+            local label_w = estimate_width(label, label_size, S)
+            lx, ly = x - label_w * 0.5, y - hy(S, label_size * 1.1)
+          end
         elseif position == "left" then
+          label = fit_text(label, label_size, S, math.max(0, x - sx - left - wx(S, 4)))
+          local label_w = estimate_width(label, label_size, S)
           lx, ly = x - sx - label_w, y - hy(S, label_size * 0.45)
         else
+          label = fit_text(label, label_size, S, math.max(0, right - (x + sx) - wx(S, 4)))
+          local label_w = estimate_width(label, label_size, S)
           lx, ly = x + sx, y - hy(S, label_size * 0.45)
         end
-        prims[#prims + 1] = text_prim(label, label_size, S,
-          state == "stale" and "muted" or "text",
-          math.max(left, math.min(right - label_w, lx)),
-          math.max(bottom + hy(S, 2), ly))
+        if label and label ~= "" and label ~= "…" then
+          local label_w = estimate_width(label, label_size, S)
+          prims[#prims + 1] = text_prim(label, label_size, S, label_ink,
+            math.max(left, math.min(right - label_w, lx)),
+            math.max(field_bottom + hy(S, 2), ly))
+        end
       end
       if n.node_action and widget and widget.button then
         prims[#prims + 1] = control_prim {

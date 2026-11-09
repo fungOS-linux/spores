@@ -49,7 +49,7 @@ assert(has_text("mycelium · fungOS"), "subtitle missing")
 assert(has_text("Mesh topology"), "graph card missing")
 assert(has_text("Attention"), "attention table missing")
 assert(has_text("Sites"), "sites table missing")
-assert(has_text("Release coverage"), "release gauge missing")
+assert(has_text("Release drift"), "release gauge missing")
 assert(has_text("wagar-house"), "a site label is missing")
 assert(has_text("pris"), "a live host label is missing")
 

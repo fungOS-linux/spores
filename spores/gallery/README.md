@@ -6,6 +6,9 @@ not metrics, alerts, or authority.
 
 ![Dashboard primitives](screenshot.png)
 
+The capture predates the graph card; `ui/gallery.lua` and the fixture check it
+even though this image does not show it yet.
+
 ## What it exercises
 
 - `ui.stat` — value, unit, delta, status, and an optional drill-in action.
@@ -14,6 +17,10 @@ not metrics, alerts, or authority.
   optional per-row actions.
 - `ui.chart` — title, status, axes, grid, threshold line, selection band, series
   legend, and optional legend/plot actions.
+- `ui.graph` — typed nodes and edges with positions as data. Edges are rotated
+  rects so the current ABI draws them, and a `resource` places a host GPU surface
+  instead. The catalog fixture exercises rails, per-node size, label placement,
+  live/stale inks and node hit regions.
 - Shared tokens for ink, spacing, radius, and type. Canvas's Lua scene ABI has a
   smaller semantic ink set than the library, so the library normalizes aliases
   such as `surface_sunken` and `divider` before emitting primitives.

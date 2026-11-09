@@ -34,9 +34,15 @@ _G.canvas = {
       opacity = s.opacity or 1, radius = s.radius or 0 }
   end,
   text = function(s)
+    -- The library asks for a font size by solving `scale^2 * body * depth = size`
+    -- (see text_prim). The preview has to finish that equation: using `scale *`
+    -- instead of `scale^2 *` drew every label about 40% larger than the width the
+    -- layout reserved, which is why tables and graphs looked crowded while the
+    -- geometry was correct.
+    local scale = s.scale[1] or 1
     prims[#prims + 1] = { type = "text", id = s.id, ink = s.ink, text = s.text,
       translation = s.translation, scale = s.scale,
-      px = (s.scale[1] or 1) * (TYPE.body or 16) * 1.25 }
+      px = scale * scale * (TYPE.body or 16) * 1.25 }
   end,
 }
 _G.widget = { hit = function() end }

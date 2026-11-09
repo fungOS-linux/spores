@@ -204,9 +204,10 @@ function M.render(snapshot)
                   value = snapshot.health and snapshot.health.value or 0,
                   max = snapshot.health and snapshot.health.max or 1,
                   unit = " peers",
-                  -- Eight segments on a twenty-peer fleet: twelve was twelve
-                  -- nodes for a bar that reads at a glance either way.
-                  segments = 8,
+                  -- Six segments on a twenty-peer fleet: each filled segment is
+                  -- a node, and the wall budget is a node budget before it is a
+                  -- taste budget.
+                  segments = 6,
                   thresholds = snapshot.health and snapshot.health.thresholds,
                   status = snapshot.health and snapshot.health.status or "warn",
                   status_ink = status_ink(snapshot.health and snapshot.health.status),

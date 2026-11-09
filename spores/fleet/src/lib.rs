@@ -111,7 +111,11 @@ pub struct Graph {
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphNode {
     pub id: String,
-    pub label: String,
+    /// The name this dot can afford. A wall cannot name twenty-three peers in a
+    /// thousand pixels; naming the sites and the live peers is the hierarchy
+    /// that stays readable, and the attention table names the silent ones.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub x: f64,
     pub y: f64,
     pub ink: String,
@@ -121,6 +125,13 @@ pub struct GraphNode {
     /// guessing a shape it did not lay out.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label_position: Option<String>,
+    /// The dot's size in logical pixels. A site is a parent row and a peer is a
+    /// child; two sizes say that without a second legend.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<f64>,
+    /// A row header is brighter than the peer labels under it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label_ink: Option<String>,
     /// Draw a hairline across the plot on this node's row. A layered graph is a
     /// set of rows; the rail is what makes nine of them read as a table of
     /// sites instead of a cloud with a left margin.
@@ -263,19 +274,6 @@ fn field(value: &Option<String>) -> String {
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| "unknown".to_string())
-}
-
-/// A label that fits the column it was laid out in. The full hostname lives in
-/// the row data and the attention table, so shortening here costs the graph a
-/// suffix, not the reader the identity.
-fn short_label(value: &str, max: usize) -> String {
-    let mut chars = value.chars();
-    let prefix: String = chars.by_ref().take(max).collect();
-    if chars.next().is_some() {
-        format!("{prefix}…")
-    } else {
-        prefix
-    }
 }
 
 fn short_id(id: &str) -> String {
@@ -427,7 +425,10 @@ fn graph(peers: &[Peer], sites: &[SiteGroup], live: i64) -> Graph {
         let site_id = format!("site:{}", site.name);
         nodes.push(GraphNode {
             id: site_id.clone(),
-            label: short_label(&site.name, 16),
+            // The full name: the library measures the column it actually has
+            // and decides where to spend the ellipsis. Truncating here cost the
+            // reader a suffix the library could have kept.
+            label: Some(site.name.clone()),
             x: 0.20,
             y,
             ink: site.ink.into(),
@@ -435,6 +436,8 @@ fn graph(peers: &[Peer], sites: &[SiteGroup], live: i64) -> Graph {
             // The site name is the row's left column; hosts start to its right.
             // A label on the right would land on the first host dot.
             label_position: Some("left".into()),
+            size: Some(9.0),
+            label_ink: Some("text".into()),
             rail: Some(true),
             halo: Some(live_here > 0),
         });
@@ -445,14 +448,14 @@ fn graph(peers: &[Peer], sites: &[SiteGroup], live: i64) -> Graph {
             } else {
                 "muted"
             };
-            // An anonymous row has no hostname to print twice; its ordinal is
-            // the only label that tells the two dots apart.
-            let label = if peer.state == State::Unknown {
-                // `unnamed-0` is a name, and nine characters is one more than
-                // the row can hold at eight hosts.
-                short_id(&peer.id).replace("unnamed-", "anon-")
-            } else {
-                short_label(&peer.host, 8)
+            // Live peers get names. A stale dot is a fact (the row exists) but
+            // its name is not what a reader needs from the graph; the attention
+            // table carries it. An anonymous row has no hostname to print at
+            // all, and its ordinal is the only thing that tells two dots apart.
+            let label = match peer.state {
+                State::Live => Some(peer.host.clone()),
+                State::Unknown => Some(short_id(&peer.id).replace("unnamed-", "anon-")),
+                State::Stale => None,
             };
             nodes.push(GraphNode {
                 id: id.clone(),
@@ -462,6 +465,8 @@ fn graph(peers: &[Peer], sites: &[SiteGroup], live: i64) -> Graph {
                 ink: ink.into(),
                 state: peer.state.as_str().into(),
                 label_position: Some("below".into()),
+                size: Some(6.0),
+                label_ink: None,
                 rail: None,
                 halo: Some(peer.state == State::Live),
             });
@@ -612,7 +617,7 @@ fn attention_table(peers: &[Peer], topology: Option<&TopologySummary>) -> Table 
         ));
     }
     findings.sort_by_key(|(rank, row)| (*rank, row["finding"].as_str().unwrap_or("").to_string()));
-    let rows = findings.into_iter().take(4).map(|(_, row)| row).collect();
+    let rows = findings.into_iter().take(6).map(|(_, row)| row).collect();
     Table {
         columns: vec![
             Column {
@@ -645,8 +650,8 @@ fn facts_table(topology: Option<&TopologySummary>) -> Table {
     let rows = match topology {
         Some(topology) => vec![
             serde_json::json!({ "fact": "topology nodes", "value": topology.nodes }),
-            serde_json::json!({ "fact": "segments", "value": topology.segments }),
-            serde_json::json!({ "fact": "conflicts", "value": topology.conflicts }),
+            serde_json::json!({ "fact": "network segments", "value": topology.segments }),
+            serde_json::json!({ "fact": "dhcp leases", "value": topology.leases }),
         ],
         None => vec![serde_json::json!({ "fact": "topology", "value": "not captured" })],
     };
@@ -694,7 +699,6 @@ pub fn build(status: &[StatusRow], topology: Option<&Value>, now: i64) -> Snapsh
         .count() as i64;
     let ssh = peers.iter().filter(|peer| peer.ssh).count() as i64;
     let updating = peers.iter().filter(|peer| peer.auto_update).count() as i64;
-    let recorded = peers.iter().filter(|peer| peer.release.is_some()).count() as i64;
     let latest = peers
         .iter()
         .filter_map(|peer| peer.release.as_deref())
@@ -780,30 +784,31 @@ pub fn build(status: &[StatusRow], topology: Option<&Value>, now: i64) -> Snapsh
 
     let graph = graph(&peers, &sites, live);
     let attention = attention_table(&peers, summary.as_ref());
-    let coverage = if total == 0 {
-        0
-    } else {
-        recorded * 100 / total
-    };
+    // Drift, not coverage: a gauge's thresholds mean "this value or worse", so
+    // the number has to grow in the direction that is bad. Peers on the newest
+    // observed release are the exception, and the rest are the number a wall
+    // should be able to see without reading a legend.
+    let drift = total - on_latest;
+    let drift_pct = if total == 0 { 0 } else { drift * 100 / total };
     let health = Gauge {
-        title: "Release coverage".into(),
-        value: recorded,
+        title: "Release drift".into(),
+        value: drift,
         max: total.max(1),
-        status: if coverage < 60 {
+        status: if drift_pct >= 60 {
+            "crit".into()
+        } else if drift_pct >= 30 {
             "warn".into()
-        } else if coverage < 90 {
-            "ok".into()
         } else {
             "live".into()
         },
         thresholds: vec![
             Threshold {
-                value: 60,
+                value: (total * 30 / 100).max(1),
                 ink: "warning".into(),
             },
             Threshold {
-                value: 90,
-                ink: "success".into(),
+                value: (total * 60 / 100).max(1),
+                ink: "danger".into(),
             },
         ],
     };
