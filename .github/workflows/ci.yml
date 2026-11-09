@@ -34,13 +34,18 @@ jobs:
           ref: main
 
       # A view names its library through `require`, so rendering one needs an SDK
-      # checkout. `cargo test` skips this rather than failing on a machine without
-      # one, which means CI has to run it itself or the view goes untested.
-      - name: Worklog view fixture
+      # checkout, and the page needs a real scene to draw. `cargo test` skips both
+      # rather than failing on a machine without an SDK, which means CI has to run
+      # them here or the view goes untested.
+      - name: Worklog view
         working-directory: spores/worklog
-        run: lua5.4 tests/ui_fixture.lua
         env:
           FUNGOS_SDK: ${{ github.workspace }}/_sdk
+        run: |
+          lua5.4 tests/ui_fixture.lua
+          lua5.4 ../../tools/shot.lua ui/worklog.lua examples/worklog_mock.lua \
+            ../themes/graphite.lua /tmp/scene.json 1182 1569
+          node tests/page_smoke.mjs /tmp/scene.json
 
       - name: Spore Lua API docs
         run: |

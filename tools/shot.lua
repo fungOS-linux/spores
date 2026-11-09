@@ -30,12 +30,12 @@ local prims = {}
 _G.canvas = {
   rect = function(s)
     prims[#prims + 1] = { type = "rect", id = s.id, ink = s.ink,
-      x = s.translation[1], y = s.translation[2], w = s.scale[1], h = s.scale[2],
+      translation = s.translation, scale = s.scale,
       opacity = s.opacity or 1, radius = s.radius or 0 }
   end,
   text = function(s)
     prims[#prims + 1] = { type = "text", id = s.id, ink = s.ink, text = s.text,
-      x = s.translation[1], y = s.translation[2],
+      translation = s.translation, scale = s.scale,
       px = (s.scale[1] or 1) * (TYPE.body or 16) * 1.25 }
   end,
 }
@@ -64,23 +64,50 @@ for _, node in ipairs(prims) do
   if rgb then node.rgb, themed = rgb, themed + 1 end
 end
 
-local parts = {}
-for _, node in ipairs(prims) do
-  local fields = {}
-  for key, value in pairs(node) do
-    if type(value) == "number" then
-      fields[#fields + 1] = string.format("%q:%.5f", key, value)
-    elseif type(value) == "table" then
-      fields[#fields + 1] = string.format("%q:[%d,%d,%d]", key, value[1], value[2], value[3])
-    else
-      fields[#fields + 1] = string.format("%q:%q", key, tostring(value))
-    end
-  end
-  table.sort(fields)
-  parts[#parts + 1] = "{" .. table.concat(fields, ",") .. "}"
+-- Lua's `%q` is not JSON: it can emit decimal escapes a JSON reader rejects.
+local ESCAPES = { ['"'] = '\\"', ['\\'] = '\\\\', ['\n'] = '\\n', ['\r'] = '\\r', ['\t'] = '\\t' }
+local function quote(value)
+  local body = tostring(value or ""):gsub('[%c"\\]', function(char)
+    return ESCAPES[char] or string.format("\\u%04x", char:byte())
+  end)
+  return '"' .. body .. '"'
 end
+
+-- The document is a `soil_scene` node list: `transform.translation` and
+-- `transform.scale` in the -4..4 space, `ink` as a role, and `id` for hit-testing.
+-- A preview adds the two things a host resolves for itself — `rgb` from the
+-- palette, `px` from the type scale — and adds nothing else, so a page that reads
+-- this reads the same document Canvas does.
+local function node_json(node)
+  local fields = {
+    quote("id") .. ":" .. quote(node.id),
+    quote("type") .. ":" .. quote(node.type),
+    quote("ink") .. ":" .. quote(node.ink),
+    string.format('%s:{"translation":[%.5f,%.5f,%.5f],"scale":[%.5f,%.5f,%.5f]}',
+      quote("transform"),
+      node.translation[1], node.translation[2], node.translation[3] or 0,
+      node.scale[1], node.scale[2], node.scale[3] or 1),
+    string.format('%s:%.5f', quote("opacity"), node.opacity or 1),
+  }
+  if node.radius and node.radius > 0 then
+    fields[#fields + 1] = string.format('%s:%.5f', quote("radius"), node.radius)
+  end
+  if node.rgb then
+    fields[#fields + 1] = string.format('%s:[%d,%d,%d]', quote("rgb"), node.rgb[1], node.rgb[2], node.rgb[3])
+  end
+  if node.text then
+    fields[#fields + 1] = quote("text") .. ":" .. quote(node.text)
+  end
+  if node.px then
+    fields[#fields + 1] = string.format('%s:%.5f', quote("px"), node.px)
+  end
+  return "{" .. table.concat(fields, ",") .. "}"
+end
+
+local parts = {}
+for _, node in ipairs(prims) do parts[#parts + 1] = node_json(node) end
 local file = assert(io.open(out_path, "wb"))
-file:write("[", table.concat(parts, ","), "]")
+file:write('{"kind":"scene","schema":1,"nodes":[', table.concat(parts, ","), "]}")
 file:close()
 print(string.format("%s: %d primitives, %d themed -> %s",
   theme.name or "theme", #prims, themed, out_path))

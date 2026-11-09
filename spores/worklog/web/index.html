@@ -15,12 +15,33 @@
 <div id="status">loading</div>
 <script>
 // The page draws the worklog's scene document; it does not know what a worklog
-// row is. Colours arrive resolved (`rgb`), sizes arrive in surface pixels, and
-// rationale belongs to the view — the same contract `spores/sfx/web` uses.
+// row is. Nodes carry `transform.translation` / `transform.scale` in the -4..4
+// space, `ink` as a role, and — because this document came from a preview — the
+// resolved `rgb` and text `px` as well. A host resolves those two itself; the
+// page can only draw them.
 const canvas = document.getElementById('scene');
 const ctx = canvas.getContext('2d');
 const status = document.getElementById('status');
 let dpr = 1, size = { w: 0, h: 0 };
+
+// What a role means when the palette did not resolve it. A missing colour should
+// look like a missing colour, not like invisible text.
+const INKS = {
+  background: '#0d0f14', surface: '#1e2430', text: '#e6ebf5', muted: '#8b96ab',
+  primary: '#f2f5fb', success: '#a6da95', warning: '#eed49f', info: '#7dc4e4',
+  danger: '#ed8796',
+};
+
+function fillOf(node) {
+  const alpha = node.opacity ?? 1;
+  if (node.rgb) {
+    const [r, g, b] = node.rgb;
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  const hex = INKS[node.ink] || INKS.text;
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
 
 function fit() {
   dpr = window.devicePixelRatio || 1;
@@ -29,30 +50,35 @@ function fit() {
   canvas.height = Math.floor(size.h * dpr);
 }
 
-// The scene lives in normalized units: x spans -4..4 and y spans 4..-4 with the
-// origin at the top-left. `radius` is a length in surface pixels, like every
-// other length the view hands over.
 function draw(scene, w, h) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
   const xOf = (u) => (u + 4) / 8 * w;
   const yOf = (u) => (4 - u) / 8 * h;
 
-  for (const p of scene.nodes) {
-    const [r, g, b] = p.rgb || [230, 235, 245];
-    ctx.fillStyle = `rgba(${r},${g},${b},${p.opacity ?? 1})`;
-    if (p.type === 'rect') {
-      const x = xOf(p.x), y = yOf(p.y);
-      const rw = p.w / 8 * w, rh = p.h / 8 * h;
-      const radius = Math.min(p.radius || 0, rw / 2, rh / 2);
+  // Canvas sorts scene nodes by z and breaks ties by insertion order, so a stable
+  // sort by z here paints the same picture. `radius` is a length in surface
+  // pixels, like every other length the view hands over.
+  const nodes = [...(scene.nodes || [])].sort(
+    (a, b) => ((a.transform?.translation?.[2] ?? 0) - (b.transform?.translation?.[2] ?? 0)));
+
+  for (const node of nodes) {
+    const t = node.transform || {};
+    const [x, y] = t.translation || [0, 0, 0];
+    const [sx, sy] = t.scale || [1, 1, 1];
+    ctx.fillStyle = fillOf(node);
+    if (node.type === 'rect') {
+      const px = xOf(x), py = yOf(y);
+      const rw = sx / 8 * w, rh = sy / 8 * h;
+      const radius = Math.min(node.radius || 0, rw / 2, rh / 2);
       ctx.beginPath();
-      if (ctx.roundRect) ctx.roundRect(x, y, rw, rh, radius);
-      else ctx.rect(x, y, rw, rh);
+      if (ctx.roundRect) ctx.roundRect(px, py, rw, rh, radius);
+      else ctx.rect(px, py, rw, rh);
       ctx.fill();
-    } else if (p.type === 'text') {
-      ctx.font = `${p.px}px ui-sans-serif, -apple-system, Helvetica, Arial, sans-serif`;
+    } else if (node.type === 'text') {
+      ctx.font = `${node.px}px ui-sans-serif, -apple-system, Helvetica, Arial, sans-serif`;
       ctx.textBaseline = 'top';
-      ctx.fillText(p.text || '', xOf(p.x), yOf(p.y));
+      ctx.fillText(node.text || '', xOf(x), yOf(y));
     }
   }
 }

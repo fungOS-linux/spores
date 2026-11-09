@@ -3,8 +3,11 @@
 
     python3 tools/shot.py <scene.json> <out.png> [width] [height]
 
-Primitives carry resolved colour. Anything without one is drawn in the text ink
-so a missing theme is visible, not invisible.
+One shape: the `soil_scene` document shot.lua writes — `{kind, schema, nodes}`,
+with geometry in `transform.translation` / `transform.scale`. A preview also
+resolves `rgb` and text `px`, which is what makes a palette previewable at all.
+Anything without a colour is drawn in the fallback ink so a missing theme is
+visible, not invisible.
 """
 import json
 import os
@@ -32,7 +35,7 @@ def font_path() -> str:
 
 def main() -> int:
     scene, out = sys.argv[1], sys.argv[2]
-    prims = json.load(open(scene))
+    prims = json.load(open(scene))["nodes"]
     width, height = (int(v) for v in (sys.argv[3:5] + [1200, 44])[:2])
     scale = SUPERSAMPLE
     image = Image.new("RGB", (width * scale, height * scale), (0, 0, 0))
@@ -57,10 +60,13 @@ def main() -> int:
     for prim in prims:
         colour = tuple(prim.get("rgb") or FALLBACK)
         alpha = int(round(255 * prim.get("opacity", 1.0)))
+        transform = prim.get("transform") or {}
+        translation = transform.get("translation") or [0.0, 0.0, 0.0]
+        extent = transform.get("scale") or [1.0, 1.0, 1.0]
         if prim["type"] == "rect":
-            left, top = x_of(prim["x"]), y_of(prim["y"])
-            w = prim.get("w", 0) / 8.0 * width * scale
-            h = prim.get("h", 0) / 8.0 * height * scale
+            left, top = x_of(translation[0]), y_of(translation[1])
+            w = extent[0] / 8.0 * width * scale
+            h = extent[1] / 8.0 * height * scale
             # `radius` is a length in logical pixels in the scene ABI — Canvas
             # feeds it straight to iced's border radius — so it scales like every
             # other length here. Treating it as a fraction of the rect turned
@@ -68,7 +74,7 @@ def main() -> int:
             radius = min(prim.get("radius", 0) * scale, min(w, h) / 2)
             draw.rounded_rectangle([left, top, left + w, top + h], radius=max(0.0, radius), fill=colour + (alpha,))
         elif prim["type"] == "text":
-            draw.text((x_of(prim["x"]), y_of(prim["y"])), prim.get("text", ""),
+            draw.text((x_of(translation[0]), y_of(translation[1])), prim.get("text", ""),
                       font=font(prim.get("px", 12)), fill=colour + (alpha,), anchor="la")
 
     image.resize((width, height), Image.LANCZOS).save(out)

@@ -8,12 +8,17 @@ fn spore_dir() -> PathBuf {
 }
 
 fn lua() -> Option<String> {
-    for binary in ["lua", "lua5.4", "lua5.3", "luajit"] {
-        if Command::new(binary).arg("-v").output().is_ok() {
-            return Some(binary.to_owned());
-        }
-    }
-    None
+    tool(&["lua", "lua5.4", "lua5.3", "luajit"], "-v")
+}
+
+/// The first of `binaries` that runs. A gate that skips when its interpreter is
+/// missing still fails on the machine that has it, which is where the bug would
+/// have been caught.
+fn tool(binaries: &[&str], flag: &str) -> Option<String> {
+    binaries
+        .iter()
+        .find(|binary| Command::new(binary).arg(flag).output().is_ok())
+        .map(|binary| (*binary).to_owned())
 }
 
 #[test]
@@ -108,4 +113,58 @@ fn ui_renders_the_mock_snapshot() {
 fn sdk() -> Option<PathBuf> {
     let path = PathBuf::from(std::env::var("FUNGOS_SDK").ok()?);
     path.join("lua/fungos/ui.lua").exists().then_some(path)
+}
+
+/// The browser page shipped once without ever being executed. It read
+/// `scene.nodes` off a document that was a bare array, drew nothing, and said so
+/// only in a status line on someone else's screen. This renders a scene the way
+/// the host does and then runs the page's own `<script>` against it.
+#[test]
+fn page_draws_the_served_scene() {
+    let Some(lua) = lua() else {
+        eprintln!("skipping: no Lua interpreter on PATH");
+        return;
+    };
+    let Some(node) = tool(&["node"], "--version") else {
+        eprintln!("skipping: no node on PATH");
+        return;
+    };
+    let Some(sdk) = sdk() else {
+        eprintln!("skipping: no fungos-sdk checkout (set FUNGOS_SDK)");
+        return;
+    };
+
+    let scene = std::env::temp_dir().join(format!("worklog-page-{}.json", std::process::id()));
+    let render = Command::new(lua)
+        .arg("../../tools/shot.lua")
+        .arg("ui/worklog.lua")
+        .arg("examples/worklog_mock.lua")
+        .arg("../themes/graphite.lua")
+        .arg(&scene)
+        .arg("1182")
+        .arg("1569")
+        .current_dir(spore_dir())
+        .env("FUNGOS_SDK", &sdk)
+        .output()
+        .expect("run lua");
+    assert!(
+        render.status.success(),
+        "scene render failed:\n{}\n{}",
+        String::from_utf8_lossy(&render.stdout),
+        String::from_utf8_lossy(&render.stderr)
+    );
+
+    let smoke = Command::new(node)
+        .arg("tests/page_smoke.mjs")
+        .arg(&scene)
+        .current_dir(spore_dir())
+        .output()
+        .expect("run node");
+    let _ = std::fs::remove_file(&scene);
+    assert!(
+        smoke.status.success(),
+        "the page did not draw the scene:\n{}\n{}",
+        String::from_utf8_lossy(&smoke.stdout),
+        String::from_utf8_lossy(&smoke.stderr)
+    );
 }
