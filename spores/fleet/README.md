@@ -52,7 +52,7 @@ mycelium topology --json       > /tmp/fleet-topology.json
 ./target/release/fleet-serve \
   --status /tmp/fleet-status.json \
   --topology /tmp/fleet-topology.json
-# fleet-serve: ... on http://127.0.0.1:8796
+# fleet-serve: ... on http://127.0.0.1:8804
 ```
 
 Open `http://localhost:8796`. The route that makes it `fleet.myc` is one entry
@@ -61,8 +61,15 @@ the route is the whole DNS story:
 
 ```json
 { "name": "fleet", "hosts": ["fleet.myc"],
-  "upstream": "http://127.0.0.1:8796", "priority": 10 }
+  "upstream": "http://127.0.0.1:8804", "priority": 10 }
 ```
+
+The gateway certificate is generated when the gateway is installed and lists the
+routes that existed then. A route added afterwards is served, but the name is
+not in the certificate's SANs, so browsers warn until the gateway is reinstalled
+with the route in place (which regenerates the local CA and needs the new one
+trusted). This is a gateway gap, not a Spore one: `fleet.myc` is reachable and
+serving while the certificate catches up.
 
 A committed snapshot needs no daemon:
 

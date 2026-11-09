@@ -4,7 +4,7 @@
 //! GETs, and for the scene it runs the same Lua the wall runs. What the browser
 //! draws is what Canvas draws, at whatever size the browser asks for.
 //!
-//! Usage: fleet-serve [--bind 127.0.0.1:8796] [--root <spore dir>]
+//! Usage: fleet-serve [--bind 127.0.0.1:8804] [--root <spore dir>]
 //!                     [--snapshot <snapshot.lua>]
 //!                     [--status <fleet-status.json>] [--topology <topology.json>]
 //!                     [--theme <theme.lua>] [--sdk <repo root>] [--print]
@@ -21,14 +21,15 @@ use fleet::{StatusRow, build, to_lua};
 const PAGE: &str = include_str!("../../web/index.html");
 const MAX_LINE: u64 = 8 << 10;
 const MAX_SIDE: u32 = 4096;
-/// The desktop's loopback range is spoken for one surface at a time — 8795 is
-/// the worklog — so this takes the next shelf above it.
-const DEFAULT_BIND: &str = "127.0.0.1:8796";
+/// The desktop's loopback range is spoken for one surface at a time: 8795 is the
+/// worklog, 8796 alfalfa, and 8798–8803 are taken too. 8804 is the next free
+/// shelf on the machine this host was written for; `--bind` moves it.
+const DEFAULT_BIND: &str = "127.0.0.1:8804";
 
 const USAGE: &str = "\
 fleet-serve — serve the fleet view to a browser
 
-  --bind <addr:port>   listen address (default 127.0.0.1:8796)
+  --bind <addr:port>   listen address (default 127.0.0.1:8804)
   --root <dir>         the Spore directory holding ui/ and examples/
   --renderer <file>    the scene renderer (default <root>/../../tools/shot.lua)
   --sdk <dir>          checkout holding sdk/ui/ui.lua (default <root>/../..)
