@@ -36,14 +36,52 @@ cargo build -p spore-worklog --release
   --bind 127.0.0.1:7420 \
   --log ~/.local/share/fungos/worklog.jsonl \
   --marbles-secret-file ~/.config/fungos/marbles-webhook.secret \
-  --github-secret-file ~/.config/fungos/github-webhook.secret
+  --github-secret-file ~/.config/fungos/github-webhook.secret \
+  --confluence-secret-file ~/.config/fungos/confluence-webhook.secret
 ```
 
-Point Marbles' webhook at `http://127.0.0.1:7420/ingest/marbles` and the GitHub
+Point Marbles' webhook at `http://127.0.0.1:7420/ingest/marbles`, the GitHub
 repository webhook (content type `application/json`, the `pull_request` event)
-at `http://127.0.0.1:7420/ingest/github`. The receiver binds loopback only and
+at `http://127.0.0.1:7420/ingest/github`, and Confluence's space webhook at
+`http://127.0.0.1:7420/ingest/confluence`. The receiver binds loopback only and
 refuses to start without at least one secret: an unsigned webhook is not a
 webhook.
+
+## Confluence
+
+Confluence Cloud signs with an HMAC over the raw body, so the same check the
+other two use applies; only the route and the payload shape differ. Both shapes
+Confluence sends are read: the classic space webhook (`page_created`,
+`page_updated`, `page_removed`, `comment_created`, `attachment_created`) which
+carries `page`, and the newer content events (`content_created`,
+`content_updated`, `content_deleted`) which carry `content`.
+
+The event lands as `confluence:<space>/<content-id>`:
+
+```text
+page_updated  FPL/948231  "Confluence webhook ingress architecture"
+              -> changed   updated: Confluence webhook ingress architecture
+              -> chip      FPL#948231
+comment_created
+to the same page  -> mention  commented on: <page title>
+```
+
+The space is what a reader recognises and the id is what survives a rename, so
+the locator carries both and the title stays in the summary where it renders.
+The page version is part of the event id, so three edits of one page are three
+events and a redelivery of the second is still the second.
+
+An event name this receiver does not know is rejected with a 400 rather than
+stored as something generic: a wiki move is not an edit, and a row that says
+"changed" for it would be a lie the reader cannot see through.
+
+Replay one delivery by hand (the payload shapes live in `examples/`):
+
+```sh
+./target/release/worklog ingest --source confluence --allow-unsigned \
+  --log ~/.local/share/fungos/worklog.jsonl \
+  < examples/confluence-page-updated.json
+```
 
 Read it back:
 

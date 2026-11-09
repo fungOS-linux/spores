@@ -151,7 +151,8 @@ impl Kind {
 pub struct Locator(String);
 
 impl Locator {
-    pub const SCHEMES: &'static [&'static str] = &["marbles://", "github:", "delta://", "vfs:"];
+    pub const SCHEMES: &'static [&'static str] =
+        &["marbles://", "github:", "confluence:", "delta://", "vfs:"];
 
     pub fn parse(raw: &str) -> Result<Self, String> {
         let trimmed = raw.trim();
@@ -436,6 +437,149 @@ pub fn from_github(body: &[u8], now: i64) -> Result<Event, String> {
             "number": pull.number,
             "action": delivery.action,
             "title": pull.title,
+            "timestamp": stamp,
+            "timestamp_parsed": parsed,
+        }),
+    ))
+}
+
+// ---- confluence ---------------------------------------------------------
+
+/// Confluence Cloud's webhook envelope, as far as this ingester reads it.
+///
+/// Two shapes arrive on the same route: the classic space webhook
+/// (`page_created`, `comment_created`, …) which carries `page`, and the newer
+/// content events (`content_created`, `content_updated`) which carry `content`.
+/// Both name the thing a reader wants to open the same way — an id, a title and
+/// a space key — so one struct covers them and the differences are defaulted
+/// rather than guessed.
+#[derive(Debug, Deserialize)]
+struct ConfluenceDelivery {
+    event: String,
+    #[serde(default)]
+    timestamp: Option<i64>,
+    #[serde(default, rename = "userAccountId")]
+    user_account_id: Option<String>,
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    user_key: Option<String>,
+    #[serde(default)]
+    page: Option<ConfluenceContent>,
+    #[serde(default)]
+    content: Option<ConfluenceContent>,
+    #[serde(default)]
+    space: Option<ConfluenceSpace>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfluenceContent {
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default, rename = "spaceKey")]
+    space_key: Option<String>,
+    #[serde(default)]
+    space: Option<ConfluenceSpace>,
+    #[serde(default)]
+    version: Option<ConfluenceVersion>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfluenceSpace {
+    #[serde(default)]
+    key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfluenceVersion {
+    #[serde(default)]
+    number: Option<u64>,
+}
+
+/// Normalize one Confluence webhook delivery.
+///
+/// The locator is `confluence:<space>/<content-id>`: the space is what a reader
+/// recognises (FPL, ENG), the id is what survives a page rename. The title lives
+/// in the summary, where it can be rendered, rather than in the identity.
+pub fn from_confluence(body: &[u8], now: i64) -> Result<Event, String> {
+    let delivery: ConfluenceDelivery = serde_json::from_slice(body)
+        .map_err(|error| format!("confluence payload JSON: {error}"))?;
+    let content = delivery
+        .page
+        .as_ref()
+        .or(delivery.content.as_ref())
+        .ok_or_else(|| "confluence payload carries neither `page` nor `content`".to_string())?;
+
+    let space = content
+        .space_key
+        .clone()
+        .or_else(|| content.space.as_ref().and_then(|space| space.key.clone()))
+        .or_else(|| delivery.space.as_ref().and_then(|space| space.key.clone()))
+        // A space-less event still has to name something a host can open.
+        .unwrap_or_else(|| "page".to_string());
+    let subject = Locator::parse(&format!("confluence:{}/{}", space, content.id))?;
+
+    // Comment and attachment events are about a page a reader already knows; the
+    // page is the subject either way, and the kind is what happened to it.
+    let (kind, verb) = match delivery.event.as_str() {
+        "page_created" | "content_created" | "blogpost_created" => (Kind::Created, "created"),
+        "page_updated" | "content_updated" | "blogpost_updated" => (Kind::Changed, "updated"),
+        "page_removed" | "page_trashed" | "content_deleted" | "content_trashed" => {
+            (Kind::Closed, "removed")
+        }
+        "comment_created" | "content_comment_created" => (Kind::Mention, "commented on"),
+        "attachment_created" | "content_attachment_created" => (Kind::Changed, "attached to"),
+        other => return Err(format!("unmapped confluence event {other:?}")),
+    };
+
+    let actor = delivery
+        .username
+        .clone()
+        .or_else(|| delivery.user_key.clone())
+        .or_else(|| delivery.user_account_id.clone())
+        .unwrap_or_default();
+    let title = content
+        .title
+        .clone()
+        .filter(|title| !title.is_empty())
+        .unwrap_or_else(|| format!("{space} {}", content.id));
+
+    // Confluence sends milliseconds on the classic webhook; a seconds value from
+    // another shim is converted rather than read as 1970, and a stamp that
+    // parses as neither is kept in the payload instead of replaced by "now".
+    let stamp = delivery.timestamp;
+    let (at, parsed) = match stamp {
+        Some(ms) if ms > 1_000_000_000_000 => (ms, true),
+        Some(seconds) if seconds > 1_000_000_000 => (seconds * 1000, true),
+        _ => (now, false),
+    };
+    let version = content.version.as_ref().and_then(|version| version.number);
+
+    Ok(Event::new(
+        // The version is part of the identity: three edits of one page are three
+        // events, and a redelivery of the second is still the second.
+        match version {
+            Some(number) => format!("confluence:{space}/{}:{}:{number}", content.id, delivery.event),
+            None => match stamp {
+                Some(ms) => format!("confluence:{space}/{}:{}:{ms}", content.id, delivery.event),
+                None => format!("confluence:{space}/{}:{}", content.id, delivery.event),
+            },
+        },
+        at,
+        "confluence",
+        kind,
+        actor,
+        subject,
+    )
+    .with_summary(
+        format!("{verb}: {title}"),
+        json!({
+            "space": space,
+            "content_id": content.id,
+            "title": title,
+            "event": delivery.event,
+            "version": version,
             "timestamp": stamp,
             "timestamp_parsed": parsed,
         }),

@@ -568,7 +568,10 @@ local function detail(snapshot)
     label("worklog-detail-summary", clip(event.summary or "", DETAIL_SUMMARY_CHARS), TYPE.body,
       { height = detail_lines(event) * line_height(TYPE.body), wrap = true }),
     label("worklog-detail-when", (event.at_text or "") .. "  ·  " .. (event.age or ""), TYPE.micro, { height = line_height(TYPE.micro) }),
-    label("worklog-detail-who", (event.actor or "") .. "  ·  " .. (event.source or ""), TYPE.micro, { height = line_height(TYPE.micro) }),
+    -- The mark, not the producer's name: the row already carries the mark, and
+    -- the pane is where a reader wants the actor.
+    label("worklog-detail-who", source_mark(event.source).mark .. "  " .. (event.actor or ""), TYPE.micro,
+      { height = line_height(TYPE.micro) }),
     label("worklog-detail-kind", kind_word(event.kind), TYPE.micro, { height = line_height(TYPE.micro) }),
     label("worklog-detail-open-label", #links > 0 and "OPEN" or "LOCATORS", TYPE.micro, { height = line_height(TYPE.micro) }),
   }
