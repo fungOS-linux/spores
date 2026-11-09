@@ -29,12 +29,14 @@ local ui = assert(load(source:read("*a"), "ui/lib/ui.lua"))()
 source:close()
 _G.ui = ui
 
--- `module.theme.body` is the size `ts()` divides by, so it has to be the host's:
--- a host that passes 16 draws the view's "12" as 12 px, which is the measurement
--- the wrap budget is built on.
+-- `module.theme` carries the host's resolved type scale in pixels, and the wall
+-- runs a 1.5x theme: micro 15, small 18, body 24, large 27. Passing the same
+-- numbers here is the point — the view reads its scale from them, so the preview
+-- is drawn at the sizes Canvas actually draws.
+local THEME = { micro = 15, small = 18, body = 24, large = 27 }
 _G.module = {
   viewport = { width = W, height = H },
-  theme = { title = 0.34, large = 0.24, body = 16, small = 0.105, micro = 0.085, radius = 0.02 },
+  theme = THEME,
 }
 if scroll then _G.module.scroll = { offset = scroll } end
 
@@ -71,18 +73,19 @@ for _, spec in ipairs(drawn.rects) do
   local w, h = spec.scale[1] / 8 * W, spec.scale[2] / 8 * H
   out[#out + 1] = string.format(
     '<rect x="%.2f" y="%.2f" width="%.2f" height="%.2f" rx="%.2f" fill="%s" fill-opacity="%.2f"/>',
-    x, y, w, h, (spec.radius or 0) / 8 * W, ink(spec.ink), spec.opacity or 1)
+    x, y, w, h, spec.radius or 0, ink(spec.ink), spec.opacity or 1)
 end
 
 for _, spec in ipairs(drawn.texts) do
   local x, y = px(spec.translation[1]), py(spec.translation[2])
-  -- A text primitive carries a scale, not a font size: the host multiplies it by
-  -- the theme's base and a 1.25 line factor, which is what makes the view's
-  -- `size = 12` arrive as 12 px.
-  local size = spec.scale[1] * 16 * 1.25
+  -- The host sizes text as `max(|scale_y| * theme.body * depth(z), theme.micro)`,
+  -- with `depth(z) = 0.5 + ((z + 4) / 8) * 1.5`. Reproducing it here is what
+  -- makes this preview answer questions about the wall instead of about itself.
+  local depth = 0.5 + ((spec.translation[3] + 4) / 8) * 1.5
+  local size = math.max(spec.scale[1] * THEME.body * depth, THEME.micro)
   out[#out + 1] = string.format(
-    '<text x="%.2f" y="%.2f" font-family="Menlo, monospace" font-size="%.2f" letter-spacing="%.2f" fill="%s">%s</text>',
-    x, y + size * 0.75, size, size * 0.2, ink(spec.ink), (spec.text:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")))
+    '<text x="%.2f" y="%.2f" font-family="Helvetica, Arial, sans-serif" font-size="%.2f" fill="%s">%s</text>',
+    x, y + size * 0.78, size, ink(spec.ink), (spec.text:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")))
 end
 
 -- Buttons are host-owned pixels, so they are not in the scene; outline them to

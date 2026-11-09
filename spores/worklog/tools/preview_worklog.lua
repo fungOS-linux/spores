@@ -16,7 +16,7 @@ _G.ui = ui
 
 _G.module = {
   viewport = { width = 1086, height = 1569 },
-  theme = { title = 0.34, large = 0.24, body = 0.145, small = 0.105, micro = 0.085, radius = 0.02 },
+  theme = { micro = 10, small = 12, body = 16, large = 18 },
 }
 
 _G.widget = {}

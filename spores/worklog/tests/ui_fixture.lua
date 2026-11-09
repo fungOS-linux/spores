@@ -16,12 +16,13 @@ local ui = assert(load(source:read("*a"), "ui/lib/ui.lua"))()
 source:close()
 _G.ui = ui
 
+-- The host hands over its type scale in pixels (Canvas multiplies a node's
+-- scale by these), so the fixture publishes the unscaled Coherence sizes rather
+-- than fractions: a view that reads them gets the same hierarchy a native widget
+-- beside it would have.
 _G.module = {
   viewport = { width = 1086, height = 1569 },
-  theme = {
-    title = 0.34, large = 0.24, body = 0.145,
-    small = 0.105, micro = 0.085, radius = 0.02,
-  },
+  theme = { micro = 10, small = 12, body = 16, large = 18 },
 }
 
 local drawn = { rects = {}, texts = {} }
