@@ -1,0 +1,34 @@
+# TUI Spore: a ratatui dashboard that emits ANSI.
+schema = 1
+
+[spore]
+id = "dev.fungos.tui"
+name = "tui"
+version = "0.1.0"
+license = "MIT"
+summary = "A ratatui dashboard that renders ANSI bytes for any VT host"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { terminal = "0.1.0" }
+
+[module]
+path = "module.wasm"
+
+[launch]
+# The terminal surface owns the screen; this Spore only produces frames.
+default = "native"
+surfaces = ["native", "canvas", "web"]
+
+[grants]
+# No capabilities. A frame is a string; input arrives as a string.
+
+[denied]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock", "gpu"]
+
+[presentation]
+badge = "U"
+color = "#cba6f7"

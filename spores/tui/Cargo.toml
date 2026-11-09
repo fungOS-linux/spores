@@ -1,0 +1,21 @@
+[package]
+name = "spore-tui"
+description = "A ratatui dashboard that renders to ANSI bytes, with no terminal backend"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The core library and widgets, without crossterm or any other host backend:
+# this Spore emits ANSI and lets the host's VT own the screen.
+ratatui = { version = "0.30", default-features = false, features = ["std"] }
+wit-bindgen = "0.57"
+
+[lints.rust]
+unsafe_code = "allow"
