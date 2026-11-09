@@ -32,6 +32,7 @@ hot_reload = true
 
 [launch]
 default = "canvas"
+canvas_module = "spore-dev-home"
 surfaces = ["canvas"]
 
 [grants]
