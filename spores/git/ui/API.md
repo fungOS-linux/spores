@@ -12,9 +12,16 @@ cost of waiting is the branch drifting under it.
 
 ## Entrypoint
 
-`ui/review.lua` exports `M.render(ctx, view) -> node`, where `node` is a
-`fungos.ui` tree. `ctx` is unused in v0 and present so the signature matches the
-shared Spore views.
+`ui/review.lua` exports `M.render(view)`, which builds a `fungos.ui` tree and
+paints it with `ui.render(tree, theme)`. The view is **self-painting**: it calls
+`canvas.text`, `canvas.rect` and `widget.button` itself, so what runs in Canvas is
+what `tests/ui_fixture.lua` asserts against. `M.render(ctx, view)` also works, for
+callers written against the older two-argument shape.
+
+The library is the package in [`sdk/ui`](../../../sdk/ui/package.toml), declared
+as a component by [`tend.lua`](../../../tend.lua). It is resolved by name at
+composition time — see `tools/compose_git.lua` — and not taken from whatever UI
+library the composing tool happens to ship.
 
 ## Snapshot
 
@@ -64,16 +71,21 @@ None. This is a complete view rather than a contribution into another window.
 
 ## Components
 
-Built from `fungos.ui`: `ui.row`, `ui.column`, `ui.text`, `ui.badge`,
-`ui.button`, `ui.list_row`, `ui.sidebar`, `ui.sidebar_group`, `ui.command_bar`,
-`ui.section_label`, `ui.empty_state`, and `ui.push`. No component is reimplemented
-locally, so a change in the shared kit moves this view with everything else.
+Built from the `fungos.ui` package: `ui.row`, `ui.column`, `ui.card`, `ui.text`,
+`ui.rule`, `ui.button`, plus `ui.action` for intents. Nodes take props
+(`gap`, `pad`, `grow`, `style`, `ink`) rather than positional layout arguments;
+the library validates tokens eagerly and fails where the tree was written.
+
+Nothing is reimplemented locally, so a change in the package moves this view
+with every other view built on it.
 
 ## Theme/config
 
-The view names ink roles only — `text`, `muted`, `primary` — and never a colour.
-Sizes are numbers because `fungos.ui` takes literal text sizes; spacing and
-radius come from the kit's defaults rather than being restated here.
+The view names ink roles (`text`, `muted`, `primary`, `danger`) and style names
+(`heading`, `body`, `caption`) from the package's token tables, never a colour or
+a pixel. Spacing is `gap`/`pad` on the `space` token scale. Selection is carried
+in ink rather than in a widget state, because the library does not colour a
+`selected` card — a distinction a reader cannot see is not a distinction.
 
 ## Stable ids
 

@@ -1,107 +1,112 @@
 -- Fixture for ui/review.lua. Run from spores/git:
 --   lua tests/ui_fixture.lua
 --
--- The view needs `fungos.ui` and `fungos.action`, which live in the SDK rather
--- than in this repo. Both are pure tree builders, so the stubs below reproduce
--- their contract — same names, same shapes — and the assertions are about the
--- tree the view builds, not about the SDK. A view that calls a function this
--- stub does not have fails here, which is the point: the names are the API.
+-- The view is self-painting: it calls `ui.render`, which emits Canvas
+-- primitives through `canvas.*` and `widget.button`. So this fixture supplies a
+-- recording host and asserts on what was *drawn*, not on a tree that some other
+-- component is supposed to interpret. That is the whole reason the view moved to
+-- `sdk/ui`: a tree library can be checked for shape, a self-painting one can be
+-- checked for output.
+--
+-- `fungos.ui` is stubbed through `package.preload` so this runs with no SDK
+-- checkout. The stub is not a simulation of the layout: `lay` and the token
+-- tables are the package's, loaded from `sdk/ui/ui.lua` in this repo.
 
-local function node(kind, id, children, extra)
-  local out = { kind = kind, id = id, children = children or {} }
-  for key, value in pairs(extra or {}) do out[key] = value end
-  return out
+local function library()
+  local source = assert(io.open("../../sdk/ui/ui.lua", "rb"),
+    "../../sdk/ui/ui.lua is missing; the view reads the package this repo declares")
+  local chunk = assert(load(source:read("*a"), "sdk/ui/ui.lua"))
+  source:close()
+  return chunk()
 end
 
-local stub_ui = {}
-function stub_ui.text(id, value, opts) return node("text", id, {}, { text = value, opts = opts or {} }) end
-function stub_ui.row(id, layout, children) return node("row", id, children) end
-function stub_ui.column(id, layout, children) return node("column", id, children) end
-function stub_ui.badge(id, value, opts) return node("badge", id, { stub_ui.text(id .. "-text", value) }) end
-function stub_ui.button(id, label, opts) return node("button", id, { stub_ui.text(id .. "-label", label) }, { action = opts and opts.action }) end
-function stub_ui.list_row(id, opts, children) return node("list_row", id, children, { action = opts and opts.action, selected = opts and opts.selected }) end
-function stub_ui.sidebar(id, opts, children) return node("sidebar", id, children) end
-function stub_ui.sidebar_group(id, label, items) return node("sidebar_group", id, items) end
-function stub_ui.command_bar(id, opts) return node("command_bar", id) end
-function stub_ui.section_label(id, value) return stub_ui.text(id, value) end
-function stub_ui.empty_state(id, title, detail)
-  return node("empty_state", id, { stub_ui.text(id .. "-title", title), stub_ui.text(id .. "-detail", detail) })
+package.preload["fungos.ui"] = library
+
+-- ---- a recording host --------------------------------------------------
+
+local drawn = { texts = {}, buttons = {}, rects = 0 }
+
+local function reset()
+  drawn = { texts = {}, buttons = {}, rects = 0 }
 end
-function stub_ui.push(children, child) children[#children + 1] = child end
 
-local stub_action = {}
-function stub_action.intent(id, payload) return { id = id, payload = payload } end
-
-package.preload["fungos.ui"] = function() return stub_ui end
-package.preload["fungos.action"] = function() return stub_action end
+_G.module = {
+  inputs = { width = 1200, height = 1600 },
+  theme = { title = 34, large = 24, body = 14, small = 10, micro = 8, radius = 0.02 },
+}
+_G.canvas = {
+  rect = function() drawn.rects = drawn.rects + 1 end,
+  text = function(spec) drawn.texts[#drawn.texts + 1] = spec end,
+}
+_G.widget = { button = function(spec) drawn.buttons[#drawn.buttons + 1] = spec end }
 
 local review = assert(loadfile("ui/review.lua"))()
 local view = assert(loadfile("ui/view.example.lua"))()
 
-local function walk(root)
-  local ids, texts, actions = {}, {}, {}
-  local function visit(current)
-    if type(current) ~= "table" then return end
-    if current.id then ids[current.id] = current end
-    if current.text then texts[#texts + 1] = tostring(current.text) end
-    if current.action and current.action.id then actions[#actions + 1] = current.action.id end
-    for _, child in ipairs(current.children or {}) do visit(child) end
+local function render(snapshot)
+  reset()
+  review.render(snapshot)
+  local copy, signature = {}, {}
+  for _, spec in ipairs(drawn.texts) do
+    copy[#copy + 1] = tostring(spec.text)
+    -- Selection is carried in ink, not in the string, so a copy-only signature
+    -- would miss it entirely.
+    signature[#signature + 1] = tostring(spec.text) .. ":" .. tostring(spec.ink)
   end
-  visit(root)
-  return ids, texts, actions
+  local labels = {}
+  for _, spec in ipairs(drawn.buttons) do labels[#labels + 1] = tostring(spec.label) end
+  return table.concat(copy, "\n"), table.concat(labels, "\n"), table.concat(signature, "\n")
 end
 
-assert(type(review.render) == "function", "the view must export render")
+local copy, labels, signature = render(view)
 
-local tree = review.render({}, view)
-assert(tree and tree.id == "git-root", "render must return the root")
-
-local ids, texts, actions = walk(tree)
-local copy = table.concat(texts, "\n")
-
--- Every row is present, in the order the producer set.
-for index, item in ipairs(view.rows) do
-  assert(ids["git-row-" .. index], "row " .. index .. " is missing")
+-- It painted through the host, and every primitive is a string Canvas shapes.
+assert(#drawn.texts > 10, "the view painted almost nothing")
+assert(drawn.rects > 0, "the view painted no rects")
+for _, spec in ipairs(drawn.texts) do
+  assert(type(spec.text) == "string", "a text primitive has no string")
+  assert(type(spec.ink) == "string", "a text primitive has no ink role")
 end
-assert(#view.rows == 0 or ids["git-row-" .. (#view.rows + 1)] == nil, "rows must not be invented")
 
--- Titles and the PR coordinate are drawn, so a row is identifiable without
--- opening it.
+-- Copy comes from the snapshot, not from constants.
+assert(copy:find("READY TO LAND", 1, true), "the section label is missing")
 assert(copy:find(view.rows[1].title, 1, true), "the first title is not drawn")
 assert(copy:find("FuturePresentLabs/marbles#26", 1, true), "the PR coordinate is not drawn")
 assert(copy:find("no pull request", 1, true), "a row without a PR must say so")
-
--- A merged PR reads as landable; an open one reads as review. This is the whole
--- distinction the queue exists to make.
-assert(copy:find("merged", 1, true), "a merged row is not labelled")
-assert(ids["git-row-1-land"], "the merged row offers no action")
-assert(ids["git-row-1-land-label"].text == "Land", "a merged row must offer Land, not Review")
-assert(ids["git-row-2-land-label"].text == "Review", "an open row must offer Review")
-
--- A row with no PR offers no land button: there is nothing to land.
-assert(ids["git-row-8-land"] == nil, "a row without a PR must not offer Land")
-assert(ids["git-row-8-marble"], "a row without a PR should still open its Marble")
-
--- Intents are emitted, never executed.
-assert(#actions > 0, "the view emitted no intents")
-local seen = {}
-for _, id in ipairs(actions) do seen[id] = true end
-for _, expected in ipairs({ "git.select", "git.land", "git.open_marble", "git.filter" }) do
-  assert(seen[expected], "missing intent: " .. expected)
-end
-
--- Counts are drawn from the snapshot, not computed here.
 assert(copy:find("7 waiting", 1, true), "the waiting count is not drawn")
 
--- Selection is data: picking another row moves it.
+-- The one judgement the queue exists for: merged offers Land, anything else
+-- offers Review, and a row with no PR offers neither.
+assert(labels:find("Land", 1, true), "the merged row offers no Land button")
+assert(labels:find("Review", 1, true), "open rows offer no Review button")
+
+-- Count the decision buttons: every row with a PR offers exactly one.
+local with_pr = 0
+for _, item in ipairs(view.rows) do if item.pr then with_pr = with_pr + 1 end end
+local decisions = 0
+for _, spec in ipairs(drawn.buttons) do
+  if spec.label == "Land" or spec.label == "Review" then decisions = decisions + 1 end
+end
+assert(decisions == with_pr, string.format("expected %d decision buttons, drew %d", with_pr, decisions))
+
+-- Intents are emitted, never executed.
+local intents = {}
+for _, spec in ipairs(drawn.buttons) do
+  local action = spec.action
+  if type(action) == "table" and action.action then intents[action.action] = true end
+end
+for _, expected in ipairs({ "git.land", "git.open_marble", "git.filter" }) do
+  assert(intents[expected], "missing intent: " .. expected)
+end
+
+-- A view is a function of the snapshot: another selection paints differently.
 view.selected_id = "motion-guard-noise"
-local picked, _ = walk(review.render({}, view))
-assert(picked["git-row-5"].selected, "the selected row is not marked")
-assert(not picked["git-row-1"].selected, "the previous selection was not cleared")
+local _, _, after = render(view)
+assert(after ~= signature, "selection did not change what was painted")
+view.selected_id = "federation-f1-assertion-cache"
 
 -- An empty queue is a normal state, not a blank window.
-local empty_ids, empty_texts = walk(review.render({}, { title = "REVIEW", counts = {}, rows = {} }))
-assert(empty_ids["git-empty"], "an empty queue must render the empty state")
-assert(table.concat(empty_texts, "\n"):find("Nothing is waiting", 1, true), "the empty state has no copy")
+local empty = render({ title = "REVIEW", counts = {}, rows = {} })
+assert(empty:find("Nothing is waiting", 1, true), "an empty queue must say so")
 
-print("ui: ok")
+print(string.format("ui: ok (%d text, %d buttons)", #drawn.texts, #drawn.buttons))
