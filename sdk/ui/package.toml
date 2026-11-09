@@ -5,7 +5,7 @@
 # version, one set of answers.
 schema = 1
 name = "fungos.ui"
-version = "0.4.0"
+version = "0.5.0"
 license = "MIT OR Apache-2.0"
 entry = "ui.lua"
 summary = "Declarative, theme-driven UI for Spores: layout, components, tokens, and dashboard nodes"

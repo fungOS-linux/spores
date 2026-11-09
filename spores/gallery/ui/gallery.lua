@@ -98,7 +98,7 @@ function M.render(snapshot)
     }
   end
 
-  ui.render(
+  ui.present(
     ui.column {
       h = 1800,
       gap = "md",

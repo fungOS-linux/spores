@@ -60,8 +60,25 @@ and give the module manifest action grants for `inspect-stat`, `inspect-gauge`,
 `open-service`, `toggle-series`, and `select-range`. Actions are optional in the
 view; omit them when a module has no action route.
 
+## Soil document backend
+
+`ui.present(tree, theme)` is the Lua peer of the Rust
+`soil_sdk_canvas::Surface::present_scene`: it builds one `soil_scene::Present`
+document, calls `canvas.present` (or `soil.canvas.present`), and lets the host
+render it. `ui.document(tree, theme)` returns the same document without touching
+a host, so a test or a relay can inspect it. The legacy `ui.render` path is the
+compatibility fallback when the host has no `canvas.present`.
+
+Run the document check with:
+
+```sh
+lua tests/soil_fixture.lua
+```
+
 ## Boundary
 
 `ui.lua` is the general structure/token layer. Stat, gauge, table, and chart are
 metric-visualization nodes built on that same tree, not a second styling dialect.
-Canvas remains the compositor and owns hit regions, pixels, and windowing.
+Canvas remains the compositor and owns hit regions, pixels, and windowing. The
+Rust and Lua SDKs share the scene document shape; only the host-call spelling
+differs (`soil:canvas/surface.present` versus `canvas.present`).

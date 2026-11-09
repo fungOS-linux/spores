@@ -1297,7 +1297,7 @@ local function context(theme)
   }
 end
 
-function ui.render(tree, theme)
+local function layout_prims(tree, theme)
   local S = context(theme)
   local body = lay(tree, S, 8.0)
   local prims = place(body.p, -4.0, 4.0)
@@ -1306,13 +1306,17 @@ function ui.render(tree, theme)
     ink = "background", opacity = 1, radius = 0,
     translation = { -4, 4, -1 }, scale = { 8, 8, 1 },
   })
+  return prims
+end
 
-  -- Controls first: the host owns their pixels, so there is nothing to draw
-  -- under them, and their hit region has to be registered either way.
-  local index = 0
+-- Controls first: the host owns their pixels, so there is nothing to draw
+-- under them, and their hit region has to be registered either way.
+local function emit_controls(prims)
   for _, prim in ipairs(prims) do
-    index = index + 1
     if prim.button then
+      if not (widget and widget.button) then
+        fail("a button needs widget.button from the host", 3)
+      end
       local spec = prim.button
       widget.button({
         id = spec.id,
@@ -1325,8 +1329,8 @@ function ui.render(tree, theme)
         appearance = spec.appearance,
       })
     elseif prim.host then
-      if not canvas.host_resource then
-        fail("host_surface needs canvas.host_resource; this host is too old", 2)
+      if not (canvas and canvas.host_resource) then
+        fail("host_surface needs canvas.host_resource; this host is too old", 3)
       end
       local spec = prim.host
       canvas.host_resource({
@@ -1337,8 +1341,10 @@ function ui.render(tree, theme)
       })
     end
   end
+end
 
-  -- Rects next (behind), then text.
+local function emit_canvas(prims)
+  local index = 0
   for _, prim in ipairs(prims) do
     index = index + 1
     local id = prim.id or string.format("e%d", index)
@@ -1353,6 +1359,105 @@ function ui.render(tree, theme)
                     translation = prim.translation, scale = prim.scale })
     end
   end
+end
+
+-- Canvas stores rotations as quaternions; soil-scene stores Euler XYZ. The
+-- view vocabulary only has a Z rotation, so a non-Z quaternion is a bug in the
+-- caller rather than something to guess at.
+local function euler(rotation)
+  if rotation == nil then return { 0, 0, 0 } end
+  if type(rotation) ~= "table" or #rotation ~= 4 then
+    fail("rotation must be a quaternion {x,y,z,w}", 3)
+  end
+  local x, y, z, w = rotation[1], rotation[2], rotation[3], rotation[4]
+  local length = math.sqrt(x * x + y * y + z * z + w * w)
+  if length == 0 or length ~= length then
+    fail("rotation quaternion is not finite", 3)
+  end
+  x, y, z, w = x / length, y / length, z / length, w / length
+  if math.abs(x) > 1e-6 or math.abs(y) > 1e-6 then
+    fail("soil documents carry Z rotation only", 3)
+  end
+  return { 0, 0, 2 * math.atan2(z, w) }
+end
+
+-- The Lua peer of soil_scene::Present. A node is flat: the one-pass layout has
+-- already placed every primitive in the surface's 8-unit space, so there is no
+-- second layout tree for a host to interpret. Buttons and host surfaces are
+-- host-owned controls, not scene content; they remain in emit_controls.
+local function document_from(prims)
+  local nodes = {}
+  local index = 0
+  for _, prim in ipairs(prims) do
+    index = index + 1
+    if not prim.button and not prim.host then
+      local node = {
+        id = prim.id or string.format("e%d", index),
+        transform = {
+          translation = prim.translation,
+          rotation = euler(prim.rotation),
+          scale = prim.scale,
+        },
+      }
+      if prim.opacity ~= nil then
+        node.type = "rect"
+        node.ink = prim.ink
+        node.opacity = prim.opacity
+        node.radius = prim.radius or 0
+      elseif prim.text ~= nil then
+        node.type = "text"
+        node.text = prim.text
+        node.ink = prim.ink
+        node.opacity = 1
+      else
+        fail("unknown UI primitive in soil document", 3)
+      end
+      nodes[#nodes + 1] = node
+    end
+  end
+  return { kind = "scene", schema = 1, nodes = nodes }
+end
+
+-- Legacy Canvas primitive path. Kept as the compatibility backend and as the
+-- fallback for hosts that do not grant the soil document capability yet.
+function ui.render(tree, theme)
+  local prims = layout_prims(tree, theme)
+  emit_controls(prims)
+  emit_canvas(prims)
+end
+
+-- The pure document. Same `soil_scene::Present` shape the Rust SDK sends:
+-- {"kind":"scene","schema":1,"nodes":[...]}. No host calls, so a test or a
+-- non-Canvas host can inspect or forward it.
+function ui.document(tree, theme)
+  return document_from(layout_prims(tree, theme))
+end
+
+-- Present a document this library did not build. This is the Lua peer of
+-- `soil_sdk_canvas::Surface::present`.
+function ui.present_document(document)
+  local present = canvas and canvas.present
+  if present == nil and soil and soil.canvas then
+    present = soil.canvas.present
+  end
+  if not present then
+    fail("this host has no soil document capability (canvas.present)", 2)
+  end
+  return present(document)
+end
+
+-- Present through the granted host capability. `canvas.present` is Canvas's
+-- `soil:canvas` binding; a Soil Lua host can provide the same function under
+-- `soil.canvas.present`. If neither exists, use the legacy primitive path so a
+-- view keeps rendering on an older Canvas instead of going blank.
+function ui.present(tree, theme)
+  local prims = layout_prims(tree, theme)
+  emit_controls(prims)
+  local document = document_from(prims)
+  if (canvas and canvas.present) or (soil and soil.canvas and soil.canvas.present) then
+    return ui.present_document(document)
+  end
+  emit_canvas(prims)
 end
 
 return ui

@@ -2,9 +2,10 @@
 
 The native GraphGPU dashboard and the 20k-point rotating cloud are `soil-scene`
 producers: the data, decimation and wgpu draw stay in the native host. The Lua
-UI is a tree of retained `rect`/`text` nodes. Those are different contracts.
-This note records how to put the former inside the latter without pretending a
-Lua tree can draw a million points.
+UI now has a `soil-scene` document backend too (`ui.document` / `ui.present`),
+but it is still a tree of retained `rect`/`text` nodes: it can place a GPU
+surface, not become one. This note records how to put the former inside the
+latter without pretending a Lua tree can draw a million points.
 
 ## What exists
 
@@ -18,8 +19,11 @@ Lua tree can draw a million points.
   `Present::GpuLease`, `spore_socket::gpu_frame_shm`, and `gpu_lease_layer` for
   displaying a producer's frame.
 - Canvas's Lua ABI is `canvas.group`, `canvas.text`, `canvas.rect`,
-  `canvas.image`, `canvas.mesh`, and host resources. It has no polyline, points,
-  dense or point-cloud primitive.
+  `canvas.image`, `canvas.mesh`, `canvas.present` and host resources.
+  `canvas.present` accepts the same `soil_scene::Present` shape as the Rust
+  `soil:canvas` SDK, so a Lua view and a Rust Spore can describe the same scene.
+- Canvas's current `spore_present` bridge still renders only `Rect` and `Text`;
+  it does not make the Lua tree a polyline/points/dense renderer.
 - `spore_present.rs` currently maps `Area`, `Band`, `Points`, `Heatmap`,
   `Candles`, `Polyline`, `Shader`, `GpuDense` and `GpuPoints3D` to `Group`. That
   is the visible regression: a Soil scene round-trips through Canvas as an empty

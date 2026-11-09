@@ -14,10 +14,12 @@ Spore is a signed wasm module, and a view has no authority.
 snapshot (from the Spore, wasm)     actions (intents, back to the Spore)
             │                                   ▲
             ▼                                   │
-      view: Lua → ui.* tree ──measure/layout──► canvas.* primitives
-                                                  │
-                                                  ▼
-                                        Canvas scene → pixels
+      view: Lua → ui.* tree ──measure/layout──┬─► canvas.rect/text (legacy)
+                                             │
+                                             └─► ui.document ──► soil-scene
+                                                                  │
+                                                                  ▼
+                                                    canvas.present / host renderer
 ```
 
 - **Lua describes.** A view returns a tree: no coordinates, no colours.
@@ -49,6 +51,33 @@ native host's resident dense-buffer decimation.
 | Layout primitives instead of coordinates | column/row/card flow, measured in the library |
 | Incomplete UI must not blank | already true: a rejected reload keeps the last good scene on screen |
 | Escape hatch stays possible | call `canvas.*` directly, or `raw = true` in a node |
+
+## Two rendering paths, one vocabulary
+
+There are two wire paths from the same tree, and they have the same visual
+meaning:
+
+- `ui.render(tree, theme)` emits the legacy `canvas.rect`/`canvas.text`
+  primitives directly. It is the compatibility path for a host that predates
+  `soil-scene`.
+- `ui.present(tree, theme)` builds a `soil_scene::Present` document, calls the
+  host's `canvas.present` (or `soil.canvas.present`), and lets the host draw
+  it. This is the Lua peer of `soil_sdk_canvas::Surface::present_scene` in the
+  Rust SDK: same schema, same 8-unit transform space, same semantic inks, same
+  no-pixels-to-the-view rule.
+- `ui.document(tree, theme)` returns the document without calling a host. It is
+  the pure artifact a test, a non-Canvas host, or a relay can inspect.
+
+The scene vocabulary is deliberately small: flat `rect` and `text` nodes plus
+the layout and dashboard primitives that lower to them. Buttons and host
+surfaces are host-owned controls. They stay outside the document; a button is
+still a hit region, and a host surface is still a placement, not pixels in the
+scene tree.
+
+`ui.present` falls back to `ui.render` when the host does not grant
+`canvas.present`, so a running old Canvas keeps drawing. The fallback is a
+migration bridge, not a second renderer: both paths are measured by the same
+one-pass layout and carry the same tokens.
 
 ## What we changed, and why
 
