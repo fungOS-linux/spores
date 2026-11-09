@@ -153,12 +153,41 @@ end
 local TYPE = { micro = 9, caption = 10, body = 12, title = 16 }
 local GAP = { xs = 4, sm = 8, md = 16 }
 
+-- Characters a line holds at this size. The host measures text; a view that
+-- cannot ask must estimate. A short estimate only wraps early — an absent one
+-- is what reserved 44 px for a paragraph and laid the rest of the column on top
+-- of it.
+local function chars_per_line(width, size)
+  return math.max(8, math.floor(width / (size * 0.52)))
+end
+
+local function wrapped_height(value, width, size, max_lines)
+  local lines = math.ceil(#tostring(value or "") / chars_per_line(width, size))
+  lines = math.max(1, math.min(max_lines, lines))
+  return lines * (size + 4) -- the same line height `label` declares
+end
+
 -- Rows have a fixed height, so the count a pane can hold is arithmetic, not a
 -- constant. Drawing every event in a 40-event snapshot put a third of them past
 -- the bottom edge of the surface (2,309 px of ink on a 1,569 px surface): they
 -- were painted, invisible, and counted in "1–40 of 40".
-local ROW_H = 72
+local ROW_PAD = 6
+local ROW_HEAD_H = 13
+local ROW_SUBJECT_H = 12
+local ROW_GAP_H = 2
+local ROW_SUMMARY_LINES = 2
+-- A row is its parts added up. Written as a sum so that changing a type size
+-- moves the row with it: a row height that is one number somebody liked is how
+-- the summary ended up with two lines of text in a box sized for one.
+local ROW_H = ROW_PAD * 2 + ROW_HEAD_H + ROW_GAP_H
+  + ROW_SUMMARY_LINES * (TYPE.body + 4) + ROW_GAP_H + ROW_SUBJECT_H
 local CHROME = 120
+-- The detail column is a fixed slice of the surface: wide enough for a summary at
+-- title size, narrow enough to leave the list the room its rows need.
+local PANE_W = 300
+-- Eight lines is a summary, not a document. Past that the column stops being a
+-- column and the log stops being scannable.
+local SUMMARY_LINES = 8
 
 local function visible_count(snapshot)
   local total = #(snapshot.events or {})
@@ -183,13 +212,15 @@ local function event_row(event, index, show_source)
 
   return {
     id = "event-" .. index, kind = "container",
-    layout = { height = ROW_H, direction = "column", gap = 2, padding = { top = 6, right = 12, bottom = 6, left = 12 } },
+    layout = { height = ROW_H, direction = "column", gap = ROW_GAP_H,
+      padding = { top = ROW_PAD, right = 12, bottom = ROW_PAD, left = 12 } },
     children = {
-      { id = "event-" .. index .. "-head", kind = "container", layout = { direction = "row", height = 13 }, children = head },
+      { id = "event-" .. index .. "-head", kind = "container", layout = { direction = "row", height = ROW_HEAD_H }, children = head },
       -- Two wrapped lines instead of one clipped one: Marbles' detail is often
       -- the whole point of the row, and `…` at 76 characters threw it away.
-      label("event-" .. index .. "-summary", clip(event.summary, 160), TYPE.body, { height = 30, wrap = true }),
-      label("event-" .. index .. "-subject", clip(event.subject, 56), TYPE.micro, { height = 12 }),
+      label("event-" .. index .. "-summary", clip(event.summary, 160), TYPE.body,
+        { height = ROW_SUMMARY_LINES * (TYPE.body + 4), wrap = true }),
+      label("event-" .. index .. "-subject", clip(event.subject, 56), TYPE.micro, { height = ROW_SUBJECT_H }),
     },
   }
 end
@@ -223,9 +254,16 @@ local function detail(snapshot)
     return { id = "worklog-detail", kind = "container", layout = {}, children = {
       label("worklog-detail-empty", "Select an event", 12, {}) } }
   end
+  local detail_summary = clip(event.summary or "",
+    SUMMARY_LINES * chars_per_line(PANE_W - GAP.md * 2, TYPE.title))
   local children = {
     label("worklog-detail-label", "EVENT", TYPE.micro, { height = 14 }),
-    label("worklog-detail-summary", event.summary or "", TYPE.title, { height = 44, wrap = true }),
+    -- A wrapped label needs the height its lines actually take. The layout gives
+    -- a node exactly what it asks for, so asking for one line of a paragraph
+    -- does not clip it: the ink continues over whatever was laid out next.
+    label("worklog-detail-summary", detail_summary, TYPE.title,
+      { height = wrapped_height(detail_summary, PANE_W - GAP.md * 2, TYPE.title, SUMMARY_LINES),
+        wrap = true }),
     label("worklog-detail-when", (event.at_text or "") .. "  ·  " .. (event.age or ""), TYPE.micro, { height = 14 }),
     label("worklog-detail-who", (event.actor or "") .. "  ·  " .. (event.source or ""), TYPE.micro, { height = 14 }),
     label("worklog-detail-kind", kind_word(event.kind), TYPE.micro, { height = 14 }),
@@ -274,7 +312,7 @@ local function tree(snapshot)
       id = "worklog-main", kind = "container", layout = { flex_grow = 1, direction = "row", gap = 16 },
       children = {
         { id = "worklog-list-pane", kind = "container", layout = { flex_grow = 1, flex_shrink = 1, direction = "column", padding = { top = GAP.sm, right = GAP.sm, bottom = GAP.sm, left = GAP.sm } }, children = { list(snapshot, visible_count(snapshot), show_source) } },
-        { id = "worklog-detail-pane", kind = "container", layout = { width = 300, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = GAP.sm, right = GAP.md, bottom = GAP.sm, left = GAP.md } }, children = { detail(snapshot) } },
+        { id = "worklog-detail-pane", kind = "container", layout = { width = PANE_W, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = GAP.sm, right = GAP.md, bottom = GAP.sm, left = GAP.md } }, children = { detail(snapshot) } },
       },
     }
   else

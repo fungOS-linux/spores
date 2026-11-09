@@ -1,10 +1,12 @@
 -- Fixture for the worklog view. Run from spores/worklog:
 --   lua tests/ui_fixture.lua
 --
--- The view builds a node tree and hands it to `canvas.layout`, which in Canvas
--- is the Taffy layout server. A fixture has no layout engine, so this supplies a
--- minimal host that flattens the tree and gives every node a placeholder rect.
--- The assertions are about structure and copy, never about geometry.
+-- The view builds a node tree and hands geometry to the host. Canvas has no
+-- layout service, so it draws through the kit's Lua flow layout — which is what
+-- this fixture runs, at the surface sizes the wall actually hands out. Geometry
+-- is asserted, not stubbed: the defect this guards was geometric (a wrapped
+-- label given one line's height while the host drew several, so the detail
+-- column landed on top of itself), and a placeholder rect per node hides it.
 
 -- The layout kit lives in the inbox Spore: one kit, composed into every view
 -- rather than copied per Spore. Only `ui.layout` is used here.
@@ -23,23 +25,55 @@ _G.module = {
 }
 
 local drawn = { rects = {}, texts = {} }
+local checked = { width = 0, height = 0 }
+
+local function check_geometry(laid, width, height)
+  checked.width, checked.height = width, height
+  local by_id, nodes = {}, {}
+  for _, node in ipairs(laid.nodes or {}) do
+    local rect = node.rect
+    assert(rect, "laid-out node without a rect: " .. tostring(node.id))
+    assert(rect.x >= -0.5 and rect.y >= -0.5,
+      string.format("%s starts outside the surface (%.1f, %.1f)", tostring(node.id), rect.x, rect.y))
+    assert(rect.x + rect.width <= width + 0.5,
+      string.format("%s runs past the right edge (%.1f > %d)", tostring(node.id), rect.x + rect.width, width))
+    assert(rect.y + rect.height <= height + 0.5,
+      string.format("%s runs past the bottom edge (%.1f > %d)", tostring(node.id), rect.y + rect.height, height))
+    by_id[node.id] = rect
+    nodes[node.id] = node
+  end
+  -- Every wrapped label has to reserve the height its lines take. The host draws
+  -- the lines and the layout only honours the box, so a box of one line's height
+  -- does not clip the ink: it lets it run over whatever the column stacks next —
+  -- which is what put the detail column on top of its own summary.
+  for id, node in pairs(nodes) do
+    local rect, style = by_id[id], node.style
+    if rect and style and style.wrap and node.kind == "text" then
+      local per_line = math.max(8, math.floor(rect.width / (style.size * 0.52)))
+      local lines = math.max(1, math.ceil(#tostring(node.text or "") / per_line))
+      local line_height = style.line_height or (style.size + 4)
+      local needed = lines * line_height
+      assert(rect.height + 0.5 >= needed, string.format(
+        "%s reserves %.0f px for %d line(s) of %d px text, which needs %.0f",
+        id, rect.height, lines, style.size, needed))
+    end
+  end
+  -- And the column stacks: the field after the summary may not sit under it.
+  local summary, below = by_id["worklog-detail-summary"], by_id["worklog-detail-when"]
+  if summary and below then
+    assert(below.y >= summary.y + summary.height - 0.5,
+      string.format("the detail column overlaps its own summary (summary ends %.1f, worklog-detail-when starts %.1f)",
+        summary.y + summary.height, below.y))
+  end
+end
 
 _G.canvas = {
-  -- Flatten the node graph the way the layout server does, keeping every field
-  -- the draw pass reads and replacing only the geometry.
-  layout = function(root, width)
-    local nodes = {}
-    local function walk(node)
-      local copy = {}
-      for key, value in pairs(node) do
-        if key ~= "children" then copy[key] = value end
-      end
-      copy.rect = { x = 0, y = 0, width = width, height = 24 }
-      nodes[#nodes + 1] = copy
-      for _, child in ipairs(node.children or {}) do walk(child) end
-    end
-    walk(root)
-    return { nodes = nodes }
+  -- The kit's own flow layout: the same code Canvas falls back to when the host
+  -- offers no `canvas.layout`.
+  layout = function(root, width, height)
+    local laid = ui.layout(root, width, height)
+    check_geometry(laid, width, height)
+    return laid
   end,
   rect = function(spec) drawn.rects[#drawn.rects + 1] = spec end,
   text = function(spec) drawn.texts[#drawn.texts + 1] = spec end,
@@ -101,6 +135,31 @@ for index, event in ipairs(snapshot.events) do event.selected = index == 1 end
 -- An empty log is a normal state, not a crash.
 local empty = render({ title = "WORKLOG", counts = { total = 0, today = 0 }, events = {} })
 assert(empty:find("Nothing has arrived yet", 1, true), "an empty log should say so")
+
+-- A summary long enough to wrap: Marbles' detail runs to hundreds of
+-- characters, and a column that reserves one line's height for it lays the rest
+-- of itself under the paragraph.
+local long_summary = string.rep("ack:superseded by scan recognition ", 11) .. "end"
+local long = {
+  id = "long", kind = "closed", source = "marbles", actor = "ajmwagar",
+  summary = long_summary, subject = "marbles://local/long",
+  at_text = "2026-11-09T00:57:01Z", age = "37m", selected = true,
+  links = { { rel = "subject", locator = "marbles://local/long" } },
+}
+local wrapped_copy = render({
+  title = "WORKLOG", counts = { total = 1, today = 1 },
+  sources = { { id = "marbles", label = "Marbles", count = 1 } },
+  events = { long },
+})
+assert(wrapped_copy:find("superseded by scan recognition", 1, true), "the long summary is not drawn")
+
+-- The size the wall actually hands this surface. The view cannot ask for it, so
+-- it has to survive it: rows and the detail column are both computed from H.
+_G.module.viewport = { width = 1182, height = 797 }
+local at_surface = render(snapshot)
+assert(checked.width == 1182 and checked.height == 797, "the view laid out for a size it was not given")
+assert(at_surface:find("WORKLOG", 1, true), "the title is missing at surface size")
+_G.module.viewport = { width = 1086, height = 1569 }
 
 print("ui: ok")
 
