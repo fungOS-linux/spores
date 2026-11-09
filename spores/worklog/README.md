@@ -58,6 +58,13 @@ Read it back:
 lua tools/preview_worklog.lua                  # plain text, committed fixture
 lua tools/preview_worklog.lua /tmp/worklog.lua # plain text, the real log
 
+# A picture without a compositor: the same primitives Canvas is handed, drawn to
+# SVG at the size the wall gives this surface. Geometry, density and colour roles
+# are real; only the font metrics are approximated (0.8 em per character, which is
+# what the wrap budget already assumes).
+lua tools/render_worklog.lua /tmp/worklog.lua /tmp/worklog.svg
+rsvg-convert -w 1182 /tmp/worklog.svg -o /tmp/worklog.png
+
 lua tools/compose_worklog.lua "$MODULES" /tmp/worklog.lua
 
 # Iterate without shipping: tend re-composes on save and reloads the surface,
