@@ -31,7 +31,7 @@ grid.render(snapshot)      -- paints the grid; grid.meta describes the frame
   title = string?,
   cursor = { x = integer, y = integer, visible = boolean? }?,
   scroll = { offset = integer, total = integer, len = integer }?,
-  rows = {
+  lines = {
     {
       y = integer,
       runs = { { text = string, fg = "#rrggbb"?, bg = "#rrggbb"?, flags = integer? } },

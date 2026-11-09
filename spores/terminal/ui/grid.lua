@@ -114,7 +114,7 @@ function M.render(frame)
   surface = ui.surface(width, height, ui.theme())
   surface:rect("terminal-bg", 0, 0, width, height, "background", 1, 0)
 
-  for _, row in ipairs(frame.rows or {}) do
+  for _, row in ipairs(frame.lines or {}) do
     local y = (tonumber(row.y) or 0) * ch
     if y + ch <= height + 0.5 then
       paint_row(row, cols, y, cw, ch, size)

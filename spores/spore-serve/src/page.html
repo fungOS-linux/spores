@@ -73,7 +73,14 @@
   let sentSize = '';
   let rendering = false;
 
-  function px(value, total) { return (value + 4) / 8 * total; }
+  // The scene is the Canvas space: x runs -4..4 left to right, y runs 4..-4 top
+  // to bottom. Inverting them is not the same operation, and using the x rule for
+  // y draws the grid upside down — the first rows land past the bottom edge and
+  // the screen appears to start at the bottom and build upward.
+  function fromX(value, total) { return (value + 4) / 8 * total; }
+  function fromY(value, total) { return (4 - value) / 8 * total; }
+  function spanX(value, total) { return value / 8 * total; }
+  function spanY(value, total) { return value / 8 * total; }
 
   function draw(scene) {
     const W = window.innerWidth, H = window.innerHeight;
@@ -82,15 +89,15 @@
       const t = node.transform || {};
       const tr = t.translation || [0, 0, 0];
       const sc = t.scale || [0, 0, 1];
-      const left = px(tr[0], W);
-      const top = px(tr[1], H);
+      const left = fromX(tr[0], W);
+      const top = fromY(tr[1], H);
       if (node.type === 'rect') {
         const el = document.createElement('div');
         el.className = 'n';
         el.style.left = left + 'px';
         el.style.top = top + 'px';
-        el.style.width = (sc[0] / 8 * W) + 'px';
-        el.style.height = (sc[1] / 8 * H) + 'px';
+        el.style.width = spanX(sc[0], W) + 'px';
+        el.style.height = spanY(sc[1], H) + 'px';
         if (node.rgb) el.style.background = `rgb(${node.rgb[0]},${node.rgb[1]},${node.rgb[2]})`;
         if (node.opacity !== undefined) el.style.opacity = node.opacity;
         if (node.radius) el.style.borderRadius = (node.radius / 8 * W) + 'px';

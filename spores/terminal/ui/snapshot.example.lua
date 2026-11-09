@@ -7,7 +7,7 @@ return {
   title = "avery@agora-one: ~",
   cursor = { x = 21, y = 3, visible = true },
   scroll = { offset = 0, total = 24, len = 24 },
-  rows = {
+  lines = {
     { y = 0, runs = { { "avery@agora-one ~ % ", "#7dd3a8", nil, 1 } } },
     { y = 1, runs = { { "ls -la", "#dce5ea", nil, 0 } } },
     { y = 2, runs = {
