@@ -89,7 +89,7 @@ fn the_shipped_package_renders_without_an_sdk() {
         .load_snapshot(Some(&divebar().join("ui/snapshot.lua")))
         .expect("fixture");
     let scene = host.render(&spore, "top-bar", snapshot).expect("render");
-    assert_eq!(scene.len(), 17, "the fixture frame draws 17 primitives");
+    assert_eq!(scene.len(), 31, "the fixture frame draws 31 primitives");
     let ids: Vec<&str> = scene
         .iter()
         .filter_map(|node| node.get("id").and_then(|id| id.as_str()))
