@@ -178,6 +178,11 @@ fn page_draws_the_served_scene() {
     );
 
     let smoke = Command::new(node)
+        // The page loads its rasterizer with `import()`, which is what keeps the
+        // module out of the render path until it is asked for. Node only hands a
+        // vm context a dynamic-import hook behind this flag, so the page cannot be
+        // driven without it.
+        .arg("--experimental-vm-modules")
         .arg("tests/page_smoke.mjs")
         .arg(&scene)
         .current_dir(spore_dir())

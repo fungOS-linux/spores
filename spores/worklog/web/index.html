@@ -6,8 +6,7 @@
   <title>Worklog</title>
   <style>
     html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#191919;color:#e9e9e7;font:13px ui-sans-serif,-apple-system,Helvetica,Arial,sans-serif}
-    canvas{display:block;width:100%;height:100%}
-    /* The view draws the field and its text; the input is the caret and the keys.
+    canvas{display:block;width:100%;height:100%}    /* The view draws the field and its text; the input is the caret and the keys.
        Text is transparent so the glyphs on screen are the document's, never two
        copies of the same word. */
     #q{position:fixed;border:0;outline:0;background:transparent;color:transparent;
@@ -42,24 +41,11 @@ let tag = null, lastBody = null, inFlight = false, current = null;
 // what a query matches and how far the log goes are the view's answers.
 let query = '', offset = 0, hover = '', meta = { row_height: 0, first: 0, shown: 0, total: 0 };
 
-// What a role means when the palette did not resolve it. A missing colour should
-// look like a missing colour, not like invisible text.
-const INKS = {
-  background: '#0d0f14', surface: '#1e2430', text: '#e6ebf5', muted: '#8b96ab',
-  primary: '#f2f5fb', success: '#a6da95', warning: '#eed49f', info: '#7dc4e4',
-  danger: '#ed8796',
-};
-
-function fillOf(node) {
-  const alpha = node.opacity ?? 1;
-  if (node.rgb) {
-    const [r, g, b] = node.rgb;
-    return `rgba(${r},${g},${b},${alpha})`;
-  }
-  const hex = INKS[node.ink] || INKS.text;
-  const n = parseInt(hex.slice(1), 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
-}
+// The rasterizer is the one the wall runs, compiled to wasm: this page no longer
+// paints a scene node by node, it asks that renderer for pixels. The module, its
+// glue and one single-face font come from the host, so nothing licensed is
+// compiled into the artifact and a font swap is a host decision.
+let gpu = null, gpuError = null;
 
 // Resizing a canvas clears it, so it happens only when the window actually
 // changed size — never on a poll.
@@ -70,47 +56,55 @@ function fit() {
   size = next;
   canvas.width = Math.floor(size.w * dpr);
   canvas.height = Math.floor(size.h * dpr);
-  frame.width = canvas.width;
-  frame.height = canvas.height;
   return true;
 }
 
-function draw(scene, w, h) {
-  paint.setTransform(dpr, 0, 0, dpr, 0, 0);
-  paint.clearRect(0, 0, w, h);
-  const xOf = (u) => (u + 4) / 8 * w;
-  const yOf = (u) => (4 - u) / 8 * h;
-
-  // Canvas sorts scene nodes by z and breaks ties by insertion order, so a stable
-  // sort by z here paints the same picture. `radius` is a length in surface
-  // pixels, like every other length the view hands over.
-  const nodes = [...(scene.nodes || [])].sort(
-    (a, b) => ((a.transform?.translation?.[2] ?? 0) - (b.transform?.translation?.[2] ?? 0)));
-
-  for (const node of nodes) {
-    const t = node.transform || {};
-    const [x, y] = t.translation || [0, 0, 0];
-    const [sx, sy] = t.scale || [1, 1, 1];
-    paint.fillStyle = fillOf(node);
-    if (node.type === 'rect') {
-      const px = xOf(x), py = yOf(y);
-      const rw = sx / 8 * w, rh = sy / 8 * h;
-      const radius = Math.min(node.radius || 0, rw / 2, rh / 2);
-      paint.beginPath();
-      if (paint.roundRect) paint.roundRect(px, py, rw, rh, radius);
-      else paint.rect(px, py, rw, rh);
-      paint.fill();
-    } else if (node.type === 'text') {
-      paint.font = `${node.px}px ui-sans-serif, -apple-system, Helvetica, Arial, sans-serif`;
-      paint.textBaseline = 'top';
-      paint.fillText(node.text || '', xOf(x), yOf(y));
-    }
+// A frame arrives as tightly packed RGBA at the size the scene was asked for. It
+// is painted into the off-screen canvas and blitted in one call, so a repaint
+// replaces every pixel at once or not at all.
+async function paintFrame(document, w, h) {
+  const width = Math.max(1, Math.round(w)), height = Math.max(1, Math.round(h));
+  const rgba = await gpu.render(JSON.stringify(document), width, height);
+  if (frame.width !== width || frame.height !== height) {
+    frame.width = width;
+    frame.height = height;
   }
+  paint.putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.drawImage(frame, 0, 0, width, height);
+}
 
-  // One blit, one composite. No clear on the visible canvas: the scene paints its
-  // own background, so the blit covers every pixel it is about to replace.
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.drawImage(frame, 0, 0);
+// The font, by content id. Fetched once, cached under the id it was served with,
+// and a reload is a cache hit; a different font is a different URL, which is what
+// makes caching it safe instead of a bet.
+async function face() {
+  const descriptor = await (await fetch('fonts.json', { cache: 'no-store' })).json();
+  const store = await caches.open('fungos-fonts');
+  let cached = await store.match(descriptor.url);
+  if (!cached) {
+    cached = await fetch(descriptor.url);
+    if (!cached.ok) throw new Error(`font ${cached.status}`);
+    await store.put(descriptor.url, cached.clone());
+  }
+  return new Uint8Array(await cached.arrayBuffer());
+}
+
+async function start() {
+  try {
+    status.textContent = 'starting renderer…';
+    const bytes = await face();
+    const module = await import('./pkg/scene.js');
+    await module.default();
+    gpu = await module.SceneRenderer.create(bytes);
+    // The ground, and the type scale's base: the two facts a scene does not carry
+    // because they are the host's, not the view's.
+    gpu.set_background(25, 25, 25);
+    gpu.set_body(24);
+    await refresh();
+  } catch (error) {
+    gpuError = String(error.message || error);
+    status.textContent = `renderer: ${gpuError}`;
+  }
 }
 
 // Normalized scene units -> surface pixels, the inverse of `nx`/`ny`. Hit targets
@@ -165,6 +159,10 @@ function schedule(delay = 80) {
 }
 
 async function refresh() {
+  // Nothing to ask for until there is something to draw with: the module, the
+  // font and the device are all fetched once, and a request before that would be
+  // a scene no one can paint.
+  if (!gpu) return;
   if (inFlight) {
     // A keystroke that lands mid-request has to be asked again, or the last word
     // typed is the one the page never shows.
@@ -196,7 +194,7 @@ async function refresh() {
     if (scene.error) throw new Error(scene.error);
     current = scene;
     meta = scene.meta || meta;
-    draw(scene, w, h);
+    await paintFrame(scene, w, h);
     place();
     status.textContent = `${scene.nodes.length} nodes · ${new Date().toLocaleTimeString()}`;
   } catch (error) {
@@ -245,7 +243,7 @@ input.addEventListener('input', () => {
   schedule(140);
 });
 
-refresh();
+start();
 // The scene is regenerated by the host from the tail of the log, so polling is
 // what keeps the page equal to the log rather than equal to the moment I looked.
 setInterval(refresh, 5000);

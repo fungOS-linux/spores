@@ -59,6 +59,13 @@ struct Config {
     sdk: PathBuf,
     snapshot: PathBuf,
     theme: PathBuf,
+    /// The wasm scene renderer and its glue, built from `soil-scene-gpu`. The
+    /// page imports them; this host only carries them.
+    wasm: PathBuf,
+    /// The face the renderer rasterizes text with. A host input like the theme:
+    /// nothing licensed is compiled into the module, and the page caches what it
+    /// is given by content id.
+    font: Option<(PathBuf, String)>,
 }
 
 fn option(args: &[String], name: &str) -> Option<String> {
@@ -92,6 +99,22 @@ fn run(args: &[String]) -> Result<(), String> {
         theme: option(args, "--theme")
             .map(PathBuf::from)
             .unwrap_or_else(|| root.join("../themes/graphite.lua")),
+        wasm: option(args, "--wasm-dir")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join("web/pkg")),
+        font: match option(args, "--font")
+            .map(PathBuf::from)
+            .or_else(default_font)
+        {
+            // The id is computed once, at startup: it is a property of the file,
+            // and hashing a megabyte on every page load to learn something that
+            // cannot have changed is the kind of work a server should do once.
+            Some(path) => {
+                let id = font_id(&path)?;
+                Some((path, id))
+            }
+            None => None,
+        },
         root,
     };
     if !config.sdk.join("lua/fungos/ui.lua").exists() {
@@ -219,6 +242,59 @@ fn handle(
             PAGE,
             &[("cache-control", "no-store")],
         ),
+        // The page renders with the same rasterizer the wall does: this host
+        // ships the module, the page runs it.
+        "/pkg/scene.js" => serve_asset(
+            &mut stream,
+            &config.wasm.join("scene.js"),
+            "text/javascript; charset=utf-8",
+            &headers,
+        ),
+        "/pkg/scene_bg.wasm" => serve_asset(
+            &mut stream,
+            &config.wasm.join("scene_bg.wasm"),
+            "application/wasm",
+            &headers,
+        ),
+        // Content-addressed, because a font never changes for a given id: the
+        // page caches it under that URL and a reload costs nothing.
+        "/fonts.json" => match &config.font {
+            Some((path, id)) => {
+                let kind = if path.extension().and_then(|value| value.to_str()) == Some("otf") {
+                    "font/otf"
+                } else {
+                    "font/ttf"
+                };
+                let body =
+                    format!("{{\"id\":\"{id}\",\"url\":\"/font/{id}\",\"kind\":\"{kind}\"}}");
+                respond(
+                    &mut stream,
+                    200,
+                    "application/json",
+                    &body,
+                    &[("cache-control", "no-store")],
+                )
+            }
+            None => respond(
+                &mut stream,
+                404,
+                "text/plain; charset=utf-8",
+                "no font: pass --font <single-face .ttf or .otf>",
+                &[],
+            ),
+        },
+        path if path.starts_with("/font/") => match &config.font {
+            Some((file, id)) if path == format!("/font/{id}") => serve_font(&mut stream, file, id),
+            // A stale id is a font the browser kept from a previous host. Saying
+            // so is how a cache gets invalidated without a human.
+            _ => respond(
+                &mut stream,
+                404,
+                "text/plain; charset=utf-8",
+                "no font under that content id",
+                &[],
+            ),
+        },
         "/scene.json" => {
             let width = query_value(query, "w").unwrap_or(1182).clamp(1, MAX_SIDE);
             let height = query_value(query, "h").unwrap_or(1569).clamp(1, MAX_SIDE);
@@ -299,6 +375,91 @@ fn header<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
         let (key, value) = line.split_once(':')?;
         key.trim().eq_ignore_ascii_case(name).then(|| value.trim())
     })
+}
+
+/// A build artifact the page imports. Its tag is its own stamp, so a rebuilt
+/// module is fetched once and an unchanged one costs a 304 — the same bargain the
+/// scene makes, on a file the host did not generate.
+fn serve_asset(
+    stream: &mut TcpStream,
+    path: &Path,
+    kind: &str,
+    headers: &str,
+) -> Result<(), String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let message = format!(
+                "{} is not built ({error})\n\n  cargo build -p soil-scene-gpu --lib \
+                 --no-default-features --target wasm32-unknown-unknown\n  wasm-bindgen \
+                 --target web --out-name scene --out-dir <this host's web/pkg> \
+                 <the .wasm above>\n",
+                path.display()
+            );
+            return respond(stream, 404, "text/plain; charset=utf-8", &message, &[]);
+        }
+    };
+    let etag = format!("\"{}-{}\"", modified(path)?, bytes.len());
+    let tags = [("etag", etag.as_str()), ("cache-control", "no-cache")];
+    if header(headers, "if-none-match")
+        .is_some_and(|value| value.split(',').any(|tag| tag.trim() == etag.as_str()))
+    {
+        return respond_bytes(stream, 304, kind, &[], &tags);
+    }
+    respond_bytes(stream, 200, kind, &bytes, &tags)
+}
+
+/// The font, under the id its bytes hash to.
+///
+/// Immutable for a given id: the page can cache it forever because a different
+/// font is a different URL, which is what makes caching it a decision the host
+/// makes rather than a bet the browser takes.
+fn serve_font(stream: &mut TcpStream, path: &Path, id: &str) -> Result<(), String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
+    let kind = match path.extension().and_then(|value| value.to_str()) {
+        Some("otf") => "font/otf",
+        _ => "font/ttf",
+    };
+    respond_bytes(
+        stream,
+        200,
+        kind,
+        &bytes,
+        &[
+            ("x-content-id", id),
+            ("cache-control", "public, max-age=31536000, immutable"),
+        ],
+    )
+}
+
+/// The content id of a font's bytes.
+fn font_id(path: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
+    Ok(Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+/// The face to render with when the operator names none.
+///
+/// Single-face files only. A `.ttc` is a collection, and `fontdue` reads one sfnt
+/// — naming a collection here would render whichever weight the parser happened
+/// to land on, which is a bug nobody would look for in a font list.
+fn default_font() -> Option<PathBuf> {
+    [
+        // Small single faces first: a browser downloads this once per host, and
+        // the 8 MB system variable face costs more than the page it draws.
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Verdana.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/System/Library/Fonts/SFNS.ttf",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .find(|path| path.exists())
 }
 
 fn query_value(query: &str, name: &str) -> Option<u32> {
@@ -422,6 +583,16 @@ fn respond(
     body: &str,
     extra: &[(&str, &str)],
 ) -> Result<(), String> {
+    respond_bytes(stream, status, kind, body.as_bytes(), extra)
+}
+
+fn respond_bytes(
+    stream: &mut TcpStream,
+    status: u16,
+    kind: &str,
+    body: &[u8],
+    extra: &[(&str, &str)],
+) -> Result<(), String> {
     let reason = match status {
         200 => "OK",
         304 => "Not Modified",
@@ -441,7 +612,7 @@ fn respond(
     head.push_str("connection: close\r\n\r\n");
     stream
         .write_all(head.as_bytes())
-        .and_then(|()| stream.write_all(body.as_bytes()))
+        .and_then(|()| stream.write_all(body))
         .and_then(|()| stream.flush())
         .map_err(|error| format!("respond: {error}"))
 }

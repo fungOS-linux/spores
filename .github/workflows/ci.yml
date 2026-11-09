@@ -50,7 +50,7 @@ jobs:
           lua5.4 tests/ui_fixture.lua
           lua5.4 ../../tools/shot.lua ui/worklog.lua examples/worklog_mock.lua \
             ../themes/graphite.lua /tmp/scene.json 1182 1569
-          node tests/page_smoke.mjs /tmp/scene.json
+          node --experimental-vm-modules tests/page_smoke.mjs /tmp/scene.json
 
       # The files view has one extra thing to prove: the snapshot `files-serve`
       # generates from a real tree is a Lua literal, and the page routes a press.
