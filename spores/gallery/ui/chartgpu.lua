@@ -81,7 +81,7 @@ function M.render(snapshot)
   local errors = snapshot.errors or {}
   local connections = snapshot.connections or {}
 
-  ui.render(
+  ui.present(
     ui.column {
       h = 1800,
       gap = "sm",
