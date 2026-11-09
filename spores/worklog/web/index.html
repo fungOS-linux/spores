@@ -30,7 +30,7 @@ const status = document.getElementById('status');
 let dpr = 1, size = { w: 0, h: 0 };
 // The last body we painted, and the tag that names it. A poll that comes back
 // unchanged must not touch the canvas at all.
-let tag = null, inFlight = false;
+let tag = null, lastBody = null, inFlight = false;
 
 // What a role means when the palette did not resolve it. A missing colour should
 // look like a missing colour, not like invisible text.
@@ -119,9 +119,16 @@ async function refresh() {
     // that did not need it.
     if (response.status === 304) return;
     if (!response.ok) throw new Error(`scene ${response.status}: ${await response.text()}`);
-    const scene = await response.json();
+    // The tag is an optimisation the browser is free to ignore — `If-None-Match`
+    // on a cache-bypassing request is exactly the header that goes missing. The
+    // body is not optional: if it is the bytes already on screen, there is
+    // nothing to draw, whatever the status line said.
+    const body = await response.text();
+    tag = response.headers.get('etag') || tag;
+    if (body === lastBody) return;
+    lastBody = body;
+    const scene = JSON.parse(body);
     if (scene.error) throw new Error(scene.error);
-    tag = response.headers.get('etag');
     draw(scene, w, h);
     status.textContent = `${scene.nodes.length} nodes · ${new Date().toLocaleTimeString()}`;
   } catch (error) {

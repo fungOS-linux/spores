@@ -57,10 +57,12 @@ const sandbox = {
   clearTimeout() {},
   fetch: async (url, options) => {
     requests += 1;
+    // Two polls with nothing new, in the two shapes a browser can produce them:
+    // a revalidated 304, and a plain 200 whose bytes are the ones already on
+    // screen (the browser dropped the conditional header, which is how this
+    // shipped flickering in the first place).
     const revalidating = (options?.headers?.['if-none-match'] || null) === ETAG;
-    // The second request revalidates, which is what a poll of an unchanged scene
-    // looks like: a 304 and nothing to draw.
-    if (revalidating) {
+    if (requests === 2 && revalidating) {
       return {
         ok: true, status: 304,
         headers: { get: (name) => (name.toLowerCase() === 'etag' ? ETAG : null) },
@@ -72,7 +74,7 @@ const sandbox = {
       ok: true, status: 200,
       headers: { get: (name) => (name.toLowerCase() === 'etag' ? ETAG : null) },
       json: async () => JSON.parse(scene),
-      text: async () => '',
+      text: async () => scene,
     };
   },
   console, Date, Math, parseInt, JSON,
@@ -94,14 +96,15 @@ if (!drawn.texts.some((entry) => entry.text === 'WORKLOG')) {
   problems.push('the masthead is missing');
 }
 
-// Polling an unchanged scene must not repaint it. A page that clears and redraws
-// on every 304 is the flicker this guards: the second pass would record a second
-// frame and a second copy of every node.
+// Polling an unchanged scene must not repaint it, whichever way the poll comes
+// back. A page that clears and redraws on a repeat is the flicker this guards.
 if (tick) {
   tick();
   await settle();
+  tick();
+  await settle();
 }
-if (requests < 2) problems.push(`the poll never ran (${requests} requests)`);
+if (requests < 3) problems.push(`the poll never ran (${requests} requests)`);
 if (drawn.blits !== firstPaint.blits || drawn.texts.length !== firstPaint.texts || drawn.rects !== firstPaint.rects) {
   problems.push(
     `the page repainted an unchanged scene: ${firstPaint.blits} paint(s) then ${drawn.blits}`);
