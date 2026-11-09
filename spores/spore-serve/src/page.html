@@ -228,6 +228,22 @@
     post('/input', new TextEncoder().encode(text));
   });
 
+  // The producer owns the scrollback; the page only says how far the wheel moved.
+  window.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const delta = event.deltaMode === 1 ? event.deltaY : event.deltaY / 24;
+    post('/scroll', JSON.stringify({ delta: Math.trunc(delta) }));
+  }, { passive: false });
+
+  // A paste is text typed quickly: same path as a keystroke, so the shell decides
+  // what to do with it (including bracketed paste, which it sets up itself).
+  window.addEventListener('paste', (event) => {
+    const text = event.clipboardData && event.clipboardData.getData('text');
+    if (!text) return;
+    event.preventDefault();
+    post('/input', new TextEncoder().encode(text));
+  });
+
   window.addEventListener('resize', resize);
   window.addEventListener('click', () => document.body.focus());
   resize();
