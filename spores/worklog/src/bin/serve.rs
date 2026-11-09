@@ -34,7 +34,7 @@ worklog-serve — serve the worklog view to a browser
   --renderer <file>    the scene renderer (default <root>/../../tools/shot.lua)
   --sdk <dir>          fungos-sdk checkout holding lua/fungos/ui.lua (default $FUNGOS_SDK)
   --snapshot <file>    the snapshot Lua to render (default examples/worklog_mock.lua)
-  --theme <file>       preview palette and type scale (default ../themes/paper.lua)
+  --theme <file>       preview palette and type scale (default ../themes/graphite.lua)
 ";
 
 fn main() -> ExitCode {
@@ -91,7 +91,7 @@ fn run(args: &[String]) -> Result<(), String> {
             .unwrap_or_else(|| root.join("examples/worklog_mock.lua")),
         theme: option(args, "--theme")
             .map(PathBuf::from)
-            .unwrap_or_else(|| root.join("../themes/paper.lua")),
+            .unwrap_or_else(|| root.join("../themes/graphite.lua")),
         root,
     };
     if !config.sdk.join("lua/fungos/ui.lua").exists() {
@@ -258,8 +258,13 @@ fn handle(
             if header(&headers, "if-none-match")
                 .is_some_and(|value| value.split(',').any(|tag| tag.trim() == etag))
             {
+                // Logged because "is it still flickering" is answered here: a poll
+                // that revalidates says 304, and a poll that repaints says 200.
+                eprintln!("worklog-serve: GET {path}?{query} 304 unchanged");
                 return respond(&mut stream, 304, "application/json", "", &[("etag", &etag)]);
             }
+            let asked = header(&headers, "if-none-match").unwrap_or("nothing");
+            eprintln!("worklog-serve: GET {path}?{query} 200 sent (asked for {asked})");
             respond(
                 &mut stream,
                 200,

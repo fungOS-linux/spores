@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Worklog</title>
   <style>
-    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#ffffff;color:#37352f;font:13px ui-sans-serif,-apple-system,Helvetica,Arial,sans-serif}
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#191919;color:#e9e9e7;font:13px ui-sans-serif,-apple-system,Helvetica,Arial,sans-serif}
     canvas{display:block;width:100%;height:100%}
-    #status{position:fixed;right:14px;bottom:10px;color:#b8b6b1;font-size:11px;pointer-events:none}
+    #status{position:fixed;right:14px;bottom:10px;color:#6a6a6a;font-size:11px;pointer-events:none}
   </style>
 </head>
 <body>
@@ -21,12 +21,16 @@
 // page can only draw them.
 const canvas = document.getElementById('scene');
 const ctx = canvas.getContext('2d');
+// Every frame is built off-screen and blitted in one call. The canvas on screen is
+// never cleared, so there is no moment when it can show an empty or half-built
+// scene — a repaint replaces every pixel at once or not at all.
+const frame = document.createElement('canvas');
+const paint = frame.getContext('2d');
 const status = document.getElementById('status');
 let dpr = 1, size = { w: 0, h: 0 };
 // The last body we painted, and the tag that names it. A poll that comes back
-// unchanged must not touch the canvas: clearing and repainting a picture that has
-// not moved is exactly what reads as a flicker.
-let painted = null, tag = null, inFlight = false;
+// unchanged must not touch the canvas at all.
+let tag = null, inFlight = false;
 
 // What a role means when the palette did not resolve it. A missing colour should
 // look like a missing colour, not like invisible text.
@@ -47,8 +51,8 @@ function fillOf(node) {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
 }
 
-// Resizing the backing store clears the canvas, so it happens only when the
-// window actually changed size — never on a poll.
+// Resizing a canvas clears it, so it happens only when the window actually
+// changed size — never on a poll.
 function fit() {
   const next = { w: innerWidth, h: innerHeight };
   if (next.w === size.w && next.h === size.h && canvas.width > 0) return false;
@@ -56,12 +60,14 @@ function fit() {
   size = next;
   canvas.width = Math.floor(size.w * dpr);
   canvas.height = Math.floor(size.h * dpr);
+  frame.width = canvas.width;
+  frame.height = canvas.height;
   return true;
 }
 
 function draw(scene, w, h) {
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
+  paint.setTransform(dpr, 0, 0, dpr, 0, 0);
+  paint.clearRect(0, 0, w, h);
   const xOf = (u) => (u + 4) / 8 * w;
   const yOf = (u) => (4 - u) / 8 * h;
 
@@ -75,21 +81,26 @@ function draw(scene, w, h) {
     const t = node.transform || {};
     const [x, y] = t.translation || [0, 0, 0];
     const [sx, sy] = t.scale || [1, 1, 1];
-    ctx.fillStyle = fillOf(node);
+    paint.fillStyle = fillOf(node);
     if (node.type === 'rect') {
       const px = xOf(x), py = yOf(y);
       const rw = sx / 8 * w, rh = sy / 8 * h;
       const radius = Math.min(node.radius || 0, rw / 2, rh / 2);
-      ctx.beginPath();
-      if (ctx.roundRect) ctx.roundRect(px, py, rw, rh, radius);
-      else ctx.rect(px, py, rw, rh);
-      ctx.fill();
+      paint.beginPath();
+      if (paint.roundRect) paint.roundRect(px, py, rw, rh, radius);
+      else paint.rect(px, py, rw, rh);
+      paint.fill();
     } else if (node.type === 'text') {
-      ctx.font = `${node.px}px ui-sans-serif, -apple-system, Helvetica, Arial, sans-serif`;
-      ctx.textBaseline = 'top';
-      ctx.fillText(node.text || '', xOf(x), yOf(y));
+      paint.font = `${node.px}px ui-sans-serif, -apple-system, Helvetica, Arial, sans-serif`;
+      paint.textBaseline = 'top';
+      paint.fillText(node.text || '', xOf(x), yOf(y));
     }
   }
+
+  // One blit, one composite. No clear on the visible canvas: the scene paints its
+  // own background, so the blit covers every pixel it is about to replace.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(frame, 0, 0);
 }
 
 async function refresh() {
@@ -99,18 +110,18 @@ async function refresh() {
   const w = Math.round(size.w), h = Math.round(size.h);
   try {
     const headers = tag ? { 'if-none-match': tag } : {};
-    const response = await fetch(`scene.json?w=${w}&h=${h}`, { cache: 'no-store', headers });
-    if (response.status === 304) {
-      status.textContent = `unchanged · ${new Date().toLocaleTimeString()}`;
-      return;
-    }
+    // `no-cache` means "revalidate before reuse", which is what makes the
+    // conditional request meaningful; `no-store` makes the browser bypass its
+    // cache entirely, and a bypassed cache has nothing to revalidate.
+    const response = await fetch(`scene.json?w=${w}&h=${h}`, { cache: 'no-cache', headers });
+    // Nothing to draw and nothing to say: the page stays exactly as it was, down
+    // to the status line. Writing to the DOM on every poll repaints over a canvas
+    // that did not need it.
+    if (response.status === 304) return;
     if (!response.ok) throw new Error(`scene ${response.status}: ${await response.text()}`);
     const scene = await response.json();
     if (scene.error) throw new Error(scene.error);
     tag = response.headers.get('etag');
-    painted = scene;
-    // One synchronous pass: clear and paint in the same frame, so there is never
-    // an empty canvas on screen.
     draw(scene, w, h);
     status.textContent = `${scene.nodes.length} nodes · ${new Date().toLocaleTimeString()}`;
   } catch (error) {

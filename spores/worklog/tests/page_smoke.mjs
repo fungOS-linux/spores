@@ -24,15 +24,18 @@ if (!match) {
   process.exit(1);
 }
 
-const drawn = { rects: 0, texts: [] };
-const context = {
+const drawn = { rects: 0, texts: [], blits: 0 };
+const recorder = () => ({
   setTransform() {}, clearRect() {}, beginPath() {}, fill() {},
   rect() { drawn.rects += 1; },
   roundRect() { drawn.rects += 1; },
   fillText(text, x, y) { drawn.texts.push({ text, x, y }); },
   fillStyle: '', font: '', textBaseline: '',
-};
-const canvas = { width: 0, height: 0, style: {}, getContext: () => context };
+});
+// The page paints off-screen and blits; a blit is one repaint, so counting them
+// is the clearest answer to "did this poll redraw anything".
+const blitter = { setTransform() {}, clearRect() {}, drawImage() { drawn.blits += 1; } };
+const canvas = { width: 0, height: 0, style: {}, getContext: () => blitter };
 const status = { textContent: 'loading' };
 
 const scene = readFileSync(scene_path, 'utf8');
@@ -40,7 +43,10 @@ const ETAG = '"smoke"';
 let requests = 0;
 let tick = null;
 const sandbox = {
-  document: { getElementById: (id) => (id === 'scene' ? canvas : status) },
+  document: {
+    getElementById: (id) => (id === 'scene' ? canvas : status),
+    createElement: () => ({ width: 0, height: 0, getContext: () => recorder() }),
+  },
   window: { devicePixelRatio: 2 },
   innerWidth: 1182,
   innerHeight: 1569,
@@ -79,9 +85,10 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 await settle();
 
 const problems = [];
-const firstPaint = { rects: drawn.rects, texts: drawn.texts.length };
+const firstPaint = { rects: drawn.rects, texts: drawn.texts.length, blits: drawn.blits };
 if (drawn.texts.length === 0) problems.push('the page drew no text');
 if (drawn.rects === 0) problems.push('the page drew no rects');
+if (drawn.blits === 0) problems.push('the page never blitted a frame');
 if (!/nodes/.test(status.textContent)) problems.push(`status is not a node count: ${status.textContent}`);
 if (!drawn.texts.some((entry) => entry.text === 'WORKLOG')) {
   problems.push('the masthead is missing');
@@ -89,16 +96,15 @@ if (!drawn.texts.some((entry) => entry.text === 'WORKLOG')) {
 
 // Polling an unchanged scene must not repaint it. A page that clears and redraws
 // on every 304 is the flicker this guards: the second pass would record a second
-// copy of every node.
+// frame and a second copy of every node.
 if (tick) {
   tick();
   await settle();
 }
 if (requests < 2) problems.push(`the poll never ran (${requests} requests)`);
-if (drawn.texts.length !== firstPaint.texts || drawn.rects !== firstPaint.rects) {
+if (drawn.blits !== firstPaint.blits || drawn.texts.length !== firstPaint.texts || drawn.rects !== firstPaint.rects) {
   problems.push(
-    `the page repainted an unchanged scene: ${firstPaint.rects}/${firstPaint.texts} then ` +
-    `${drawn.rects}/${drawn.texts.length}`);
+    `the page repainted an unchanged scene: ${firstPaint.blits} paint(s) then ${drawn.blits}`);
 }
 
 // A rect drawn at the far edge, or text off the surface, is the same class of
@@ -114,4 +120,4 @@ if (problems.length) {
   console.error(problems.join('\n'));
   process.exit(1);
 }
-console.log(`page: ok — ${drawn.rects} rects, ${drawn.texts.length} texts`);
+console.log(`page: ok — ${drawn.blits} blit, ${drawn.rects} rects, ${drawn.texts.length} texts`);
