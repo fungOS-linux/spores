@@ -1,0 +1,32 @@
+// SFX Spore: event names in, PCM out.
+//
+// The host owns the Unibus session. It reads `rules[].kind` from the snapshot,
+// subscribes to those kinds, and calls `act` with an `sfx.event` intent for each
+// frame. The Spore never opens a socket, and the hot path is still a local
+// action, not a shared bus handle.
+package fungos:sfx@0.1.0;
+
+world sfx {
+  import soil:appdata/appdata@1.0.0;
+  import soil:vfs/vfs@1.0.0;
+  import soil:audio/audio@0.1.0;
+
+  /// `play <pad>`, `event <kind>`, `snapshot`, `stop`, `selftest`.
+  export run: func(args: list<string>) -> result<_, string>;
+
+  /// The board snapshot as JSON bytes. Canvas passes it to ui/board.lua.
+  export snapshot: func() -> result<list<u8>, string>;
+
+  /// Apply one UI action (JSON) and return a fresh snapshot.
+  export act: func(action: string) -> result<list<u8>, string>;
+}
+
+// The command-line face of the same Spore. Built as a `wasm32-wasip2`
+// executable, it receives argv/stdout from WASI and the same three host
+// capabilities. A CLI process has no Canvas and no long-lived state; each
+// invocation loads the mapping, performs one command, and exits.
+world cli {
+  import soil:appdata/appdata@1.0.0;
+  import soil:vfs/vfs@1.0.0;
+  import soil:audio/audio@0.1.0;
+}
