@@ -6,6 +6,15 @@ name = "dfm-report"
 version = "0.2.0"
 license = "Apache-2.0 OR MIT"
 summary = "DFM findings for a model, with the flagged geometry rendered in the Spore itself"
+description = "Design-for-manufacture findings beside the geometry they refer to: the Spore draws the flagged features itself, so a finding is never a row without a picture."
+
+[docs]
+usage = ["dfm-report", "dfm-report --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["science", "graphics"]
+keywords = ["dfm", "cad", "3d", "manufacturing"]
 
 [engine]
 soil = ">=0.1"

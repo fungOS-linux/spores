@@ -6,6 +6,15 @@ name = "notify"
 version = "0.1.0"
 license = "Apache-2.0 OR MIT"
 summary = "Notification tray, focus mode and shared ringer"
+description = "The tray for everything that wants attention: notifications, per-device focus profiles, and calls, doorbells, alarms and pages through one ringer."
+
+[docs]
+usage = ["notify", "notify --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["system", "communication"]
+keywords = ["notifications", "tray", "focus", "ringer"]
 
 [engine]
 soil = ">=0.1"

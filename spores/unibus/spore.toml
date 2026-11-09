@@ -14,7 +14,16 @@ name = "inbox"
 version = "0.1.0"
 license = "MIT"
 summary = "Read-only inbox over soil:unibus mail/chat metadata, cached as soil:records"
+description = "One inbox over mail and chat metadata. It observes, caches and labels; it never sends, and every action it offers is a records write with a name."
 homepage = "https://github.com/fungOS-linux/spores"
+
+[docs]
+usage = ["inbox", "inbox --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["communication", "productivity"]
+keywords = ["inbox", "mail", "chat", "unibus"]
 
 [engine]
 soil = ">=0.1"

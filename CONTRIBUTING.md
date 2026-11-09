@@ -19,7 +19,18 @@ Create `spores/<name>/` with:
   widget names. If you reach for those, they belong in `ui/`.
 - `ui/*.lua` — every presentation decision. No `os`, `io`, `require`, `package`,
   `dofile`, or `loadfile`; Canvas gives the UI no ambient authority.
+- `docs/man.md` — the manual `man <name>` prints. Write what the Spore is for,
+  how a person starts it, what it may reach, and what it deliberately cannot do.
+  The rest of the page (version, licence, launch surfaces, grants) is generated
+  from `spore.toml`, so do not repeat it here.
 - `tests/` — a fixture that renders the UI without a browser or compositor.
+
+`spore.toml` also carries the listing metadata a store reads: `description` (one
+paragraph), `[docs] usage` (the synopsis lines), `[catalog] categories` from the
+fixed vocabulary, and keywords. Screenshots, icons and the rich listing record
+are `ipfs://` CIDs, never files in the package: a bundle carries the reference
+and not the bytes. `soil-spore check --publish` lists what a listing is still
+missing.
 
 ## Rules that are reviewed, not just documented
 
@@ -40,3 +51,8 @@ cargo test --workspace
 
 If Lua is installed, `cargo test` also compiles `ui/*.lua` with `luac -p` and
 runs the fixtures.
+
+A package does not ship build inputs: `src/`, `wit/`, `Cargo.toml`, tests and
+repo docs stay out of the tar. What ships is the manifest, the module, every
+`.lua` under `ui/`, declared assets, `docs/man.md`, and `spore.lock`.
+`soil-spore lock .` records exactly that.

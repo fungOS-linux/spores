@@ -11,7 +11,16 @@ name = "dragshift"
 version = "0.1.0"
 license = "MIT"
 summary = "Convert and edit a dropped file from a radial menu"
+description = "Drop a file, get a ring of things you can do with it. The radial menu names the operation, the input and the output path before anything runs."
 homepage = "https://github.com/fungOS-linux/spores"
+
+[docs]
+usage = ["dragshift", "dragshift --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["utilities", "graphics"]
+keywords = ["convert", "files", "radial", "media"]
 
 [engine]
 soil = ">=0.1"

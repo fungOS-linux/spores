@@ -1,4 +1,5 @@
 /target
+**/target
 **/*.rs.bk
 
 # Generated live inbox snapshot (metadata from AgentMail)

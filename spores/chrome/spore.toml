@@ -12,7 +12,16 @@ name = "chrome"
 version = "0.1.0"
 license = "MIT"
 summary = "Top bar, dock, launcher and switcher for the Canvas shell"
+description = "The composition of the desktop shell: top bar, dock, launcher, switcher, control centre and window chrome, drawn as host-owned regions."
 homepage = "https://github.com/fungOS-linux/spores"
+
+[docs]
+usage = ["chrome"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["system"]
+keywords = ["shell", "desktop", "dock", "launcher"]
 
 [engine]
 soil = ">=0.1"
