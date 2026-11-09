@@ -13,6 +13,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
 /// The page is part of the binary: a view host with an install-dependent file
@@ -114,16 +115,24 @@ fn run(args: &[String]) -> Result<(), String> {
         config.snapshot.display()
     );
 
-    // One scene at a time is the whole working set, and re-running `lua` for a
-    // browser that polls every five seconds is a process per request for a page
-    // that mostly has not changed.
-    let mut cached: Option<(CacheKey, String)> = None;
+    let config = Arc::new(config);
+    // One scene is the whole working set, and re-running `lua` for a browser that
+    // polls every five seconds is a process per request for a page that mostly has
+    // not changed.
+    let cached: Arc<Mutex<Option<(CacheKey, String)>>> = Arc::new(Mutex::new(None));
     for connection in listener.incoming() {
         match connection {
             Ok(stream) => {
-                if let Err(error) = handle(stream, &config, &mut cached) {
-                    eprintln!("worklog-serve: {error}");
-                }
+                let config = Arc::clone(&config);
+                let cached = Arc::clone(&cached);
+                // A browser opens several connections at once, and a client that
+                // connects and then stalls must cost its own thread and nothing
+                // else. Serving them in turn made the page miss its own poll.
+                std::thread::spawn(move || {
+                    if let Err(error) = handle(stream, &config, &cached) {
+                        eprintln!("worklog-serve: {error}");
+                    }
+                });
             }
             Err(error) => eprintln!("worklog-serve: accept: {error}"),
         }
@@ -131,7 +140,7 @@ fn run(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct CacheKey {
     /// The snapshot's modification time, so a fresh snapshot re-renders and an
     /// untouched one costs nothing.
@@ -143,12 +152,13 @@ struct CacheKey {
 fn handle(
     mut stream: TcpStream,
     config: &Config,
-    cached: &mut Option<(CacheKey, String)>,
+    cached: &Mutex<Option<(CacheKey, String)>>,
 ) -> Result<(), String> {
-    // A browser that connects and stalls must not stop the next request.
+    // A client that connects and stalls costs its own thread and nothing else.
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .map_err(|error| format!("set_read_timeout: {error}"))?;
+    let _ = stream.set_nodelay(true);
     let mut reader = BufReader::new(stream.try_clone().map_err(|error| error.to_string())?);
     let mut line = String::new();
     reader
@@ -159,10 +169,9 @@ fn handle(
     let mut parts = line.split_whitespace();
     let method = parts.next().unwrap_or_default();
     let target = parts.next().unwrap_or_default();
-    // A body is never expected; draining it keeps the socket from resetting the
-    // response under a client that sent one anyway.
-    let mut discard = Vec::new();
-    let _ = reader.take(MAX_LINE).read_to_end(&mut discard);
+    // Nothing reads the body, and a GET has none — draining the stream here waits
+    // out the read timeout on every request, because the client is waiting for the
+    // response, not sending anything.
 
     if method != "GET" && method != "HEAD" {
         return respond(&mut stream, 405, "text/plain", "this host answers GET only");
@@ -182,21 +191,30 @@ fn handle(
                 width,
                 height,
             };
-            let body = match cached {
-                Some((cached_key, body)) if *cached_key == key => body.clone(),
-                _ => match render_scene(config, width, height) {
+            let mut guard = cached
+                .lock()
+                .map_err(|error| format!("cache lock: {error}"))?;
+            let hit = match guard.as_ref() {
+                Some((cached_key, body)) if *cached_key == key => Some(body.clone()),
+                _ => None,
+            };
+            let body = match hit {
+                Some(body) => body,
+                None => match render_scene(config, width, height) {
                     Ok(body) => {
-                        *cached = Some((key, body.clone()));
+                        *guard = Some((key, body.clone()));
                         body
                     }
                     // A dropped connection reaches the page as "Failed to
                     // fetch", which says nothing about the view. The status line
                     // can, so the render's own error is the response.
                     Err(error) => {
+                        drop(guard);
                         return respond(&mut stream, 500, "text/plain; charset=utf-8", &error);
                     }
                 },
             };
+            drop(guard);
             respond(&mut stream, 200, "application/json", &body)
         }
         _ => respond(&mut stream, 404, "text/plain", "not found"),
