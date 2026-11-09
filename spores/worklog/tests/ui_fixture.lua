@@ -112,6 +112,11 @@ local function render(snap)
     assert(not ids[spec.id], "duplicate node id: " .. tostring(spec.id))
     ids[spec.id] = true
   end
+  -- The host rejects a scene over 256 nodes, and a rejected scene is an error
+  -- card where the surface should be. Width x height is not the only bound.
+  local total_nodes = #drawn.rects + #drawn.texts + #worklog.pending_presses
+  assert(total_nodes <= 256,
+    string.format("the scene is %d nodes; Canvas rejects anything over 256", total_nodes))
   -- Every wrapped line has to fit the box it was given: a line past the budget
   -- is a line drawn over whatever the column stacked next.
   for _, spec in ipairs(drawn.texts) do
@@ -146,7 +151,7 @@ assert(copy:find("Marbles 3", 1, true), "source counts are not drawn")
 -- Wrapped labels are split into lines, so compare the opening words rather than
 -- the whole string: the row summary is allowed to break.
 for index, event in ipairs(snapshot.events) do
-  assert(copy:find(event.summary:sub(1, 24), 1, true), "event " .. index .. " summary is not drawn")
+  assert(copy:find(event.summary:sub(1, 20), 1, true), "event " .. index .. " summary is not drawn")
 end
 assert(copy:find("MERGED", 1, true), "the kind is not drawn as a word")
 
@@ -159,9 +164,15 @@ for index, spec in ipairs(drawn.texts) do
 end
 assert(first_row and second_row and first_row < second_row, "rows are not painted in snapshot order")
 
--- The selected event drives the detail pane.
+-- The selected event drives the detail pane, and its locator is a pressable
+-- chip: the label is clipped to the row, but the *intent* carries the whole
+-- locator, so that is what a test can hold the view to.
 local selected = snapshot.events[1]
-assert(copy:find(selected.subject, 1, true), "the selected event's locator is not drawn")
+local pressable = false
+for _, spec in ipairs(worklog.pending_presses or {}) do
+  if spec.body and spec.body.locator == selected.subject then pressable = true end
+end
+assert(pressable, "the selected event's locator is not pressable")
 
 -- A view is a function of the snapshot: selecting another event has to change
 -- what is drawn, or the detail pane is decoration.

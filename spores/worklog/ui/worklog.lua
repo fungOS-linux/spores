@@ -206,16 +206,9 @@ M.chars_per_line = chars_per_line
 -- constant. Drawing every event in a 40-event snapshot put a third of them past
 -- the bottom edge of the surface (2,309 px of ink on a 1,569 px surface): they
 -- were painted, invisible, and counted in "1–40 of 40".
-local ROW_PAD = 6
-local ROW_HEAD_H = 13
-local ROW_SUBJECT_H = 12
-local ROW_GAP_H = 2
-local ROW_SUMMARY_LINES = 2
--- A row is its parts added up. Written as a sum so that changing a type size
--- moves the row with it: a row height that is one number somebody liked is how
--- the summary ended up with two lines of text in a box sized for one.
-local ROW_H = ROW_PAD * 2 + ROW_HEAD_H + ROW_GAP_H
-  + ROW_SUMMARY_LINES * (TYPE.body + 4) + ROW_GAP_H + ROW_SUBJECT_H
+-- A row is one line plus its breathing room. The height is derived from the
+-- tallest thing on it (the summary, at body size) rather than picked.
+local ROW_H = (TYPE.body + 4) + GAP.sm * 2
 local CHROME = 120
 -- The detail column is a fixed slice of the surface: wide enough for a summary at
 -- title size, narrow enough to leave the list the room its rows need.
@@ -224,39 +217,70 @@ local PANE_W = 300
 -- column and the log stops being scannable.
 local SUMMARY_LINES = 8
 
+-- Canvas caps one module scene at 256 nodes, so how many rows exist is bounded
+-- by what a row costs, not only by how much height is left. Asking for the rows
+-- a tall window could hold produced a scene the host rejected outright — the
+-- whole surface became an error card.
+local NODE_BUDGET = 240 -- the host's 256, less room for the chrome to move
+local CHROME_NODES = 48
+-- A row costs six drawn nodes and, when it has a locator, one control.
+local NODES_PER_ROW = 8
+local MAX_ROWS = math.floor((NODE_BUDGET - CHROME_NODES) / NODES_PER_ROW)
+
 local function visible_count(snapshot)
   local total = #(snapshot.events or {})
   -- An empty log shows zero rows, not the max(1, …) floor: there is no first
   -- event to draw.
   if total == 0 then return 0 end
   local fits = math.floor((H - CHROME) / ROW_H)
-  return math.max(1, math.min(total, fits))
+  return math.max(1, math.min(total, fits, MAX_ROWS))
 end
 
-local function event_row(event, index, show_source)
-  local head = {
-    label("event-" .. index .. "-kind", kind_word(event.kind), TYPE.micro, { width = 88 }),
+-- A row is one line with things embedded in it: the kind, who did it, the
+-- locator as a chip you can press, the summary, and how long ago. Stacked lines
+-- spent three rows' worth of height per event and still could not hold a
+-- locator, which is the part a reader wants to click.
+local function row_segments(event, show_source)
+  local segments = {
+    { key = "kind", text = kind_word(event.kind), ink = "primary", size = TYPE.micro, w = 72 },
   }
-  -- One source means the column is the same word on every row: it costs a
-  -- column and tells the reader nothing.
+  -- One source means the column is the same word on every row: it costs space
+  -- and tells the reader nothing.
   if show_source then
-    head[#head + 1] = label("event-" .. index .. "-source", event.source or "", TYPE.micro, { width = 64 })
+    segments[#segments + 1] = { key = "source", text = event.source or "", ink = "muted", size = TYPE.micro, w = 56 }
   end
-  head[#head + 1] = label("event-" .. index .. "-actor", event.actor or "", TYPE.micro, { flex_grow = 1 })
-  head[#head + 1] = label("event-" .. index .. "-age", event.age or "", TYPE.micro, { width = 40 })
+  segments[#segments + 1] = { key = "actor", text = event.actor or "", ink = "muted", size = TYPE.micro, w = 88 }
+  -- The summary comes before the locator: the sentence is the line, the chip is
+  -- the footnote on it. Put the chip first and a long locator eats the row.
+  segments[#segments + 1] = { key = "summary", text = event.summary or "", ink = "text", size = TYPE.body, grow = true }
+  local seen = {}
+  for position, link in ipairs(event.links or {}) do
+    if not seen[link.locator] then
+      seen[link.locator] = true
+      segments[#segments + 1] = { key = "locator-" .. position, chip = link.locator, rel = link.rel, size = TYPE.micro }
+    end
+  end
+  local subject = event.subject or ""
+  if subject:find("://", 1, true) and not seen[subject] then
+    seen[subject] = true
+    segments[#segments + 1] = { key = "subject", chip = subject, rel = "subject", size = TYPE.micro }
+  end
+  segments[#segments + 1] = { key = "age", text = event.age or "", ink = "muted", size = TYPE.micro, w = 40, align = "right" }
+  return segments
+end
 
+-- Row content lives beside the tree, keyed by row index. A layout service is
+-- free to hand back geometry and nothing else — Taffy does exactly that — so a
+-- custom field on a node is not a contract to carry data across the layout.
+local ROW_SEGMENTS = {}
+
+local function event_row(event, index, show_source)
+  ROW_SEGMENTS[index] = row_segments(event, show_source)
   return {
     id = "event-" .. index, kind = "container",
-    layout = { height = ROW_H, direction = "column", gap = ROW_GAP_H,
-      padding = { top = ROW_PAD, right = 12, bottom = ROW_PAD, left = 12 } },
-    children = {
-      { id = "event-" .. index .. "-head", kind = "container", layout = { direction = "row", height = ROW_HEAD_H }, children = head },
-      -- Two wrapped lines instead of one clipped one: Marbles' detail is often
-      -- the whole point of the row, and `…` at 76 characters threw it away.
-      label("event-" .. index .. "-summary", clip(event.summary, 160), TYPE.body,
-        { height = ROW_SUMMARY_LINES * (TYPE.body + 4), wrap = true }),
-      label("event-" .. index .. "-subject", clip(event.subject, 56), TYPE.micro, { height = ROW_SUBJECT_H }),
-    },
+    layout = { height = ROW_H, direction = "row",
+      padding = { top = 0, right = 12, bottom = 0, left = 12 } },
+    children = {},
   }
 end
 
@@ -380,6 +404,80 @@ end
 -- structure, and walking it is cheaper than re-deriving it from the drawn scene.
 M.tree = tree
 
+
+local function measure(value, size)
+  return #tostring(value or "") * size * GLYPH_W
+end
+
+-- Rows carry segments instead of child nodes. The line is allocated before it
+-- is drawn: fixed columns, then the age, then chips clipped to a third of what
+-- is left, and the summary takes the remainder. Drawing first and discovering
+-- the room afterwards is how a locator ended up on top of the next column.
+local function draw_row(laid_row, index, segments)
+  local row = laid_row.rect
+  local pad = 12
+  local left = row.x + pad
+  local right = row.x + row.width - pad
+  local age_w = 46
+  local line_h = TYPE.body + 4
+  local y = row.y + (ROW_H - line_h) / 2
+  local chip_h = TYPE.micro + 10
+
+  local fixed = 0
+  local chips = {}
+  for _, segment in ipairs(segments) do
+    if segment.chip then
+      chips[#chips + 1] = segment
+    elseif not segment.grow and not segment.align then
+      fixed = fixed + (segment.w or measure(segment.text, segment.size)) + GAP.xs
+    end
+  end
+  local available = right - left - fixed - age_w - GAP.sm
+  local chip_room = math.max(0, math.min(available * 0.34, 300))
+  local chip_widths, chip_total, used = {}, 0, 0
+  for _, segment in ipairs(chips) do
+    local chars = math.floor((chip_room - used - 10) / (segment.size * GLYPH_W))
+    if chars >= 8 then
+      local label = clip(segment.chip, chars)
+      local width = measure(label, segment.size) + 10
+      chip_widths[segment] = { label = label, width = width }
+      chip_total = chip_total + width + GAP.xs
+      used = used + width + GAP.xs
+    end
+  end
+  local summary_room = math.max(0, available - chip_total)
+
+  local x = left
+  for _, segment in ipairs(segments) do
+    local id = string.format("event-%d-%s", index, segment.key)
+    if segment.align == "right" then
+      text(id, segment.text, right - age_w, y, segment.size, segment.ink)
+    elseif segment.grow then
+      local chars = math.floor(summary_room / (segment.size * GLYPH_W))
+      if chars >= 8 then
+        text(id, clip(segment.text, chars), x, y, segment.size, segment.ink)
+      end
+      x = x + summary_room + GAP.xs
+    elseif segment.chip then
+      local piece = chip_widths[segment]
+      if piece then
+        rect(id .. "-chip", x - 3, y - 3, piece.width, chip_h, "surface", 0.45, 5, Z_CHIP)
+        text(id, piece.label, x + 2, y, segment.size, "primary")
+        press {
+          id = id .. "-press", label = segment.chip,
+          action = "worklog-open-locator",
+          body = { locator = segment.chip, rel = segment.rel or "subject" },
+          x = nx(x - 3), y = ny(y - 3), width = sw(piece.width), height = sh(chip_h),
+        }
+        x = x + piece.width + GAP.xs
+      end
+    else
+      text(id, segment.text, x, y, segment.size, segment.ink)
+      x = x + (segment.w or measure(segment.text, segment.size)) + GAP.xs
+    end
+  end
+end
+
 function M.render(snapshot)
   use_viewport()
   snapshot = apply_event(snapshot or {})
@@ -397,7 +495,6 @@ function M.render(snapshot)
   for index = 1, shown do
     local row = find(laid, "event-" .. index)
     if row then
-      rect("event-bg-" .. index, row.rect.x, row.rect.y, row.rect.width, row.rect.height, "surface", 0.10, 6, Z_PANEL)
       rect("event-rule-" .. index, row.rect.x + 10, row.rect.y + row.rect.height - 1, row.rect.width - 20, 1, "muted", 0.05, 0, Z_PANEL)
     end
   end
@@ -405,6 +502,16 @@ function M.render(snapshot)
   local selected = find(laid, "event-" .. tostring(selected_index))
   if selected then
     rect("event-selected", selected.rect.x, selected.rect.y, selected.rect.width, selected.rect.height, "primary", 0.14, 7, Z_PANEL)
+  end
+
+  -- One line per event, drawn after its background so the highlight sits under
+  -- the text it belongs to.
+  for index = 1, shown do
+    local row = find(laid, "event-" .. index)
+    local segments = ROW_SEGMENTS[index]
+    if row and segments and on_surface(row.rect) then
+      draw_row(row, index, segments)
+    end
   end
 
   -- Locators are drawn as chips behind their label, so a link reads as a thing
