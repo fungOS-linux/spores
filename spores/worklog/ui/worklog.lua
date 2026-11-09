@@ -70,6 +70,12 @@ local tone = { panel = 0.36, selected = 0.16 }
 -- library already publishes (`ui.profile.surfaces`), so the view reads it there
 -- instead of picking its own numbers: one density for every Spore, changed in
 -- one place. The literal fallbacks are what a profile without surfaces means.
+--
+-- A hairline is the exception: it is not a density, it is the only way this view
+-- separates anything. The host has no border primitive, so a separator is a
+-- one-pixel rect of the muted ink, and a table reads as a table without a card.
+local HAIRLINE = 0.14
+
 local function surfaces()
   local profile = (ui.profile and ui.profile.surfaces) or {}
   return {
@@ -701,7 +707,7 @@ local function draw_line(parts, index, left, right, y, age_w, chip_h, chip_share
     elseif segment.chip then
       local piece = chip_widths[segment]
       if piece then
-        rect(id .. "-chip", x - 3, y - 3, piece.width, chip_h, "primary", tone.selected, 5, Z_CHIP)
+        rect(id .. "-chip", x - 3, y - 3, piece.width, chip_h, "primary", tone.selected * 0.45, 4, Z_CHIP)
         text(id, piece.label, x + 2, y, segment.size, "primary")
         press {
           id = id .. "-press", label = segment.chip,
@@ -764,9 +770,17 @@ function M.render(snapshot)
   prepare_rows(snapshot, first, shown, show_source)
 
   rect("worklog-bg", 0, 0, W, H, "background", 1.0, 0)
-  rect("worklog-list-bg", box.list.x, box.list.y, box.list.w, box.list.h, "surface", tone.panel, 10, Z_PANEL)
+  rect("worklog-list-bg", box.list.x, box.list.y, box.list.w, box.list.h, "surface", tone.panel, 6, Z_PANEL)
   if box.detail then
-    rect("worklog-detail-bg", box.detail.x, box.detail.y, box.detail.w, box.detail.h, "surface", tone.panel, 10, Z_PANEL)
+    rect("worklog-detail-bg", box.detail.x, box.detail.y, box.detail.w, box.detail.h, "surface", tone.panel, 6, Z_PANEL)
+  end
+  -- A rule under the masthead and one between the columns: the panes are told
+  -- apart by their edges, not by two shades of grey meeting in the middle.
+  rect("worklog-toolbar-rule", box.toolbar.x, box.toolbar.y + box.toolbar.h + GAP.sm / 2 - 0.5,
+    box.toolbar.w, 1, "muted", HAIRLINE, 0, Z_PANEL)
+  if box.detail then
+    rect("worklog-column-rule", box.list.x + box.list.w + GAP.md / 2 - 0.5, box.list.y, 1, box.list.h,
+      "muted", HAIRLINE, 0, Z_PANEL)
   end
 
   for _, item in ipairs(toolbar_labels(snapshot, box.toolbar)) do
@@ -783,7 +797,7 @@ function M.render(snapshot)
   local _, selected_index = selected_event(snapshot)
   if selected_index >= first and selected_index < first + shown then
     local band = row_rect(box, selected_index, first)
-    rect("event-selected", band.x, band.y, band.width, band.height, "primary", tone.selected, 7, Z_PANEL)
+    rect("event-selected", band.x, band.y, band.width, band.height, "primary", tone.selected * 0.6, 5, Z_PANEL)
   end
 
   -- `plan_rows` budgets an average row, so the draw stops when the real cost
@@ -801,9 +815,9 @@ function M.render(snapshot)
     -- Hover is the host's pointer, not a guess: the id it names is the control
     -- it hit, so the row that lights up is the row under the cursor.
     if hovered == ("event-" .. index) then
-      rect("event-hover-" .. index, row.x, row.y, row.width, row.height, "primary", tone.selected * 0.5, 6, Z_PANEL)
+      rect("event-hover-" .. index, row.x, row.y, row.width, row.height, "primary", tone.selected * 0.3, 5, Z_PANEL)
     end
-    rect("event-rule-" .. index, row.x + 10, row.y + row.height - 1, row.width - 20, 1, "muted", 0.05, 0, Z_PANEL)
+    rect("event-rule-" .. index, row.x + GAP.sm, row.y + row.height - 1, row.width - GAP.sm * 2, 1, "muted", HAIRLINE / 2, 0, Z_PANEL)
     draw_row(row, index, segments)
     spent = spent + cost
     drawn_rows = drawn_rows + 1
@@ -817,7 +831,7 @@ function M.render(snapshot)
         -- full locator travels in the press for whoever owns the scheme.
         local chip = item.chip
         rect(item.id .. "-chip", chip.rect.x, chip.rect.y, chip.rect.width, chip.rect.height,
-          "primary", tone.selected, 5, Z_CHIP)
+          "primary", tone.selected * 0.45, 4, Z_CHIP)
         text(item.id, item.text, item.x, item.y, item.size, item.role)
         press {
           id = "worklog-link-" .. item.id:match("(%d+)$"),

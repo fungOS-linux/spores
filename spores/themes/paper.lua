@@ -1,5 +1,10 @@
--- Paper: a light shell. Every ink is redefined, because a view that assumed
--- "background is dark" would otherwise draw dark-on-dark.
+-- Paper: a light, quiet shell. Every ink is redefined, because a view that
+-- assumed "background is dark" would otherwise draw dark-on-dark.
+--
+-- The inks are a document's, not a dashboard's: white paper, one grey for
+-- secondary surfaces and hairlines, near-black text, and colour reserved for the
+-- things that are actually links or state. A view names roles, so this file is
+-- what makes the whole UI read as a page rather than a panel.
 return {
   name = "Paper",
   -- The scale the preview simulates. Canvas on the wall runs a 1.5x theme, and a
@@ -7,17 +12,17 @@ return {
   -- publishes its own; this is what a theme file contributes.
   type = { micro = 15, small = 18, body = 24, large = 27 },
   inks = {
-    background = "#f5f1e8",
-    surface = "#e9e3d5",
-    surface_raised = "#ded6c4",
-    border = "#cfc6b2",
-    text = "#2b2a26",
-    primary = "#15140f",
-    muted = "#7a7466",
-    accent = "#b5651d",
-    info = "#2f6f8f",
-    success = "#4f7a3a",
-    warning = "#a0761d",
-    danger = "#a33a2c",
+    background = "#ffffff",
+    surface = "#f7f7f5",
+    surface_raised = "#f1f1ef",
+    border = "#ebebea",
+    text = "#37352f",
+    primary = "#191919",
+    muted = "#9b9a97",
+    accent = "#2383e2",
+    info = "#337ea9",
+    success = "#448361",
+    warning = "#cb912f",
+    danger = "#d44c47",
   },
 }
