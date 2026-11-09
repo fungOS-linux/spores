@@ -17,8 +17,11 @@ Create `spores/<name>/` with:
   the pull request.
 - `src/` — document/app semantics only. No colours, coordinates, fonts, or
   widget names. If you reach for those, they belong in `ui/`.
-- `ui/*.lua` — every presentation decision. No `os`, `io`, `require`, `package`,
-  `dofile`, or `loadfile`; Canvas gives the UI no ambient authority.
+- `ui/*.lua` — every presentation decision. No `os`, `io`, `package`, `dofile`,
+  or `loadfile`; Canvas gives the UI no ambient authority. `require` is the one
+  exception and only for a declared dependency: `require("fungos.ui")` names the
+  SDK library, the composer inlines it at build time, and the module Canvas
+  actually loads makes no call. There is no resolver in the sandbox to audit.
 - `tests/` — a fixture that renders the UI without a browser or compositor.
 
 ## Rules that are reviewed, not just documented
