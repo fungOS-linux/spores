@@ -80,11 +80,11 @@ Then add a `rooms.myc` route to the Mycelium gateway pointing at
 `http://127.0.0.1:8793`. The gateway supplies TLS; `getUserMedia` requires a
 secure context, and `rooms.myc` gets it from the wildcard gateway certificate.
 
-The composer sends messages into the presenter's room timeline and `Ask JARVIS`
-uses the typed text for the addressed turn. Messages are host-local in this
-cut: every browser viewing this server sees them, but another room member's
-server does not. Room-wide text still belongs on the records/conversation path,
-not in `unibus-room`.
+The composer publishes `room.say.v1` through the room service, so the message
+is broadcast to every member of the room as `room.message.v1`, not just to the
+browser tabs served by this process. The service keeps a bounded, ephemeral
+history and includes it in `room.welcome.v1` for late joiners. `Ask JARVIS`
+uses the typed text for the addressed turn instead.
 
 Each tab has its own call session and its own call panel, while this server
 process is one Unibus member (the fixed participant identity in `CLIENT.json`).
