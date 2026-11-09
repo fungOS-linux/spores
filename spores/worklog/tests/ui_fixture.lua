@@ -98,6 +98,11 @@ local snapshot = assert(loadfile("examples/worklog_mock.lua"))()
 
 local function render(snap)
   drawn = { rects = {}, texts = {} }
+  -- A module re-executes for every render, so its pending controls are per-render
+  -- too. Leaving them to accumulate counts the same chip once per repaint and
+  -- makes the node budget below fail on a scene that is actually inside it.
+  for index = #worklog.pending_presses, 1, -1 do worklog.pending_presses[index] = nil end
+  for index = #worklog.pending_hits, 1, -1 do worklog.pending_hits[index] = nil end
   assert(worklog.render(snap) == nil, "render draws through the host and returns nothing")
   local lines, ids = {}, {}
   for _, spec in ipairs(drawn.texts) do
@@ -111,6 +116,14 @@ local function render(snap)
   for _, spec in ipairs(drawn.rects) do
     assert(not ids[spec.id], "duplicate node id: " .. tostring(spec.id))
     ids[spec.id] = true
+    -- A rect is placed by its top-left corner and sized in surface units, so the
+    -- far edge is the two added. A chip drawn 4 px outside its pane is the same
+    -- class of defect as a line of text running off the surface.
+    local x, y = spec.translation[1], spec.translation[2]
+    assert(x >= -4.5 and x + spec.scale[1] <= 4.5,
+      "rect drawn outside the surface horizontally: " .. tostring(spec.id))
+    assert(y <= 4.5 and y - spec.scale[2] >= -4.5,
+      "rect drawn outside the surface vertically: " .. tostring(spec.id))
   end
   -- The host rejects a scene over 256 nodes, and a rejected scene is an error
   -- card where the surface should be. Width x height is not the only bound.
@@ -204,18 +217,24 @@ local wrapped_copy = render({
 assert(wrapped_copy:find("superseded", 1, true), "the long summary is not drawn")
 
 -- A wrapped label is one node per line, so the host cannot draw a line the
--- layout never reserved. The pane is 268 px wide at 16 px type: 32 characters.
+-- layout never reserved, and the box it reserved is the box the ink fills: a
+-- column that reserves eight lines for a two-line summary leaves a hole, which
+-- is what made the detail pane look like a ribbon with a void under it.
+local summary_budget = assert(budget["worklog-detail-summary"],
+  "the detail summary was not laid out as a wrapped label")
 local summary_lines = 0
 for _, spec in ipairs(drawn.texts) do
   local index = tostring(spec.id):match("^worklog%-detail%-summary%-l(%d+)$")
   if index then
     summary_lines = math.max(summary_lines, tonumber(index))
-    assert(#tostring(spec.text) <= chars_per_line(268, 16),
+    assert(#tostring(spec.text) <= summary_budget.per_line,
       "a detail summary line is wider than its pane: " .. tostring(spec.text))
   end
 end
 assert(summary_lines >= 2, "the long summary was not wrapped into lines")
-assert(summary_lines <= 8, "the detail summary drew more lines than the column reserved: " .. summary_lines)
+assert(summary_lines <= worklog.summary_lines, "the detail summary drew more lines than the column reserved: " .. summary_lines)
+assert(summary_budget.lines == summary_lines,
+  string.format("the detail summary reserved %d lines and drew %d", summary_budget.lines, summary_lines))
 
 -- Scrolling: the host owns the offset, the view windows the log to it. A wheel
 -- notch is pixels, and a view that ignored them would render the same first row
@@ -255,6 +274,20 @@ _G.module.scroll = { offset = pitch * 1000 }
 render(many)
 assert(drawn_ids()["event-30-summary"], "a scroll past the end does not clamp to the last page")
 _G.module.scroll = nil
+
+-- How much log fits is as much a part of the view as whether it fits. The node
+-- budget used to be estimated rather than counted, and the estimate put 17 rows
+-- on a 1,569 px surface: a 104 px pitch holding two lines of ink, which reads as
+-- a page of whitespace with a log in it. The pitch is now derived from counted
+-- costs, so a row is a row — and if a page ever has to drop a row to stay inside
+-- the host's ceiling, this says so instead of hiding it in the range label.
+render(many)
+assert(worklog.rows_drawn == worklog.rows_planned,
+  string.format("rows dropped at draw time on a page that had room: %d of %d", worklog.rows_drawn, worklog.rows_planned))
+assert(worklog.row_height <= 96,
+  string.format("the pitch stretches a row to %d px", worklog.row_height))
+assert(worklog.rows_drawn >= 18,
+  string.format("a 1,569 px surface fits only %d rows", worklog.rows_drawn))
 
 -- Hover: the id the host hit is the row under the pointer, so it is the row the
 -- view lights — no geometry guess of its own.

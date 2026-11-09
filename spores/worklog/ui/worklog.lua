@@ -75,7 +75,10 @@ end
 local function rect(id, x, y, w, h, role, opacity, radius, layer)
   canvas.rect {
     id = id, ink = ink(role or "surface"), opacity = opacity or 1.0,
-    radius = radius or 8,
+    -- A corner radius is in the same 8-unit space as the scale, not in pixels.
+    -- Handing the host 8 for an 8 px corner rounded the selection band and every
+    -- chip into a stadium, because 8 units is the entire surface width.
+    radius = (radius or 8) * 8 / W,
     translation = { nx(x), ny(y), layer or Z },
     scale = { sw(math.max(1, w)), sh(math.max(1, h)), 1 },
   }
@@ -234,32 +237,94 @@ local ROW_H = MIN_ROW_H
 -- The pitch is part of the contract: the host scrolls in pixels and the view
 -- turns them into rows, so both sides need the same number.
 M.row_height = ROW_H
-local CHROME = 120
+-- Vertical chrome — the toolbar, the list header, the pane padding — in pixels.
+-- Node cost is a separate count, below.
+local CHROME_PX = 120
 -- The detail column is a fixed slice of the surface: wide enough for a summary at
--- title size, narrow enough to leave the list the room its rows need.
+-- body size, narrow enough to leave the list the room its rows need.
 local PANE_W = 300
 -- Eight lines is a summary, not a document. Past that the column stops being a
 -- column and the log stops being scannable.
 local SUMMARY_LINES = 8
+M.summary_lines = SUMMARY_LINES
+-- How much of the summary the column will show at all. The same number clips the
+-- string and counts the lines it wraps to, because a box measured from a longer
+-- string than the one drawn reserves lines that stay empty.
+local DETAIL_SUMMARY_CHARS = 240
 
 -- Canvas caps one module scene at 256 nodes, so how many rows exist is bounded
--- by what a row costs, not only by how much height is left. Asking for the rows
--- a tall window could hold produced a scene the host rejected outright — the
+-- by what a row costs as well as by how much height is left; asking for the rows
+-- a tall window could hold produced a scene the host rejected outright and the
 -- whole surface became an error card.
-local NODE_BUDGET = 240 -- the host's 256, less room for the chrome to move
--- Measured, not guessed: the header, the panes and a detail column that can run
--- to eight summary lines cost about eighty nodes before the first row.
-local CHROME_NODES = 80
--- A row costs: a rule, the kind, the actor, the summary, the age, and — when it
--- has a locator — a chip, its label and the control over it.
-local NODES_PER_ROW = 9
-local MAX_ROWS = math.floor((NODE_BUDGET - CHROME_NODES) / NODES_PER_ROW)
+--
+-- Those costs are counted, not guessed. The estimate this replaces ("about
+-- eighty nodes of chrome, nine a row") was five times the chrome's real cost and
+-- priced every row at its worst case, which put 17 rows on a 1,895 px surface —
+-- a 104 px pitch holding two lines of ink.
+--
+-- The ceiling is what the installed Canvas accepts, not the tree's default. A page
+-- costing 234 combined nodes (rects + text + controls, which is what
+-- `render_module` adds up) came back "Canvas module controls exceed combined node
+-- budget" and the wall kept its previous scene; the same view at 190 draws. Other
+-- threads are raising `DEFAULT_MAX_NODES` in canvas itself (1,024 and 8,192 in two
+-- open worktrees), so when that ships this constant is the one line that moves and
+-- the row plan follows it back up.
+local NODE_BUDGET = 190 -- measured on the wall; the tree's own default is 256
+local ROW_BASE_NODES = 5 -- the rule under the row, the kind, the actor, the summary, the age
+local SOURCE_NODES = 1 -- the source column, when more than one source is reporting
+local CHIP_NODES = 3 -- a chip's pill, its label, and the press target over it
+-- The chrome that is there whether or not there are rows: the backdrop, the two
+-- panes, the selection and hover bands, the toolbar and the list header.
+local CHROME_FIXED_NODES = 10
+-- A row carries at most this many locators: one reference is a pointer, two is a
+-- join. Past that the row stops being a line you can read at a glance, and the
+-- rest of them belong in the detail column, which lists all of them.
+local MAX_ROW_CHIPS = 2
+
+local function row_chips(event)
+  local seen, chips = {}, 0
+  for _, link in ipairs(event.links or {}) do
+    if link.locator and not seen[link.locator] then
+      seen[link.locator] = true
+      chips = chips + 1
+    end
+  end
+  local subject = event.subject or ""
+  if subject:find("://", 1, true) and not seen[subject] then chips = chips + 1 end
+  return math.min(chips, MAX_ROW_CHIPS)
+end
+
+-- One row's node cost, whether it is being counted for the plan or paid for at
+-- draw time. Two functions guessing at the same number is how a page came out
+-- twenty nodes over the ceiling.
+local function row_nodes(event, show_source)
+  return ROW_BASE_NODES + (show_source and SOURCE_NODES or 0) + CHIP_NODES * row_chips(event or {})
+end
+
+-- How many lines the detail column's summary actually occupies. Counted with the
+-- same word wrap the emit path uses, because reserving a box of eight lines for a
+-- two-line summary leaves the column's metadata a hundred pixels below the text
+-- it describes, and reserving two for a three-line one draws over it.
+local function detail_lines(event)
+  local per_line = chars_per_line(PANE_W - GAP.md * 2, TYPE.body)
+  return math.min(SUMMARY_LINES, #wrap_text(clip(event.summary or "", DETAIL_SUMMARY_CHARS), per_line))
+end
+
+-- What the detail column draws: the one part of the chrome whose cost depends on
+-- the page, because it wraps the summary it is given and lists every locator.
+-- Keep this in step with `detail()`, which draws them.
+local function detail_nodes(event)
+  if not event then return 1 end -- the "Select an event" placeholder
+  local links = #(event.links or {})
+  return 5 + detail_lines(event) + (links > 0 and CHIP_NODES * links or 1)
+end
 
 -- How many rows the window holds, and how tall each one is. Both answers come
 -- from one place: a list that filled the height with rows but kept a short pitch
 -- would still leave the page half empty.
 local function plan_rows(snapshot)
-  local total = #(snapshot.events or {})
+  local events = snapshot.events or {}
+  local total = #events
   -- An empty log shows zero rows, not the max(1, …) floor: there is no first
   -- event to draw.
   if total == 0 then
@@ -267,9 +332,18 @@ local function plan_rows(snapshot)
     M.row_height = ROW_H
     return 0
   end
-  local space = math.max(0, H - CHROME)
+  local chrome = CHROME_FIXED_NODES + detail_nodes(selected_event(snapshot))
+  local show_source = #(snapshot.sources or {}) > 1
+  local rows_cost = 0
+  for _, event in ipairs(events) do rows_cost = rows_cost + row_nodes(event, show_source) end
+  -- Average, not worst case: budgeting every row on the page for the densest row
+  -- on it is what starved the list. The draw loop stops at the budget anyway, so
+  -- an unusually chipped page costs its last row rather than an error card.
+  local per_row = rows_cost / total
+  local space = math.max(0, H - CHROME_PX)
   local fits = math.max(1, math.floor(space / MIN_ROW_H))
-  local rows = math.min(total, MAX_ROWS, fits)
+  local affordable = math.max(1, math.floor((NODE_BUDGET - chrome) / per_row))
+  local rows = math.min(total, affordable, fits)
   ROW_H = math.max(MIN_ROW_H, math.min(MAX_ROW_H, math.floor(space / rows)))
   M.row_height = ROW_H
   return rows
@@ -292,16 +366,20 @@ local function row_segments(event, show_source)
   -- The summary comes before the locator: the sentence is the line, the chip is
   -- the footnote on it. Put the chip first and a long locator eats the row.
   segments[#segments + 1] = { key = "summary", text = event.summary or "", ink = "text", size = TYPE.body, grow = true, line = ROW_H >= TALL_ROW_H and 2 or 1 }
-  local seen = {}
+  -- At most `MAX_ROW_CHIPS` of them, in the order the producer listed them, which
+  -- is the order `row_chips` counts. The detail column carries the rest.
+  local seen, chips = {}, 0
   for position, link in ipairs(event.links or {}) do
-    if not seen[link.locator] then
+    if chips < MAX_ROW_CHIPS and link.locator and not seen[link.locator] then
       seen[link.locator] = true
+      chips = chips + 1
       segments[#segments + 1] = { key = "locator-" .. position, chip = link.locator, rel = link.rel, size = TYPE.micro, line = 1 }
     end
   end
   local subject = event.subject or ""
-  if subject:find("://", 1, true) and not seen[subject] then
+  if chips < MAX_ROW_CHIPS and subject:find("://", 1, true) and not seen[subject] then
     seen[subject] = true
+    chips = chips + 1
     segments[#segments + 1] = { key = "subject", chip = subject, rel = "subject", size = TYPE.micro, line = 1 }
   end
   segments[#segments + 1] = { key = "age", text = event.age or "", ink = "muted", size = TYPE.micro, w = 40, align = "right", line = 1 }
@@ -345,7 +423,9 @@ local function list(snapshot, shown, show_source, first)
     {
       id = "worklog-head", kind = "container", layout = { direction = "row", height = 20 },
       children = {
-        label("worklog-range", title(snapshot) .. "  ·  " .. range, TYPE.caption, { flex_grow = 1 }),
+        -- The title is the toolbar's, not the list's: drawing it twice spent a
+        -- line saying nothing the masthead had not already said.
+        label("worklog-range", range, TYPE.caption, { flex_grow = 1 }),
         label("worklog-sort", snapshot.sort or "Newest first", TYPE.caption, { width = 92 }),
       },
     },
@@ -359,32 +439,54 @@ local function list(snapshot, shown, show_source, first)
   return { id = "worklog-list", kind = "container", layout = { flex_grow = 1, direction = "column", gap = 0 }, children = children }
 end
 
+-- A locator is an id under the hood. `marbles://local/mycelium-6us5` is Marbles
+-- issue `mycelium-6us5`; the reader does not need the transport in front of it,
+-- and the full URI still travels with the press for whoever opens it.
+local function locator_label(locator)
+  local value = tostring(locator or "")
+  local _, rest = value:match("^([%w+.-]+)://(.*)$")
+  if rest then
+    return rest:match("([^/]+)$") or rest
+  end
+  local repo, number = value:match("^(.+)#(%d+)$")
+  if repo then return (repo:match("([^/]+)$") or repo) .. "#" .. number end
+  return value
+end
+M.locator_label = locator_label
+
+-- The detail column is the row's footnote made readable: the whole summary, when
+-- it happened in wall-clock terms, who did it, and every locator on the event —
+-- not just the two a row has room for.
 local function detail(snapshot)
   local event = selected_event(snapshot)
   if not event then
     return { id = "worklog-detail", kind = "container", layout = {}, children = {
-      label("worklog-detail-empty", "Select an event", 12, {}) } }
+      label("worklog-detail-empty", "Select an event", TYPE.body, {}) } }
   end
-  local detail_summary = clip(event.summary or "", 400)
+  local links = event.links or {}
+  -- A wrapped label needs the height its lines actually take, and only the lines
+  -- it takes. The layout gives a node exactly what it asks for and the host does
+  -- not clip: a box of one line lets the ink run over whatever is stacked next,
+  -- and a box of eight lines around a two-line summary pushes the rest of the
+  -- column a hundred pixels below the text it describes.
   local children = {
     label("worklog-detail-label", "EVENT", TYPE.micro, { height = 14 }),
-    -- A wrapped label needs the height its lines actually take. The layout gives
-    -- a node exactly what it asks for, so asking for one line of a paragraph
-    -- does not clip it: the ink continues over whatever was laid out next.
-    label("worklog-detail-summary", detail_summary, TYPE.title,
-      { height = SUMMARY_LINES * (TYPE.title + 4), wrap = true }),
+    label("worklog-detail-summary", clip(event.summary or "", DETAIL_SUMMARY_CHARS), TYPE.body,
+      { height = detail_lines(event) * (TYPE.body + 4), wrap = true }),
     label("worklog-detail-when", (event.at_text or "") .. "  ·  " .. (event.age or ""), TYPE.micro, { height = 14 }),
     label("worklog-detail-who", (event.actor or "") .. "  ·  " .. (event.source or ""), TYPE.micro, { height = 14 }),
     label("worklog-detail-kind", kind_word(event.kind), TYPE.micro, { height = 14 }),
-    label("worklog-detail-open-label", "OPEN", TYPE.micro, { height = 16 }),
+    label("worklog-detail-open-label", #links > 0 and "OPEN" or "LOCATORS", TYPE.micro, { height = 16 }),
   }
-  local links = event.links or {}
   if #links == 0 then
     children[#children + 1] = label("worklog-detail-nolinks", "no locators", TYPE.micro, { height = 14 })
   end
   for index, link in ipairs(links) do
+    -- The same rule as a row: a locator draws as its short id and the full URI
+    -- travels in the press. The pane is 268 px wide, and the transport in front
+    -- of `mycelium-6us5` is what pushed the chip off the right edge.
     children[#children + 1] = label("worklog-detail-link-" .. index,
-      clip(link.locator, 44), TYPE.micro, { height = 16 })
+      locator_label(link.locator), TYPE.micro, { height = 16 })
   end
   return { id = "worklog-detail-page", kind = "container", layout = { flex_grow = 1, direction = "column", gap = GAP.sm }, children = children }
 end
@@ -411,7 +513,7 @@ local function tree(snapshot)
       {
         id = "worklog-toolbar", kind = "container", layout = { direction = "row", height = 24 },
         children = {
-          label("worklog-title", title(snapshot), 12, { width = 120 }),
+          label("worklog-title", title(snapshot), TYPE.title, { width = 120 }),
           label("worklog-sources", sources(snapshot), 10, { flex_grow = 1 }),
           label("worklog-today", string.format("%d today", counts.today or 0), 10, { width = 90 }),
         },
@@ -463,20 +565,6 @@ local function measure(value, size)
   return #tostring(value or "") * size * GLYPH_W
 end
 
--- A locator is an id under the hood. `marbles://local/mycelium-6us5` is Marbles
--- issue `mycelium-6us5`; the reader does not need the transport in front of it,
--- and the full URI still travels with the press for whoever opens it.
-local function locator_label(locator)
-  local value = tostring(locator or "")
-  local _, rest = value:match("^([%w+.-]+)://(.*)$")
-  if rest then
-    return rest:match("([^/]+)$") or rest
-  end
-  local repo, number = value:match("^(.+)#(%d+)$")
-  if repo then return (repo:match("([^/]+)$") or repo) .. "#" .. number end
-  return value
-end
-M.locator_label = locator_label
 
 -- One line of a row: fixed columns first, the age at the far right, chips given
 -- a share of what is left, and the summary taking the remainder.
@@ -520,7 +608,7 @@ local function draw_line(parts, index, left, right, y, age_w, chip_h)
     elseif segment.chip then
       local piece = chip_widths[segment]
       if piece then
-        rect(id .. "-chip", x - 3, y - 3, piece.width, chip_h, "surface", 0.45, 5, Z_CHIP)
+        rect(id .. "-chip", x - 3, y - 3, piece.width, chip_h, "primary", 0.16, 5, Z_CHIP)
         text(id, piece.label, x + 2, y, segment.size, "primary")
         press {
           id = id .. "-press", label = segment.chip,
@@ -549,7 +637,7 @@ local function draw_row(laid_row, index, segments)
   local tall = ROW_H >= TALL_ROW_H
   local line_h = tall and (TYPE.micro + 14) or (TYPE.body + 4)
   local lines = tall and 2 or 1
-  local top = row.y + (ROW_H - lines * line_h) / 2
+  local top = row.y + (ROW_H - ((lines - 1) * line_h + TYPE.body)) / 2
   local chip_h = TYPE.micro + 10
 
   local grouped = {}
@@ -582,47 +670,65 @@ function M.render(snapshot)
 
   local hovered = hover_id()
   local first = window_start(snapshot, shown)
-  for index = first, first + shown - 1 do
-    local row = find(laid, "event-" .. index)
-    if row then
-      rect("event-rule-" .. index, row.rect.x + 10, row.rect.y + row.rect.height - 1, row.rect.width - 20, 1, "muted", 0.05, 0, Z_PANEL)
-      -- Hover is the host's pointer, not a guess: the id it names is the control
-      -- it hit, so the row that lights up is the row under the cursor.
-      if hovered == ("event-" .. index) then
-        rect("event-hover-" .. index, row.rect.x, row.rect.y, row.rect.width, row.rect.height, "primary", 0.08, 6, Z_PANEL)
-      end
-    end
-  end
   local _, selected_index = selected_event(snapshot)
   local selected = find(laid, "event-" .. tostring(selected_index))
   if selected then
     rect("event-selected", selected.rect.x, selected.rect.y, selected.rect.width, selected.rect.height, "primary", 0.14, 7, Z_PANEL)
   end
 
-  -- One line per event, drawn after its background so the highlight sits under
-  -- the text it belongs to.
+  -- `plan_rows` budgets an average row, so the draw stops when the real cost
+  -- reaches the ceiling: the row that would cross it is dropped whole rather
+  -- than half-drawn into a scene the host refuses. The first row always draws,
+  -- because a page with nothing on it is worse than a page over budget.
+  local reserved = CHROME_FIXED_NODES + detail_nodes(selected_event(snapshot))
+  local show_source = #(snapshot.sources or {}) > 1
+  local spent, drawn_rows = 0, 0
   for index = first, first + shown - 1 do
     local row = find(laid, "event-" .. index)
     local segments = ROW_SEGMENTS[index]
-    if row and segments and on_surface(row.rect) then
-      draw_row(row, index, segments)
+    if not (row and segments and on_surface(row.rect)) then break end
+    local cost = row_nodes(events[index], show_source)
+    if drawn_rows > 0 and reserved + spent + cost > NODE_BUDGET then break end
+    -- Hover is the host's pointer, not a guess: the id it names is the control
+    -- it hit, so the row that lights up is the row under the cursor.
+    if hovered == ("event-" .. index) then
+      rect("event-hover-" .. index, row.rect.x, row.rect.y, row.rect.width, row.rect.height, "primary", 0.08, 6, Z_PANEL)
     end
+    -- The hairline is drawn with the row, not in a pass of its own: a rule for a
+    -- row the budget dropped is ink with nothing under it.
+    rect("event-rule-" .. index, row.rect.x + 10, row.rect.y + row.rect.height - 1, row.rect.width - 20, 1, "muted", 0.05, 0, Z_PANEL)
+    draw_row(row, index, segments)
+    spent = spent + cost
+    drawn_rows = drawn_rows + 1
   end
+  M.rows_drawn = drawn_rows
+  M.rows_planned = shown
 
   -- Locators are drawn as chips behind their label, so a link reads as a thing
   -- you can open rather than as a line of monospaced text.
   local opened = events[selected_index] or events[1]
   local pressed = {}
+  local pane_right = detail_pane
+    and (detail_pane.rect.x + detail_pane.rect.width - GAP.md)
+    or W
   for index, link in ipairs((opened and opened.links) or {}) do
     local node = find(laid, "worklog-detail-link-" .. index)
     if node then
-      rect("worklog-link-chip-" .. index, node.rect.x - 4, node.rect.y - 2,
-        node.rect.width + 8, node.rect.height + 4, "surface", 0.4, 5, Z_CHIP)
+      -- The pill wraps its label, not the column: a text node laid out in a
+      -- column takes the column's width, and a chip drawn to that width reads as
+      -- a text field rather than as a thing you press. Clamped to the pane,
+      -- which is how a chip two pixels wider than the pane crossed the edge.
+      local chip_x = node.rect.x - 4
+      local label = locator_label(link.locator)
+      local chip_w = math.min(#label * TYPE.micro * GLYPH_W + 16, pane_right - chip_x)
+      chip_w = math.max(24, chip_w)
+      rect("worklog-link-chip-" .. index, chip_x, node.rect.y - 2,
+        chip_w, node.rect.height + 4, "primary", 0.16, 5, Z_CHIP)
       pressed[#pressed + 1] = {
         id = "worklog-link-" .. index,
         label = link.locator,
         locator = link.locator, rel = link.rel,
-        rect = node.rect,
+        rect = { x = chip_x, y = node.rect.y - 2, width = chip_w, height = node.rect.height + 4 },
       }
     end
   end
@@ -664,7 +770,7 @@ function M.render(snapshot)
     end
   end
 
-  for index = 1, shown do
+  for index = first, first + drawn_rows - 1 do
     local row = find(laid, "event-" .. index)
     if row and on_surface(row.rect) then
       hit {
