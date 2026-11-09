@@ -42,7 +42,7 @@ fn a_marbles_envelope_becomes_one_event() {
     );
     assert_eq!(event.kind, Kind::Closed);
     assert_eq!(event.source, "marbles");
-    assert_eq!(event.subject.as_str(), "marbles://fpl/spores/spores-42");
+    assert_eq!(event.subject.as_str(), "marbles://fpl/spores-42");
     assert_eq!(
         event.at, 1_767_225_600_000,
         "seconds are normalized to milliseconds"
