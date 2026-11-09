@@ -5,9 +5,16 @@
 -- would be a second opinion about order, and two opinions is how a timeline
 -- starts disagreeing with itself.
 --
--- Host-side layout: the view returns a tree of semantic nodes and the host
--- resolves geometry. Canvas has neither a layout service nor hit targets, so
--- both have fallbacks below (see docs/interaction-gap.md).
+-- Geometry: this view owns it. The library can hand a tree to a host with a
+-- layout service, and Canvas has neither `canvas.layout` nor hit targets, so the
+-- view places its own pixels through `ui.surface` — the documented path for a
+-- host that draws module primitives (see docs/interaction-gap.md).
+
+-- The library arrives through `require`, which is what the SDK package is for:
+-- the composer hands this view a `require` that resolves to the repo's
+-- `fungos.ui`, so the view names the library instead of receiving it as an
+-- accidental upvalue.
+local ui = require("fungos.ui")
 
 local M = {}
 M.name = "worklog"
@@ -28,18 +35,12 @@ local Z_CHIP = Z + 0.10
 local Z_TEXT = Z + 0.20
 
 local function use_viewport()
-  -- The host says how big the surface is; the view must not assume. `inputs` is
-  -- what a widget module declares, `viewport` is what a host hands a document
-  -- pane; the built-in default is only for a host that says neither.
-  local vp = (_G.module and _G.module.viewport)
-    or (_G.module and _G.module.inputs)
-    or (_G.module and _G.module.theme and _G.module.theme.viewport)
-  if vp and vp.width and vp.height and vp.width > 0 and vp.height > 0 then
-    W, H = vp.width, vp.height
-  end
+  -- The host says how big the surface is and the library owns how that is read:
+  -- `ui.viewport` resolves `module.viewport`, then the theme's viewport, then the
+  -- authoring size. A second opinion here is how a view comes to draw a window it
+  -- was not given.
+  W, H = ui.viewport(W, H)
 end
-
-local function theme() return (_G.module and _G.module.theme) or { body = 16, radius = 9.6 } end
 
 -- Input the host owns and the view merely reads. A module is re-executed for
 -- every render, so it cannot remember a scroll position of its own: the wheel
@@ -56,59 +57,35 @@ local function hover_id()
   local hover = _G.module and _G.module.hover
   return type(hover) == "string" and hover or nil
 end
-local function base() return (theme().body or 16) end
-local function nx(px) return -4 + 8 * px / W end
-local function ny(px) return 4 - 8 * px / H end
-local function sw(px) return 8 * px / W end
-local function sh(px) return 8 * px / H end
+-- One surface per render. It owns the pixel-to-scene-unit conversion, the text
+-- scale the host applies, and text measurement: doing that arithmetic here (as
+-- this view used to) meant a second opinion about the host's own transform, and
+-- it was wrong about the text floor for weeks without showing a symptom.
+local surface
 
--- A text node carries a scale, and the host turns it into pixels with
--- `max(|scale_y| * theme.body * depth(z), theme.micro)` where
--- `depth(z) = 0.5 + ((z + 4) / 8) * 1.5`. Two consequences, both invisible from
--- here until the wall disagreed with the preview:
---
---   * dividing by `body * 1.25` made every label 20 % smaller than its number.
---   * the floor is `theme.micro` — 15 px on the wall's 1.5x theme — so 9, 10 and
---     12 px all came out as 15. Measured off a real Canvas frame, every label was
---     15 px wide-body and the 16 px one was 16.5: the view had no hierarchy at
---     all, which is why it read as one undifferentiated wall of text.
---
--- So the depth factor is divided back out, and a number in this file is the
--- number of pixels the wall draws. The type scale itself comes from the theme
--- (see `use_type`), because the theme is what the host will honour.
-local function depth(z) return 0.5 + (((z or 0) + 4) / 8) * 1.5 end
-local function ts(px) return px / (base() * depth(Z_TEXT)) end
+-- The library's density tokens, read once per render beside the surface.
+local tone = { panel = 0.36, selected = 0.16 }
 
--- One line of type occupies 30 % more than its size. The layout reserves with
--- this and the emit path draws with it, so the box a label was given is the box
--- its ink fills.
-local function line_height(size) return math.floor(size * 1.3) end
-
--- Canvas resolves every semantic role the theme publishes: text, muted,
--- primary, surface, background, success, warning, danger, info. This table used
--- to alias `surface` and `background` to `muted` on the belief that Canvas
--- accepted neither, which painted the window and every panel the same flat
--- grey and left body text sitting on its own background colour.
-local function ink(name)
-  return name
+-- How solid a panel, a selected row and a chip are is a design decision the
+-- library already publishes (`ui.profile.surfaces`), so the view reads it there
+-- instead of picking its own numbers: one density for every Spore, changed in
+-- one place. The literal fallbacks are what a profile without surfaces means.
+local function surfaces()
+  local profile = (ui.profile and ui.profile.surfaces) or {}
+  return {
+    panel = tonumber(profile.panel) or 0.36,
+    selected = tonumber(profile.selected) or 0.16,
+  }
 end
 
+local function line_height(size) return math.floor(size * 1.3) end
+
 local function rect(id, x, y, w, h, role, opacity, radius, layer)
-  canvas.rect {
-    id = id, ink = ink(role or "surface"), opacity = opacity or 1.0,
-    -- The host maps this straight onto the renderer's border radius, in pixels.
-    radius = radius or 8,
-    translation = { nx(x), ny(y), layer or Z },
-    scale = { sw(math.max(1, w)), sh(math.max(1, h)), 1 },
-  }
+  surface:rect(id, x, y, w, h, role or "surface", opacity, radius or 8, layer or Z)
 end
 
 local function text(id, value, x, y, px, role, z)
-  canvas.text {
-    id = id, text = tostring(value or ""), ink = ink(role or "text"),
-    translation = { nx(x), ny(y), z or Z_TEXT },
-    scale = { ts(px), ts(px), 1 },
-  }
+  surface:text(id, value, x, y, px, role or "text", z or Z_TEXT)
 end
 
 -- One drawn line is one node. A `canvas.text` carries no width, so the host
@@ -155,30 +132,29 @@ local function source_mark(source)
   return SOURCE_MARK[tostring(source or "")] or { mark = "\u{2022}", ink = "muted" }
 end
 
--- Characters a line holds at this size. The host measures text; a view that
--- cannot ask must estimate. Measured off a real Canvas frame — "listeners as"
--- and "myceliumd/services.r" at 15 px, and the timestamp line at 27 chars — the
--- advance runs 0.41 em for narrow lowercase to 0.67 em for capitals, averaging
--- 0.51. Too far above the average and every line ends in an ellipsis with a hole
--- beside it; too far below and the line runs under the column next to it.
-local GLYPH_W = 0.52
 
+-- How wide text is, in pixels, asked of the surface: the host measures when it
+-- can and the library owns the estimate when it cannot. Every caller is on the
+-- render path, so `surface` is always the one this frame is drawn into.
 local function measure(value, size)
-  return #tostring(value or "") * size * GLYPH_W
+  return surface:measure_text(value, size).width
 end
 
--- Capitals run about 0.7 em per character — a third wider than the mixed-case
--- average above. A masthead or a KIND column sized with the average runs past
--- its own box, and the host does not clip: it draws over the next column.
-local function measure_caps(value, size)
-  return #tostring(value or "") * size * 0.7
-end
+-- Capitals run about a third wider than the mixed-case average the estimate
+-- assumes (0.67 em against 0.51, measured off a real Canvas frame), so a masthead
+-- or a KIND column reserved at the average ends under the glyphs it labels — and
+-- the host does not clip, it draws over the column next to it. One ratio, applied
+-- to the one measurement.
+local CAPS = 1.3
+local function measure_caps(value, size) return measure(value, size) * CAPS end
 
+-- Truncation belongs to the library: `ui.clip` counts code points, so a cut can
+-- never land inside a glyph. What this adds is the placeholder an empty field
+-- needs, which is a copy decision rather than a text operation.
 local function clip(value, limit)
   value = tostring(value or "")
   if value == "" then return "—" end
-  if #value <= limit then return value end
-  return value:sub(1, limit - 1) .. "…"
+  return ui.clip(value, limit)
 end
 
 -- `widget.hit` has no host implementation: Canvas's `widget` is the theming
@@ -210,30 +186,12 @@ end
 M.pending_presses = pending_presses
 M.press = press
 
-local function layout(tree, width, height)
-  if canvas and canvas.layout then return canvas.layout(tree, width, height) end
-  return ui.layout(tree, width, height)
-end
 
-local function label(id, value, size, layout)
-  layout = layout or {}
-  return {
-    id = id, kind = "text", text = clip(value, 240),
-    style = { size = size, line_height = line_height(size), wrap = layout.wrap == true },
-    layout = layout,
-  }
-end
-
-local function find(laid, id)
-  for _, node in ipairs(laid.nodes or {}) do
-    if node.id == id then return node end
-  end
-end
-
--- A node laid out past the surface cannot be hit: its normalized coordinates
--- fall outside the frame and the host is right to reject them. The fake row
--- layout used to keep everything inside by accident; real Taffy does not, which
--- is the point of running it.
+-- A row placed past the surface cannot be seen or hit: its normalized
+-- coordinates fall outside the frame and the host is right to reject them. The
+-- plan bounds the row count, but the draw loop re-checks each rect, because the
+-- plan works in pixels from a height it was handed and rounding at the bottom
+-- edge is exactly where a half row lands.
 local function on_surface(rect)
   return rect.y >= -0.5 and rect.y + rect.height <= H + 0.5
     and rect.x >= -0.5 and rect.x + rect.width <= W + 0.5
@@ -284,9 +242,10 @@ local ROW_H = MIN_ROW_H
 -- The pitch is part of the contract: the host scrolls in pixels and the view
 -- turns them into rows, so both sides need the same number.
 M.row_height = ROW_H
+M.max_row_height = MAX_ROW_H
 
 local function use_type()
-  local t = theme()
+  local t = ui.theme()
   TYPE.micro = token(t.micro, FALLBACK_TYPE.micro)
   TYPE.caption = token(t.small, FALLBACK_TYPE.caption)
   TYPE.body = token(t.body, FALLBACK_TYPE.body)
@@ -302,14 +261,55 @@ local function use_type()
   -- past about four lines of body text a row stops reading as a row and starts
   -- reading as a card. A short log ends where it ends and the count says so.
   MAX_ROW_H = math.max(96, math.floor(TYPE.body * 4.2))
+  M.max_row_height = MAX_ROW_H
   -- The toolbar, the list header and the pane padding, which is everything above
   -- the first row.
   CHROME_PX = math.floor(TYPE.title * 1.6) + math.floor(TYPE.caption * 2) + GAP.md * 2 + GAP.sm
   PANE_W = math.floor(W * 0.32)
 end
 
+-- Where everything goes. The view computes its own geometry because there is no
+-- layout service to ask: the SDK's `ui.layout` is a call *into* the host, Canvas
+-- has no `canvas.layout`, and a flow engine carried inside one Spore would be a
+-- second layout implementation with one caller. A list, two panes and a toolbar
+-- are arithmetic.
+local function geometry()
+  local toolbar_h = math.floor(TYPE.title * 1.5)
+  local main_x = GAP.md
+  local main_y = GAP.md + toolbar_h + GAP.sm
+  local main_w = W - GAP.md * 2
+  local main_h = math.max(120, H - main_y - GAP.md)
+  local wide = W >= 620
+  local list_w = wide and math.max(240, main_w - GAP.md - PANE_W) or main_w
+  local box = {
+    toolbar = { x = main_x, y = GAP.md, w = main_w, h = toolbar_h },
+    list = { x = main_x, y = main_y, w = list_w, h = main_h },
+    detail = wide and { x = main_x + list_w + GAP.md, y = main_y, w = PANE_W, h = main_h } or nil,
+    wide = wide,
+  }
+  -- Inside the list: one line of head, then rows on the pitch the plan chose.
+  box.head = { x = box.list.x + GAP.sm, y = box.list.y + GAP.sm, w = box.list.w - GAP.sm * 2, h = line_height(TYPE.caption) }
+  box.rows = { x = box.head.x, y = box.head.y + box.head.h + GAP.xs, w = box.head.w }
+  if box.detail then
+    box.detail_inner = {
+      x = box.detail.x + GAP.md,
+      y = box.detail.y + GAP.sm,
+      w = box.detail.w - GAP.md * 2,
+    }
+  end
+  return box
+end
+
+-- A label on the surface: the view places it, so it carries where it goes.
+local function placed(id, value, x, y, size, role, width)
+  return { id = id, text = clip(value, 240), x = x, y = y, size = size, role = role or "text", width = width or 0 }
+end
+
 local function chars_per_line(width, size)
-  return math.max(8, math.floor(width / (size * GLYPH_W)))
+  local sample = "the quick brown fox jumps"
+  local per_char = measure(sample, size) / #sample
+  if per_char <= 0 then return 8 end
+  return math.max(8, math.floor(width / per_char))
 end
 -- The wrap budget is the view's own arithmetic, so it is the view's to publish:
 -- the fixture asserts lines against this number rather than a second guess.
@@ -433,6 +433,21 @@ end
 -- A row is one line with things embedded in it: the kind, who did it, the
 -- locator as a chip you can press, the summary, and how long ago. Stacked lines
 -- spent three rows' worth of height per event and still could not hold a
+-- The two fixed columns are as wide as the widest word that will be drawn in
+-- them, measured over the whole page rather than sampled from one row. The kind
+-- column was reserved for "CHANGED" and a DEPENDENCY row drew its last letter
+-- through the producer's mark; the actor column was reserved for one person's
+-- name. Both are facts about the snapshot, so both are read from it — and from
+-- the whole list, not the window, or the columns would jump while scrolling.
+local KIND_W, ACTOR_W = 0, 0
+local function size_columns(events)
+  KIND_W, ACTOR_W = 0, 0
+  for _, event in ipairs(events) do
+    KIND_W = math.max(KIND_W, measure_caps(kind_word(event.kind), TYPE.micro))
+    ACTOR_W = math.max(ACTOR_W, measure(event.actor or "", TYPE.micro))
+  end
+end
+
 -- locator, which is the part a reader wants to click.
 local function row_segments(event, show_source)
   -- Column widths are measured from the scale, not remembered from it: 92 px of
@@ -441,7 +456,7 @@ local function row_segments(event, show_source)
     -- Neutral caps: colour in a row belongs to the producer, and a kind that
     -- also changed colour would be a second opinion about what green means.
     { key = "kind", text = kind_word(event.kind), ink = "muted", size = TYPE.micro,
-      w = measure_caps("CHANGED", TYPE.micro) + GAP.sm, line = 1 },
+      w = KIND_W + GAP.sm, line = 1 },
   }
   -- One source means the column is the same word on every row: it costs space
   -- and tells the reader nothing.
@@ -452,7 +467,7 @@ local function row_segments(event, show_source)
       w = measure_caps(mark.mark, TYPE.micro) + GAP.sm, line = 1 }
   end
   segments[#segments + 1] = { key = "actor", text = event.actor or "", ink = "muted", size = TYPE.micro,
-    w = measure("ajmwagar", TYPE.micro) + GAP.md, line = 1 }
+    w = ACTOR_W + GAP.md, line = 1 }
   -- The summary comes before the locator: the sentence is the line, the chip is
   -- the footnote on it. Put the chip first and a long locator eats the row.
   segments[#segments + 1] = { key = "summary", text = event.summary or "", ink = "text", size = TYPE.body, grow = true, line = ROW_H >= TALL_ROW_H and 2 or 1 }
@@ -477,18 +492,24 @@ local function row_segments(event, show_source)
   return segments
 end
 
--- Row content lives beside the tree, keyed by row index. A layout service is
--- free to hand back geometry and nothing else — Taffy does exactly that — so a
--- custom field on a node is not a contract to carry data across the layout.
+-- Row content lives beside the geometry, keyed by row index. The plan needs a
+-- row's cost before anything of it exists, and the draw pass needs its segments;
+-- a table keyed by index is what both can read without a second derivation.
 local ROW_SEGMENTS = {}
 
-local function event_row(event, index, show_source)
-  ROW_SEGMENTS[index] = row_segments(event, show_source)
+local function prepare_rows(snapshot, first, shown, show_source)
+  local events = snapshot.events or {}
+  for index = first, first + shown - 1 do
+    if events[index] then ROW_SEGMENTS[index] = row_segments(events[index], show_source) end
+  end
+end
+
+local function row_rect(box, index, first)
   return {
-    id = "event-" .. index, kind = "container",
-    layout = { height = ROW_H, direction = "row",
-      padding = { top = 0, right = 12, bottom = 0, left = 12 } },
-    children = {},
+    x = box.rows.x,
+    y = box.rows.y + (index - first) * ROW_H,
+    width = box.rows.w,
+    height = ROW_H,
   }
 end
 
@@ -503,32 +524,49 @@ local function window_start(snapshot, shown)
   return math.max(1, math.min(start, last_start))
 end
 
-local function list(snapshot, shown, show_source, first)
+-- The producer legend. It carries the same mark the rows carry, so a reader
+-- learns which glyph means which producer once instead of inferring it from a
+-- colour.
+local function sources(snapshot)
+  local rows = snapshot.sources or {}
+  local parts = {}
+  for _, source in ipairs(rows) do
+    local mark = source_mark(source.id)
+    parts[#parts + 1] = string.format("%s %s %d", mark.mark,
+      source.label or source.id or "?", source.count or 0)
+  end
+  return table.concat(parts, "  ·  ")
+end
+
+local function head_labels(snapshot, box, first, shown)
   local events = snapshot.events or {}
   local counts = snapshot.counts or {}
-  first = first or 1
   local last = math.min(#events, first + shown - 1)
   local range = (#events == 0) and "0 of 0"
     or string.format("%d–%d of %d", first, last, counts.total or #events)
-  local children = {
-    {
-      id = "worklog-head", kind = "container", layout = { direction = "row", height = line_height(TYPE.caption) },
-      children = {
-        -- The title is the toolbar's, not the list's: drawing it twice spent a
-        -- line saying nothing the masthead had not already said.
-        label("worklog-range", range, TYPE.caption, { flex_grow = 1 }),
-        label("worklog-sort", snapshot.sort or "Newest first", TYPE.caption,
-          { width = measure("Newest first", TYPE.caption) + GAP.sm }),
-      },
-    },
+  local sort = snapshot.sort or "Newest first"
+  return {
+    placed("worklog-range", range, box.head.x, box.head.y, TYPE.caption, "muted", box.head.w),
+    -- The sort state is right-aligned: it is a property of the whole column, and
+    -- it is not what the eye should land on first.
+    placed("worklog-sort", sort, box.head.x + box.head.w - measure(sort, TYPE.caption), box.head.y,
+      TYPE.caption, "muted", measure(sort, TYPE.caption)),
   }
-  if #events == 0 then
-    children[#children + 1] = label("worklog-empty", "Nothing has arrived yet.", TYPE.body, { height = line_height(TYPE.body) })
-  end
-  for index = first, last do
-    children[#children + 1] = event_row(events[index], index, show_source)
-  end
-  return { id = "worklog-list", kind = "container", layout = { flex_grow = 1, direction = "column", gap = 0 }, children = children }
+end
+
+local function toolbar_labels(snapshot, box)
+  local counts = snapshot.counts or {}
+  local legend = sources(snapshot)
+  local today = string.format("%d today", counts.today or 0)
+  local title_w = measure_caps(title(snapshot), TYPE.title)
+  local today_w = measure(today, TYPE.caption)
+  return {
+    placed("worklog-title", title(snapshot), box.x, box.y, TYPE.title, "text", title_w),
+    placed("worklog-sources", legend, box.x + title_w + GAP.md, box.y + (TYPE.title - TYPE.caption),
+      TYPE.caption, "muted", measure(legend, TYPE.caption)),
+    placed("worklog-today", today, box.x + box.w - today_w, box.y + (TYPE.title - TYPE.caption),
+      TYPE.caption, "muted", today_w),
+  }
 end
 
 -- A locator is an id under the hood. `marbles://local/mycelium-6us5` is Marbles
@@ -554,108 +592,59 @@ M.locator_label = locator_label
 -- The detail column is the row's footnote made readable: the whole summary, when
 -- it happened in wall-clock terms, who did it, and every locator on the event —
 -- not just the two a row has room for.
-local function detail(snapshot)
+local function detail_labels(snapshot, box)
+  local inner = assert(box.detail_inner, "detail_labels needs a detail pane")
   local event = selected_event(snapshot)
   if not event then
-    return { id = "worklog-detail", kind = "container", layout = {}, children = {
-      label("worklog-detail-empty", "Select an event", TYPE.body, {}) } }
+    return { placed("worklog-detail-empty", "Select an event", inner.x, inner.y, TYPE.body, "text", inner.w) }
   end
+  local labels, y = {}, inner.y
+  local function put(id, value, size, role)
+    labels[#labels + 1] = placed(id, value, inner.x, y, size, role, inner.w)
+    y = y + line_height(size) + GAP.xs
+  end
+
+  put("worklog-detail-label", "EVENT", TYPE.micro, "muted")
+
+  -- The summary reserves the lines it wraps to and no more: the host does not
+  -- clip, so a box of one line runs under the next one, and a box of eight
+  -- around a two-line summary pushes the rest of the column into a hole.
+  local lines = detail_lines(event)
+  local summary = placed("worklog-detail-summary", clip(event.summary or "", DETAIL_SUMMARY_CHARS),
+    inner.x, y, TYPE.body, "text", inner.w)
+  summary.lines = lines
+  labels[#labels + 1] = summary
+  y = y + lines * line_height(TYPE.body) + GAP.sm
+
+  put("worklog-detail-when", (event.at_text or "") .. "  ·  " .. (event.age or ""), TYPE.micro, "muted")
+  -- The mark, not the producer's name: the row already carries the mark, and the
+  -- pane is where a reader wants the actor.
+  put("worklog-detail-who", source_mark(event.source).mark .. "  " .. (event.actor or ""), TYPE.micro, "muted")
+  put("worklog-detail-kind", kind_word(event.kind), TYPE.micro, "muted")
+
   local links = event.links or {}
-  -- A wrapped label needs the height its lines actually take, and only the lines
-  -- it takes. The layout gives a node exactly what it asks for and the host does
-  -- not clip: a box of one line lets the ink run over whatever is stacked next,
-  -- and a box of eight lines around a two-line summary pushes the rest of the
-  -- column a hundred pixels below the text it describes.
-  local children = {
-    label("worklog-detail-label", "EVENT", TYPE.micro, { height = line_height(TYPE.micro) }),
-    label("worklog-detail-summary", clip(event.summary or "", DETAIL_SUMMARY_CHARS), TYPE.body,
-      { height = detail_lines(event) * line_height(TYPE.body), wrap = true }),
-    label("worklog-detail-when", (event.at_text or "") .. "  ·  " .. (event.age or ""), TYPE.micro, { height = line_height(TYPE.micro) }),
-    -- The mark, not the producer's name: the row already carries the mark, and
-    -- the pane is where a reader wants the actor.
-    label("worklog-detail-who", source_mark(event.source).mark .. "  " .. (event.actor or ""), TYPE.micro,
-      { height = line_height(TYPE.micro) }),
-    label("worklog-detail-kind", kind_word(event.kind), TYPE.micro, { height = line_height(TYPE.micro) }),
-    label("worklog-detail-open-label", #links > 0 and "OPEN" or "LOCATORS", TYPE.micro, { height = line_height(TYPE.micro) }),
-  }
+  put("worklog-detail-open-label", #links > 0 and "OPEN" or "LOCATORS", TYPE.micro, "muted")
   if #links == 0 then
-    children[#children + 1] = label("worklog-detail-nolinks", "no locators", TYPE.micro, { height = line_height(TYPE.micro) })
+    put("worklog-detail-nolinks", "no locators", TYPE.micro, "muted")
   end
   for index, link in ipairs(links) do
-    -- The same rule as a row: a locator draws as its short id and the full URI
-    -- travels in the press. The pane is 268 px wide, and the transport in front
-    -- of `mycelium-6us5` is what pushed the chip off the right edge.
-    children[#children + 1] = label("worklog-detail-link-" .. index,
-      locator_label(link.locator), TYPE.micro, { height = math.floor(TYPE.micro * 1.8) })
-  end
-  return { id = "worklog-detail-page", kind = "container", layout = { flex_grow = 1, direction = "column", gap = GAP.sm }, children = children }
-end
-
-local function sources(snapshot)
-  local rows = snapshot.sources or {}
-  local parts = {}
-  for _, source in ipairs(rows) do
-    -- The legend carries the same mark the rows carry, so the mapping is read
-    -- once and not guessed from a colour.
-    local mark = source_mark(source.id)
-    parts[#parts + 1] = string.format("%s %s %d", mark.mark,
-      source.label or source.id or "?", source.count or 0)
-  end
-  return table.concat(parts, "  ·  ")
-end
-
-local function tree(snapshot)
-  local counts = snapshot.counts or {}
-  local wide = W >= 620
-  local show_source = #(snapshot.sources or {}) > 1
-  local shown = plan_rows(snapshot)
-  local first = window_start(snapshot, shown)
-  local root = {
-    id = "worklog-root", kind = "container",
-    layout = { width = W, height = H, direction = "column", gap = GAP.sm, padding = { top = GAP.md, right = GAP.md, bottom = GAP.md, left = GAP.md } },
-    children = {
-      {
-        id = "worklog-toolbar", kind = "container", layout = { direction = "row", height = math.floor(TYPE.title * 1.5) },
-        children = {
-          label("worklog-title", title(snapshot), TYPE.title,
-            { width = measure_caps(title(snapshot), TYPE.title) + GAP.sm }),
-          label("worklog-sources", sources(snapshot), TYPE.caption, { flex_grow = 1 }),
-          label("worklog-today", string.format("%d today", counts.today or 0), TYPE.caption,
-            { width = measure("0000 today", TYPE.caption) + GAP.sm }),
-        },
-      },
-    },
-  }
-  if wide then
-    -- The list gets what the detail column leaves, named explicitly. Left to
-    -- `flex_grow` the kit hands the flexible child the whole row and then also
-    -- places the fixed one, so rows were laid out ~350 px wider than the column
-    -- they are drawn in: their wrapped lines ran straight through the detail
-    -- pane, which is the overlap that looked like a Z-order bug.
-    local main_w = W - GAP.md * 2
-    local list_w = math.max(240, main_w - GAP.md - PANE_W)
-    -- The panes are given the height the page leaves instead of asking for it.
-    -- Left to themselves they take their content's height, so a four-row log
-    -- ended its panel two thirds of the way down the window and the wall showed
-    -- a card that stopped in mid air.
-    local main_h = math.max(120, H - GAP.md * 2 - math.floor(TYPE.title * 1.5))
-    root.children[#root.children + 1] = {
-      id = "worklog-main", kind = "container", layout = { flex_grow = 1, direction = "row", gap = GAP.md },
-      children = {
-        { id = "worklog-list-pane", kind = "container", layout = { width = list_w, height = main_h, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = GAP.sm, right = GAP.sm, bottom = GAP.sm, left = GAP.sm } }, children = { list(snapshot, shown, show_source, first) } },
-        { id = "worklog-detail-pane", kind = "container", layout = { width = PANE_W, height = main_h, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = GAP.sm, right = GAP.md, bottom = GAP.sm, left = GAP.md } }, children = { detail(snapshot) } },
-      },
+    local pill_h = math.floor(TYPE.micro * 1.8)
+    local label = locator_label(link.locator)
+    labels[#labels + 1] = {
+      id = "worklog-detail-link-" .. index, text = label, x = inner.x + GAP.sm, y = y + GAP.xs,
+      size = TYPE.micro, role = "primary", width = measure(label, TYPE.micro),
+      chip = { rect = { x = inner.x, y = y, width = measure(label, TYPE.micro) + GAP.sm * 2, height = pill_h },
+               locator = link.locator, rel = link.rel },
     }
-  else
-    root.children[#root.children + 1] = { id = "worklog-main", kind = "container", layout = { flex_grow = 1 }, children = { list(snapshot, shown, show_source, first) } }
+    y = y + pill_h + GAP.xs
   end
-  return root
+  return labels
 end
 
--- A row is addressable and opening it selects it. Canvas delivers activation
--- through `module.event`; without that the snapshot's own selection stands.
 local function apply_event(snapshot)
-  local event = _G.module and _G.module.event
+  -- The host routes an activation into this render; `ui.event()` is the
+  -- library's way of asking, so the view does not read the host's table shape.
+  local event = ui.event()
   if not event or event.kind ~= "activate" then return snapshot end
   local index = tonumber(tostring(event.target_id or ""):match("^event%-(%d+)$"))
   local target = index and (snapshot.events or {})[index]
@@ -666,12 +655,6 @@ local function apply_event(snapshot)
   end
   return snapshot
 end
-
--- Exported for preview tools and fixtures: the tree is the view's whole
--- structure, and walking it is cheaper than re-deriving it from the drawn scene.
-M.tree = tree
-
-
 
 -- One line of a row: fixed columns first, the age at the far right, chips given
 -- a share of what is left, and the summary taking the remainder.
@@ -693,7 +676,7 @@ local function draw_line(parts, index, left, right, y, age_w, chip_h, chip_share
   local chip_room = math.max(0, math.min(available * (chip_share or 0.5), 320))
   local chip_widths, chip_total, used = {}, 0, 0
   for _, segment in ipairs(chips) do
-    local chars = math.floor((chip_room - used - 10) / (segment.size * GLYPH_W))
+    local chars = chars_per_line(chip_room - used - 10, segment.size)
     if chars >= 6 then
       local label = clip(locator_label(segment.chip), chars)
       local width = measure(label, segment.size) + 10
@@ -710,7 +693,7 @@ local function draw_line(parts, index, left, right, y, age_w, chip_h, chip_share
     if segment.align == "right" then
       text(id, segment.text, right - age_w, y, segment.size, segment.ink)
     elseif segment.grow then
-      local chars = math.floor(summary_room / (segment.size * GLYPH_W))
+      local chars = chars_per_line(summary_room, segment.size)
       if chars >= 8 then
         text(id, clip(segment.text, chars), x, y, segment.size, segment.ink)
       end
@@ -718,13 +701,14 @@ local function draw_line(parts, index, left, right, y, age_w, chip_h, chip_share
     elseif segment.chip then
       local piece = chip_widths[segment]
       if piece then
-        rect(id .. "-chip", x - 3, y - 3, piece.width, chip_h, "primary", 0.16, 5, Z_CHIP)
+        rect(id .. "-chip", x - 3, y - 3, piece.width, chip_h, "primary", tone.selected, 5, Z_CHIP)
         text(id, piece.label, x + 2, y, segment.size, "primary")
         press {
           id = id .. "-press", label = segment.chip,
           action = "worklog-open-locator",
           body = { locator = segment.chip, rel = segment.rel or "subject" },
-          x = nx(x - 3), y = ny(y - 3), width = sw(piece.width), height = sh(chip_h),
+          x = surface:nx(x - 3), y = surface:ny(y - 3),
+          width = surface:sw(piece.width), height = surface:sh(chip_h),
         }
         x = x + piece.width + GAP.xs
       end
@@ -738,8 +722,7 @@ end
 -- A row is one or two lines depending on the pitch the page earned: a header of
 -- who and what, then the sentence. Rows carry segments instead of child nodes,
 -- so the draw pass places them rather than the layout.
-local function draw_row(laid_row, index, segments)
-  local row = laid_row.rect
+local function draw_row(row, index, segments)
   local pad = GAP.sm
   local left = row.x + pad
   local right = row.x + row.width - pad
@@ -766,27 +749,41 @@ end
 
 function M.render(snapshot)
   use_viewport()
+  surface = ui.surface(W, H, ui.theme())
+  tone = surfaces()
   -- The theme's type scale decides every height below, so it is read before
   -- anything is planned.
   use_type()
   snapshot = apply_event(snapshot or {})
   local events = snapshot.events or {}
   local shown = plan_rows(snapshot)
-  local wide = W >= 620
-  local laid = layout(tree(snapshot), W, H)
+  local first = window_start(snapshot, shown)
+  local show_source = #(snapshot.sources or {}) > 1
+  local box = geometry()
+  size_columns(events)
+  prepare_rows(snapshot, first, shown, show_source)
 
   rect("worklog-bg", 0, 0, W, H, "background", 1.0, 0)
-  local list_pane = find(laid, "worklog-list-pane")
-  if list_pane then rect("worklog-list-bg", list_pane.rect.x, list_pane.rect.y, list_pane.rect.width, list_pane.rect.height, "surface", 0.22, 10, Z_PANEL) end
-  local detail_pane = find(laid, "worklog-detail-pane")
-  if detail_pane then rect("worklog-detail-bg", detail_pane.rect.x, detail_pane.rect.y, detail_pane.rect.width, detail_pane.rect.height, "surface", 0.22, 10, Z_PANEL) end
+  rect("worklog-list-bg", box.list.x, box.list.y, box.list.w, box.list.h, "surface", tone.panel, 10, Z_PANEL)
+  if box.detail then
+    rect("worklog-detail-bg", box.detail.x, box.detail.y, box.detail.w, box.detail.h, "surface", tone.panel, 10, Z_PANEL)
+  end
+
+  for _, item in ipairs(toolbar_labels(snapshot, box.toolbar)) do
+    text(item.id, item.text, item.x, item.y, item.size, item.role)
+  end
+  for _, item in ipairs(head_labels(snapshot, box, first, shown)) do
+    text(item.id, item.text, item.x, item.y, item.size, item.role)
+  end
+  if #events == 0 then
+    text("worklog-empty", "Nothing has arrived yet.", box.rows.x, box.rows.y, TYPE.body, "muted")
+  end
 
   local hovered = hover_id()
-  local first = window_start(snapshot, shown)
   local _, selected_index = selected_event(snapshot)
-  local selected = find(laid, "event-" .. tostring(selected_index))
-  if selected then
-    rect("event-selected", selected.rect.x, selected.rect.y, selected.rect.width, selected.rect.height, "primary", 0.14, 7, Z_PANEL)
+  if selected_index >= first and selected_index < first + shown then
+    local band = row_rect(box, selected_index, first)
+    rect("event-selected", band.x, band.y, band.width, band.height, "primary", tone.selected, 7, Z_PANEL)
   end
 
   -- `plan_rows` budgets an average row, so the draw stops when the real cost
@@ -794,119 +791,66 @@ function M.render(snapshot)
   -- than half-drawn into a scene the host refuses. The first row always draws,
   -- because a page with nothing on it is worse than a page over budget.
   local reserved = CHROME_FIXED_NODES + detail_nodes(selected_event(snapshot))
-  local show_source = #(snapshot.sources or {}) > 1
   local spent, drawn_rows = 0, 0
   for index = first, first + shown - 1 do
-    local row = find(laid, "event-" .. index)
     local segments = ROW_SEGMENTS[index]
-    if not (row and segments and on_surface(row.rect)) then break end
+    local row = segments and row_rect(box, index, first) or nil
+    if not (row and on_surface(row)) then break end
     local cost = row_nodes(events[index], show_source)
     if drawn_rows > 0 and reserved + spent + cost > NODE_BUDGET then break end
     -- Hover is the host's pointer, not a guess: the id it names is the control
     -- it hit, so the row that lights up is the row under the cursor.
     if hovered == ("event-" .. index) then
-      rect("event-hover-" .. index, row.rect.x, row.rect.y, row.rect.width, row.rect.height, "primary", 0.08, 6, Z_PANEL)
+      rect("event-hover-" .. index, row.x, row.y, row.width, row.height, "primary", tone.selected * 0.5, 6, Z_PANEL)
     end
-    -- The hairline is drawn with the row, not in a pass of its own: a rule for a
-    -- row the budget dropped is ink with nothing under it.
-    rect("event-rule-" .. index, row.rect.x + 10, row.rect.y + row.rect.height - 1, row.rect.width - 20, 1, "muted", 0.05, 0, Z_PANEL)
+    rect("event-rule-" .. index, row.x + 10, row.y + row.height - 1, row.width - 20, 1, "muted", 0.05, 0, Z_PANEL)
     draw_row(row, index, segments)
     spent = spent + cost
     drawn_rows = drawn_rows + 1
   end
-  M.rows_drawn = drawn_rows
-  M.rows_planned = shown
+  M.rows_drawn, M.rows_planned = drawn_rows, shown
 
-  -- Locators are drawn as chips behind their label, so a link reads as a thing
-  -- you can open rather than as a line of monospaced text.
-  local opened = events[selected_index] or events[1]
-  local pressed = {}
-  local pane_right = detail_pane
-    and (detail_pane.rect.x + detail_pane.rect.width - GAP.md)
-    or W
-  for index, link in ipairs((opened and opened.links) or {}) do
-    local node = find(laid, "worklog-detail-link-" .. index)
-    if node then
-      -- The pill wraps its label, not the column: a text node laid out in a
-      -- column takes the column's width, and a chip drawn to that width reads as
-      -- a text field rather than as a thing you press. Clamped to the pane,
-      -- which is how a chip two pixels wider than the pane crossed the edge.
-      local chip_x = node.rect.x - 4
-      local label = locator_label(link.locator)
-      local chip_w = math.min(#label * TYPE.micro * GLYPH_W + 16, pane_right - chip_x)
-      chip_w = math.max(24, chip_w)
-      rect("worklog-link-chip-" .. index, chip_x, node.rect.y - 2,
-        chip_w, node.rect.height + 4, "primary", 0.16, 5, Z_CHIP)
-      pressed[#pressed + 1] = {
-        id = "worklog-link-" .. index,
-        label = link.locator,
-        locator = link.locator, rel = link.rel,
-        rect = { x = chip_x, y = node.rect.y - 2, width = chip_w, height = node.rect.height + 4 },
-      }
-    end
-  end
-
-  for _, node in ipairs(laid.nodes or {}) do
-    if node.kind == "text" and node.style then
-      local ink_role = "text"
-      if node.id:find("%-age$") or node.id:find("%-subject$") or node.id:find("%-actor$")
-        or node.id:find("worklog%-range") or node.id:find("worklog%-sort")
-        or node.id:find("worklog%-sources") or node.id:find("worklog%-today")
-        or node.id:find("%-detail%-when") or node.id:find("%-detail%-who")
-        or node.id:find("%-detail%-kind") or node.id:find("%-detail%-link")
-        or node.id:find("%-detail%-open%-label") or node.id:find("%-detail%-label")
-        or node.id:find("%-detail%-nolinks") or node.id:find("worklog%-empty")
-        or node.id:find("%-detail%-empty") then ink_role = "muted" end
-      if node.id:find("%-kind$") then ink_role = "primary" end
-      if node.id == "worklog-detail-summary" then ink_role = "primary" end
-      local size = node.style.size
-      local line_height = node.style.line_height or (size + 4)
-      if node.style.wrap then
-        local per_line = chars_per_line(node.rect.width, size)
-        local lines = wrap_text(node.text, per_line)
-        -- The box reserved N lines; draw at most N, because a longer string is
-        -- the one case where wrapping alone still overruns the reservation.
-        local fits = math.max(1, math.floor(node.rect.height / line_height))
-        if #lines > fits then
-          local kept = {}
-          for index = 1, fits - 1 do kept[index] = lines[index] end
-          kept[fits] = clip(lines[fits], per_line)
-          lines = kept
-        end
-        for index, line in ipairs(lines) do
-          text(node.id .. "-l" .. index, line, node.rect.x,
-            node.rect.y + (index - 1) * line_height, size, ink_role)
-        end
+  if box.detail then
+    for _, item in ipairs(detail_labels(snapshot, box)) do
+      if item.chip then
+        -- A locator is a pill you can press: the label is its short id, and the
+        -- full locator travels in the press for whoever owns the scheme.
+        local chip = item.chip
+        rect(item.id .. "-chip", chip.rect.x, chip.rect.y, chip.rect.width, chip.rect.height,
+          "primary", tone.selected, 5, Z_CHIP)
+        text(item.id, item.text, item.x, item.y, item.size, item.role)
+        press {
+          id = "worklog-link-" .. item.id:match("(%d+)$"),
+          label = chip.locator,
+          action = "worklog-open-locator",
+          body = { locator = chip.locator, rel = chip.rel },
+          x = surface:nx(chip.rect.x), y = surface:ny(chip.rect.y),
+          width = surface:sw(chip.rect.width), height = surface:sh(chip.rect.height),
+        }
       else
-        text(node.id, node.text, node.rect.x, node.rect.y, size, ink_role)
+        local lines = wrap_text(item.text, chars_per_line(item.width, item.size))
+        local fits = item.lines or 1
+        for line_index = 1, math.min(#lines, fits) do
+          local id = fits > 1 and (item.id .. "-l" .. line_index) or item.id
+          text(id, lines[line_index], item.x, item.y + (line_index - 1) * line_height(item.size),
+            item.size, item.role)
+        end
       end
     end
   end
 
   for index = first, first + drawn_rows - 1 do
-    local row = find(laid, "event-" .. index)
-    if row and on_surface(row.rect) then
+    local row = row_rect(box, index, first)
+    if on_surface(row) then
       hit {
         id = "event-" .. index, label = "hit",
-        x = nx(row.rect.x), y = ny(row.rect.y), width = sw(row.rect.width), height = sh(row.rect.height),
+        x = surface:nx(row.x), y = surface:ny(row.y),
+        width = surface:sw(row.width), height = surface:sh(row.height),
       }
     end
   end
 
-  -- Opening a locator is the host's job: it owns the scheme. The view names the
-  -- intent and hands over the locator; it does not resolve, fetch, or launch.
-  for _, spec in ipairs(pressed) do
-    if on_surface(spec.rect) then
-      press {
-        id = spec.id, label = spec.label,
-        action = "worklog-open-locator",
-        body = { locator = spec.locator, rel = spec.rel },
-        x = nx(spec.rect.x), y = ny(spec.rect.y),
-        width = sw(spec.rect.width), height = sh(spec.rect.height),
-      }
-    end
-  end
-  M.wide = wide
+  M.wide = box.wide
 end
 
 return M

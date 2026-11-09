@@ -8,11 +8,17 @@
 
 local snapshot_path = arg[1] or "examples/worklog_mock.lua"
 
-local source = assert(io.open("../unibus/ui/lib/ui.lua", "rb"),
-  "../unibus/ui/lib/ui.lua is missing; the worklog view composes the shared kit")
-local ui = assert(load(source:read("*a"), "ui/lib/ui.lua"))()
-source:close()
-_G.ui = ui
+-- The library is the SDK package, loaded the way a host loads it: through
+-- `require`. `FUNGOS_SDK` points at a fungos-sdk checkout (`~/src/fungos-sdk` by
+-- default), which is where `lua/fungos/ui.lua` lives.
+local sdk = os.getenv("FUNGOS_SDK") or ((os.getenv("HOME") or "") .. "/src/fungos-sdk")
+local lib_path = sdk .. "/lua/fungos/ui.lua"
+local lib_source = assert(io.open(lib_path, "rb"),
+  "no fungos.ui at " .. lib_path .. "; set FUNGOS_SDK to a fungos-sdk checkout")
+local lib_chunk = assert(load(lib_source:read("*a"), "@" .. lib_path))
+lib_source:close()
+package.preload["fungos.ui"] = function() return lib_chunk() end
+local ui = package.preload["fungos.ui"]()
 
 _G.module = {
   viewport = { width = 1086, height = 1569 },

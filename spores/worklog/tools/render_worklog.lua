@@ -10,9 +10,10 @@
 -- row is tall enough for the ink in it, whether the page is full.
 --
 -- It is a review aid, so the two things it cannot reproduce are named rather than
--- faked: font metrics (Canvas draws roughly 0.8 em per character, so the SVG uses
--- a monospace face with letter-spacing that lands on the same advance) and the
--- host's own antialiasing. Colours are the dark theme's roles, not a theme dump.
+-- faked: font metrics (a host with no `canvas.measure_text` gets the library's
+-- estimate, so the SVG uses a monospace face with letter-spacing that lands on
+-- the same advance) and the host's own antialiasing. Colours are the dark
+-- theme's roles, not a theme dump.
 
 local snapshot_path = arg[1] or "examples/worklog_mock.lua"
 local out_path = arg[2] or "/tmp/worklog.svg"
@@ -23,11 +24,13 @@ for index = 1, #arg do
   if arg[index] == "--scroll" then scroll = tonumber(arg[index + 1]) end
 end
 
-local source = assert(io.open("../unibus/ui/lib/ui.lua", "rb"),
-  "../unibus/ui/lib/ui.lua is missing; the worklog view composes the shared kit")
-local ui = assert(load(source:read("*a"), "ui/lib/ui.lua"))()
-source:close()
-_G.ui = ui
+local sdk = os.getenv("FUNGOS_SDK") or ((os.getenv("HOME") or "") .. "/src/fungos-sdk")
+local lib_path = sdk .. "/lua/fungos/ui.lua"
+local lib_source = assert(io.open(lib_path, "rb"),
+  "no fungos.ui at " .. lib_path .. "; set FUNGOS_SDK to a fungos-sdk checkout")
+local lib_chunk = assert(load(lib_source:read("*a"), "@" .. lib_path))
+lib_source:close()
+package.preload["fungos.ui"] = function() return lib_chunk() end
 
 -- `module.theme` carries the host's resolved type scale in pixels, and the wall
 -- runs a 1.5x theme: micro 15, small 18, body 24, large 27. Passing the same
