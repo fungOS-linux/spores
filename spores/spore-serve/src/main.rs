@@ -110,8 +110,7 @@ fn run() -> Result<(), String> {
     let view_file = view.clone().unwrap_or_else(|| PathBuf::from("ui/view.lua"));
     let view = view_file.clone();
     let theme = theme.unwrap_or_else(|| root.join("../../spores/themes/graphite.lua"));
-    let renderer =
-        renderer.unwrap_or_else(|| root.join("../../tools/shot.lua"));
+    let renderer = renderer.unwrap_or_else(|| root.join("../../tools/shot.lua"));
     let sdk = sdk.ok_or("no SDK: pass --sdk or set FUNGOS_SDK")?;
     let snapshot = match (snapshot_cmd, snapshot_file) {
         (Some(command), _) => SnapshotSource::Command(command),
@@ -120,7 +119,11 @@ fn run() -> Result<(), String> {
     };
 
     let config = Arc::new(Config {
-        view: if view.is_absolute() { view } else { root.join(view) },
+        view: if view.is_absolute() {
+            view
+        } else {
+            root.join(view)
+        },
         snapshot,
         theme,
         sdk,
@@ -130,7 +133,9 @@ fn run() -> Result<(), String> {
         height,
         proxy,
         title: title.unwrap_or_else(|| {
-            let stem = view_file.file_stem().map(|stem| stem.to_string_lossy().to_string());
+            let stem = view_file
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().to_string());
             stem.unwrap_or_else(|| "spore".to_string())
         }),
     });
@@ -169,7 +174,12 @@ fn handle(mut stream: TcpStream, config: &Config) -> Result<(), String> {
     match (request.method.as_str(), path) {
         ("GET", "/") => {
             let page = INDEX_HTML.replace("__TITLE__", &config.title);
-            respond(&mut stream, "200 OK", "text/html; charset=utf-8", page.as_bytes())
+            respond(
+                &mut stream,
+                "200 OK",
+                "text/html; charset=utf-8",
+                page.as_bytes(),
+            )
         }
         ("GET", "/health") => respond(&mut stream, "200 OK", "text/plain; charset=utf-8", b"ok\n"),
         ("GET", "/scene.json") => {
@@ -182,19 +192,24 @@ fn handle(mut stream: TcpStream, config: &Config) -> Result<(), String> {
             // id, a path, a query. `{query}` in `--snapshot-cmd` is how the
             // command sees it, so one host serves every session the producer has.
             let passthrough = query_without(&request.target, &["w", "h"]);
-            match scene(config, width.clamp(200, 4000), height.clamp(200, 4000), &passthrough) {
-            Ok(body) => respond(
-                &mut stream,
-                "200 OK",
-                "application/json; charset=utf-8",
-                body.as_bytes(),
-            ),
-            Err(error) => respond(
-                &mut stream,
-                "500 Internal Server Error",
-                "text/plain; charset=utf-8",
-                format!("{error}\n").as_bytes(),
-            ),
+            match scene(
+                config,
+                width.clamp(200, 4000),
+                height.clamp(200, 4000),
+                &passthrough,
+            ) {
+                Ok(body) => respond(
+                    &mut stream,
+                    "200 OK",
+                    "application/json; charset=utf-8",
+                    body.as_bytes(),
+                ),
+                Err(error) => respond(
+                    &mut stream,
+                    "500 Internal Server Error",
+                    "text/plain; charset=utf-8",
+                    format!("{error}\n").as_bytes(),
+                ),
             }
         }
         _ => match &config.proxy {
@@ -267,9 +282,7 @@ fn scene(config: &Config, width: u32, height: u32, query: &str) -> Result<String
 /// Hand an unserved request to the process that owns the state, byte for byte.
 /// The response is copied through, so SSE stays streaming and a 204 stays a 204.
 fn forward(stream: &mut TcpStream, upstream: &str, request: &Request) -> Result<(), String> {
-    let address = upstream
-        .trim_start_matches("http://")
-        .trim_end_matches('/');
+    let address = upstream.trim_start_matches("http://").trim_end_matches('/');
     let mut peer =
         TcpStream::connect(address).map_err(|error| format!("connect {address}: {error}"))?;
 
@@ -295,7 +308,9 @@ fn forward(stream: &mut TcpStream, upstream: &str, request: &Request) -> Result<
     loop {
         match peer.read(&mut buffer) {
             Ok(0) => break,
-            Ok(read) => stream.write_all(&buffer[..read]).map_err(|e| e.to_string())?,
+            Ok(read) => stream
+                .write_all(&buffer[..read])
+                .map_err(|e| e.to_string())?,
             Err(error) => return Err(format!("proxy read: {error}")),
         }
     }
@@ -376,7 +391,9 @@ fn respond(
         "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\ncache-control: no-store\r\nconnection: close\r\n\r\n",
         body.len()
     );
-    stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
+    stream
+        .write_all(head.as_bytes())
+        .map_err(|e| e.to_string())?;
     stream.write_all(body).map_err(|e| e.to_string())
 }
 
