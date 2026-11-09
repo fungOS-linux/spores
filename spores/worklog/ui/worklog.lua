@@ -17,7 +17,11 @@ local W, H = 1086, 1569
 local Z = 0
 
 local function use_viewport()
+  -- The host says how big the surface is; the view must not assume. `inputs` is
+  -- what a widget module declares, `viewport` is what a host hands a document
+  -- pane; the built-in default is only for a host that says neither.
   local vp = (_G.module and _G.module.viewport)
+    or (_G.module and _G.module.inputs)
     or (_G.module and _G.module.theme and _G.module.theme.viewport)
   if vp and vp.width and vp.height and vp.width > 0 and vp.height > 0 then
     W, H = vp.width, vp.height
@@ -114,6 +118,15 @@ local function find(laid, id)
   end
 end
 
+-- A node laid out past the surface cannot be hit: its normalized coordinates
+-- fall outside the frame and the host is right to reject them. The fake row
+-- layout used to keep everything inside by accident; real Taffy does not, which
+-- is the point of running it.
+local function on_surface(rect)
+  return rect.y >= -0.5 and rect.y + rect.height <= H + 0.5
+    and rect.x >= -0.5 and rect.x + rect.width <= W + 0.5
+end
+
 local function title(snapshot) return snapshot.title or "WORKLOG" end
 
 local function selected_event(snapshot)
@@ -129,12 +142,18 @@ local function kind_word(kind)
   return string.upper(tostring(kind or "?"))
 end
 
+-- One type scale and one spacing scale for the whole view. Four sizes and three
+-- gaps, named once: every number below is one of these, so changing the rhythm
+-- is one edit rather than a hunt through magic constants.
+local TYPE = { micro = 9, caption = 10, body = 12, title = 16 }
+local GAP = { xs = 4, sm = 8, md = 16 }
+
 -- Rows have a fixed height, so the count a pane can hold is arithmetic, not a
 -- constant. Drawing every event in a 40-event snapshot put a third of them past
 -- the bottom edge of the surface (2,309 px of ink on a 1,569 px surface): they
 -- were painted, invisible, and counted in "1–40 of 40".
-local ROW_H = 76
-local CHROME = 132
+local ROW_H = 72
+local CHROME = 120
 
 local function visible_count(snapshot)
   local total = #(snapshot.events or {})
@@ -147,15 +166,15 @@ end
 
 local function event_row(event, index, show_source)
   local head = {
-    label("event-" .. index .. "-kind", kind_word(event.kind), 9, { width = 82 }),
+    label("event-" .. index .. "-kind", kind_word(event.kind), TYPE.micro, { width = 88 }),
   }
   -- One source means the column is the same word on every row: it costs a
   -- column and tells the reader nothing.
   if show_source then
-    head[#head + 1] = label("event-" .. index .. "-source", event.source or "", 9, { width = 64 })
+    head[#head + 1] = label("event-" .. index .. "-source", event.source or "", TYPE.micro, { width = 64 })
   end
-  head[#head + 1] = label("event-" .. index .. "-actor", event.actor or "", 9, { flex_grow = 1 })
-  head[#head + 1] = label("event-" .. index .. "-age", event.age or "", 9, { width = 40 })
+  head[#head + 1] = label("event-" .. index .. "-actor", event.actor or "", TYPE.micro, { flex_grow = 1 })
+  head[#head + 1] = label("event-" .. index .. "-age", event.age or "", TYPE.micro, { width = 40 })
 
   return {
     id = "event-" .. index, kind = "container",
@@ -164,8 +183,8 @@ local function event_row(event, index, show_source)
       { id = "event-" .. index .. "-head", kind = "container", layout = { direction = "row", height = 13 }, children = head },
       -- Two wrapped lines instead of one clipped one: Marbles' detail is often
       -- the whole point of the row, and `…` at 76 characters threw it away.
-      label("event-" .. index .. "-summary", clip(event.summary, 160), 12, { height = 32, wrap = true }),
-      label("event-" .. index .. "-subject", clip(event.subject, 56), 9, { height = 11 }),
+      label("event-" .. index .. "-summary", clip(event.summary, 160), TYPE.body, { height = 30, wrap = true }),
+      label("event-" .. index .. "-subject", clip(event.subject, 56), TYPE.micro, { height = 12 }),
     },
   }
 end
@@ -179,13 +198,13 @@ local function list(snapshot, shown, show_source)
     {
       id = "worklog-head", kind = "container", layout = { direction = "row", height = 20 },
       children = {
-        label("worklog-range", title(snapshot) .. "  ·  " .. range, 10, { flex_grow = 1 }),
-        label("worklog-sort", snapshot.sort or "Newest first", 10, { width = 92 }),
+        label("worklog-range", title(snapshot) .. "  ·  " .. range, TYPE.caption, { flex_grow = 1 }),
+        label("worklog-sort", snapshot.sort or "Newest first", TYPE.caption, { width = 92 }),
       },
     },
   }
   if #events == 0 then
-    children[#children + 1] = label("worklog-empty", "Nothing has arrived yet.", 12, { height = 24 })
+    children[#children + 1] = label("worklog-empty", "Nothing has arrived yet.", TYPE.body, { height = 24 })
   end
   for index = 1, shown do
     children[#children + 1] = event_row(events[index], index, show_source)
@@ -200,22 +219,22 @@ local function detail(snapshot)
       label("worklog-detail-empty", "Select an event", 12, {}) } }
   end
   local children = {
-    label("worklog-detail-label", "EVENT", 9, { height = 14 }),
-    label("worklog-detail-summary", event.summary or "", 15, { height = 40, wrap = true }),
-    label("worklog-detail-when", (event.at_text or "") .. "  ·  " .. (event.age or ""), 9, { height = 14 }),
-    label("worklog-detail-who", (event.actor or "") .. "  ·  " .. (event.source or ""), 9, { height = 14 }),
-    label("worklog-detail-kind", kind_word(event.kind), 9, { height = 14 }),
-    label("worklog-detail-open-label", "OPEN", 9, { height = 16 }),
+    label("worklog-detail-label", "EVENT", TYPE.micro, { height = 14 }),
+    label("worklog-detail-summary", event.summary or "", TYPE.title, { height = 44, wrap = true }),
+    label("worklog-detail-when", (event.at_text or "") .. "  ·  " .. (event.age or ""), TYPE.micro, { height = 14 }),
+    label("worklog-detail-who", (event.actor or "") .. "  ·  " .. (event.source or ""), TYPE.micro, { height = 14 }),
+    label("worklog-detail-kind", kind_word(event.kind), TYPE.micro, { height = 14 }),
+    label("worklog-detail-open-label", "OPEN", TYPE.micro, { height = 16 }),
   }
   local links = event.links or {}
   if #links == 0 then
-    children[#children + 1] = label("worklog-detail-nolinks", "no locators", 9, { height = 14 })
+    children[#children + 1] = label("worklog-detail-nolinks", "no locators", TYPE.micro, { height = 14 })
   end
   for index, link in ipairs(links) do
     children[#children + 1] = label("worklog-detail-link-" .. index,
-      clip(link.locator, 44), 9, { height = 16 })
+      clip(link.locator, 44), TYPE.micro, { height = 16 })
   end
-  return { id = "worklog-detail-page", kind = "container", layout = { flex_grow = 1, direction = "column", gap = 6 }, children = children }
+  return { id = "worklog-detail-page", kind = "container", layout = { flex_grow = 1, direction = "column", gap = GAP.sm }, children = children }
 end
 
 local function sources(snapshot)
@@ -233,10 +252,10 @@ local function tree(snapshot)
   local show_source = #(snapshot.sources or {}) > 1
   local root = {
     id = "worklog-root", kind = "container",
-    layout = { width = W, height = H, direction = "column", gap = 8, padding = { top = 12, right = 22, bottom = 18, left = 22 } },
+    layout = { width = W, height = H, direction = "column", gap = GAP.sm, padding = { top = GAP.md, right = GAP.md, bottom = GAP.md, left = GAP.md } },
     children = {
       {
-        id = "worklog-toolbar", kind = "container", layout = { direction = "row", height = 22 },
+        id = "worklog-toolbar", kind = "container", layout = { direction = "row", height = 24 },
         children = {
           label("worklog-title", title(snapshot), 12, { width = 120 }),
           label("worklog-sources", sources(snapshot), 10, { flex_grow = 1 }),
@@ -249,8 +268,8 @@ local function tree(snapshot)
     root.children[#root.children + 1] = {
       id = "worklog-main", kind = "container", layout = { flex_grow = 1, direction = "row", gap = 16 },
       children = {
-        { id = "worklog-list-pane", kind = "container", layout = { flex_grow = 1, flex_shrink = 1, direction = "column", padding = { top = 8, right = 10, bottom = 8, left = 10 } }, children = { list(snapshot, visible_count(snapshot), show_source) } },
-        { id = "worklog-detail-pane", kind = "container", layout = { width = 300, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = 10, right = 14, bottom = 10, left = 14 } }, children = { detail(snapshot) } },
+        { id = "worklog-list-pane", kind = "container", layout = { flex_grow = 1, flex_shrink = 1, direction = "column", padding = { top = GAP.sm, right = GAP.sm, bottom = GAP.sm, left = GAP.sm } }, children = { list(snapshot, visible_count(snapshot), show_source) } },
+        { id = "worklog-detail-pane", kind = "container", layout = { width = 300, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = GAP.sm, right = GAP.md, bottom = GAP.sm, left = GAP.md } }, children = { detail(snapshot) } },
       },
     }
   else
@@ -342,7 +361,7 @@ function M.render(snapshot)
 
   for index = 1, shown do
     local row = find(laid, "event-" .. index)
-    if row then
+    if row and on_surface(row.rect) then
       hit {
         id = "event-" .. index, label = "hit",
         x = nx(row.rect.x), y = ny(row.rect.y), width = sw(row.rect.width), height = sh(row.rect.height),
@@ -353,13 +372,15 @@ function M.render(snapshot)
   -- Opening a locator is the host's job: it owns the scheme. The view names the
   -- intent and hands over the locator; it does not resolve, fetch, or launch.
   for _, spec in ipairs(pressed) do
-    press {
-      id = spec.id, label = spec.label,
-      action = "worklog.open_locator",
-      body = { locator = spec.locator, rel = spec.rel },
-      x = nx(spec.rect.x), y = ny(spec.rect.y),
-      width = sw(spec.rect.width), height = sh(spec.rect.height),
-    }
+    if on_surface(spec.rect) then
+      press {
+        id = spec.id, label = spec.label,
+        action = "worklog.open_locator",
+        body = { locator = spec.locator, rel = spec.rel },
+        x = nx(spec.rect.x), y = ny(spec.rect.y),
+        width = sw(spec.rect.width), height = sh(spec.rect.height),
+      }
+    end
   end
   M.wide = wide
 end
