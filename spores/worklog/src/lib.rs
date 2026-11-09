@@ -560,7 +560,10 @@ pub fn from_confluence(body: &[u8], now: i64) -> Result<Event, String> {
         // The version is part of the identity: three edits of one page are three
         // events, and a redelivery of the second is still the second.
         match version {
-            Some(number) => format!("confluence:{space}/{}:{}:{number}", content.id, delivery.event),
+            Some(number) => format!(
+                "confluence:{space}/{}:{}:{number}",
+                content.id, delivery.event
+            ),
             None => match stamp {
                 Some(ms) => format!("confluence:{space}/{}:{}:{ms}", content.id, delivery.event),
                 None => format!("confluence:{space}/{}:{}", content.id, delivery.event),

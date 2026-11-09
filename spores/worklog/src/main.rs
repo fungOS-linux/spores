@@ -12,8 +12,7 @@ use std::time::Duration;
 
 use worklog::{
     Append, Event, Store, from_confluence, from_github, from_marbles, iso8601_utc, now_ms,
-    snapshot_lua,
-    verify_signature,
+    snapshot_lua, verify_signature,
 };
 
 const USAGE: &str = "\
@@ -322,9 +321,11 @@ fn serve(args: &[String]) -> Result<(), String> {
     if routes.marbles.is_none() && routes.github.is_none() && routes.confluence.is_none() {
         // Refusing to start beats starting a receiver that would accept
         // unsigned payloads as if they were authenticated.
-        return Err("no secret configured: pass --marbles-secret-file, --github-secret-file or \
+        return Err(
+            "no secret configured: pass --marbles-secret-file, --github-secret-file or \
              --confluence-secret-file"
-            .to_string());
+                .to_string(),
+        );
     }
 
     let listener = TcpListener::bind(&bind).map_err(|error| format!("bind {bind}: {error}"))?;
