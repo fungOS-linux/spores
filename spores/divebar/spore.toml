@@ -1,0 +1,55 @@
+# Divebar: the system bar.
+#
+# Divebar is a Lua-only Spore: `ui/divebar.lua` is the program. There is no wasm
+# module, because there is nothing here for one to do -- a bar is a projection of
+# state the host already holds (workspaces, focus, clock, battery) and it asks for
+# no capability of its own. `[chrome]` says which slice of the shell it draws;
+# the region's Lua is `[ui] entry`, declared once.
+#
+schema = 1
+
+[spore]
+id = "dev.fungos.divebar"
+name = "divebar"
+version = "0.1.0"
+license = "MIT"
+summary = "The system bar: workspaces, focus, and the ambient facts"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+# No guest triple: Soil runs the Lua directly. A wasm module would name one here.
+target = "soil"
+abi = { canvas = "1.0.0" }
+
+# What the composed artifact was built against. Exact, not a range: the bytes
+# cannot float, so a range would be a promise nothing keeps.
+[deps]
+"fungos.ui" = "0.1.0"
+
+[ui]
+entry = "ui/divebar.lua"
+jit = true
+hot_reload = true
+
+[chrome]
+regions = ["top-bar"]
+
+# The region's Lua is composed, not authored: `require` is a build-time import
+# and a compositor has no such global, so the shipped artifact inlines it. Both
+# are listed in spore.lock, so this file and dist/top-bar.lua cannot drift.
+[chrome.sources]
+top-bar = "dist/top-bar.lua"
+
+[launch]
+default = "canvas"
+surfaces = ["canvas", "native"]
+
+# No grants: the view is a pure projection of a host-built snapshot, so it has no
+# guest ABI to widen. Workspaces and focus come from the host's shell state, the
+# clock from soil:time, the battery from soil:device -- all resolved before the
+# snapshot reaches this view.
+
+[denied]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem"]
