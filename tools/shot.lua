@@ -14,6 +14,11 @@ assert(view_path and snapshot_path and theme_path and out_path,
 
 local theme = dofile(theme_path)
 local inks = theme.inks or {}
+-- The theme declares the scale the preview simulates, so a preview of the wall
+-- is drawn at the wall's sizes. `canvas.measure_text` is deliberately absent
+-- below, which leaves the library's own estimate in charge — the same one Canvas
+-- uses, so the lines wrap where the wall wraps them.
+local TYPE = theme.type or { micro = 10, small = 13, body = 16, large = 20 }
 
 local function hex(value)
   local r, g, b = tostring(value or ""):match("^#(%x%x)(%x%x)(%x%x)$")
@@ -31,16 +36,14 @@ _G.canvas = {
   text = function(s)
     prims[#prims + 1] = { type = "text", id = s.id, ink = s.ink, text = s.text,
       x = s.translation[1], y = s.translation[2],
-      px = (s.scale[1] or 1) * (theme.body or 16) * 1.25 }
-  end,
-  measure_text = function(text, style)
-    return { width = #tostring(text or "") * ((style and style.size) or 10) * 0.55 }
+      px = (s.scale[1] or 1) * (TYPE.body or 16) * 1.25 }
   end,
 }
 _G.widget = { hit = function() end }
 _G.module = {
   viewport = { width = width, height = height },
-  theme = { body = theme.body or 16, radius = theme.radius or 10, small = 13, micro = 10 },
+  theme = { micro = TYPE.micro, small = TYPE.small, body = TYPE.body, large = TYPE.large,
+    radius = theme.radius or 10 },
 }
 
 -- The SDK is a build-time import in a package; here it is a checkout.
