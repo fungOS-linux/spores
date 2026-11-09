@@ -53,6 +53,7 @@ spores/search              fuzzy search, ranking, and action dispatch
 spores/markdown            Markdown reader/editor
 spores/unibus              read-only inbox (dev.fungos.inbox)
 spores/worklog             cross-tool timeline (dev.fungos.worklog)
+spores/sfx                 event-driven soundboard: unibus events to a room
 spores/terminal            terminal Spore
 spores/terminal-core       terminal semantics shared by the tmux and host front ends
 spores/terminal-host       native terminal host
@@ -80,6 +81,10 @@ spores/worklog      the worklog Spore (id `dev.fungos.worklog`) + receiver
                     src/   fungos.worklog/event@1: normalize, order, store
                     ui/    the timeline view Canvas renders
                     (composed by tend, like every other Lua view)
+spores/sfx          the event-driven soundboard (id `dev.fungos.sfx`)
+                    src/   mapping, synth, decode, PCM -> soil:audio
+                    ui/    the pad board Canvas renders
+                    ui/API.md  snapshot and action contract
 docs/               host/spore contract, records/sync, AI inbox spec
 ```
 

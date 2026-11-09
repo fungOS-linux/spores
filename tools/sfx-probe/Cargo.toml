@@ -1,0 +1,19 @@
+[package]
+name = "sfx-probe"
+description = "Dev-only wasi:audio probe for the SFX built-in pads"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The probe is not the Spore: it does not want the guest glue or its imports.
+spore-sfx = { path = "../../spores/sfx", default-features = false }
+wit-bindgen = "0.41"
+
+[workspace]
+
+[lints.rust]
+unsafe_code = "allow"

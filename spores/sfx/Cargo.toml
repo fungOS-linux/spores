@@ -1,0 +1,45 @@
+[package]
+name = "spore-sfx"
+description = "Event-driven soundboard: unibus events to PCM, mapped in appdata"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# The component guest is the shipped `.spore` module. `probe` builds a second,
+# tiny `wasi:audio`-only component so the audio path can be tested without a
+# Canvas/appdata/vfs runner.
+default = ["guest"]
+guest = []
+# The `sfx` command is the same Spore with a WASI CLI shell. It imports the
+# same three capabilities; it is installed under the Mush command root.
+cli = []
+
+[[bin]]
+name = "sfx"
+path = "src/bin/sfx.rs"
+required-features = ["cli"]
+
+[[example]]
+name = "render_demo"
+path = "examples/render_demo.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The guest owns decoding: `wasi:audio` is a PCM sink, not a player. MP3 is
+# MPL-2.0; the Spore itself stays MIT, and the decoder is unmodified.
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "wav", "pcm"] }
+wit-bindgen = "0.41"
+
+[workspace]
+
+[lints.rust]
+# wit-bindgen emits unsafe shims and `export_name`; isolate that to the generated
+# guest glue. The Spore's own code on the other side of the ABI is safe Rust.
+unsafe_code = "allow"

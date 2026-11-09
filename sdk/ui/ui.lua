@@ -141,6 +141,18 @@ local function node(kind, props)
   if props.pad then props.pad = space(props.pad, kind .. ".pad") end
   if props.h and type(props.h) == "number" then space(props.h, kind .. ".h") end
   if props.radius then props.radius = radius(props.radius, kind .. ".radius") end
+  -- `ui.action` is the ergonomic form: one value carries the action name and
+  -- its payload. Canvas's host-owned controls take those as two fields, so
+  -- unwrap the intent here rather than making every view remember the split.
+  if type(props.action) == "table" then
+    local intent = props.action
+    if type(intent.action) ~= "string" or intent.action == "" then
+      fail(kind .. ".action needs a non-empty action name", 2)
+    end
+    props.action = intent.action
+    if props.body == nil then props.body = intent.payload or {} end
+  end
+  if props.action ~= nil and props.body == nil then props.body = {} end
   return props
 end
 
@@ -148,6 +160,15 @@ function ui.column(props) return node("column", props or {}) end
 function ui.row(props) return node("row", props or {}) end
 function ui.card(props) return node("card", props or {}) end
 function ui.stack(props) return node("stack", props or {}) end
+
+-- A pressable card: a label, a detail line, and an optional corner meta value.
+-- Unlike `card`, the *whole* tile registers a host-owned hit region. A pad that
+-- only reacts where its text happens to be drawn is not a pad.
+function ui.tile(label, props)
+  props = props or {}
+  props.label = label
+  return node("tile", props)
+end
 
 -- A ring of slices.
 --
@@ -646,6 +667,43 @@ function ui.chart_window(points, count)
     out[#out + 1] = points[index]
   end
   return out
+end
+
+local function lay_tile(n, S, width)
+  local theme = S.theme
+  local height = hy(S, n.h or 88)
+  local pad = wx(S, space(n.pad or "sm", "tile.pad"))
+  local selected = n.selected == true
+  local available = n.enabled ~= false
+  local label = tostring(n.label or "")
+  local detail = n.detail and tostring(n.detail) or nil
+  local meta = n.meta and tostring(n.meta) or nil
+
+  local background = n.ink or (selected and "primary" or "surface")
+  local label_ink = "background"
+  if not selected then label_ink = available and "text" or "muted" end
+  local quiet_ink = selected and "background" or "muted"
+
+  local prims = {
+    rect_prim(background, selected and 0.92 or 0.88, radius(n.radius or "md", "tile.radius"),
+      -wx(S, 4), 0, width + wx(S, 8), height),
+    text_prim(label, theme.body, S, label_ink, pad, -pad),
+  }
+  if detail then
+    prims[#prims + 1] = text_prim(detail, theme.micro, S, quiet_ink,
+      pad, -pad - hy(S, theme.body * 1.3))
+  end
+  if meta then
+    local meta_w = estimate_width(meta, theme.micro, S)
+    prims[#prims + 1] = text_prim(meta, theme.micro, S, quiet_ink,
+      width - pad - meta_w, -pad)
+  end
+  hit_region(prims, {
+    id = control_id(n), action = n.action, body = n.body, label = label,
+    x = -wx(S, 4), y = 0, w = width + wx(S, 8), h = height,
+    enabled = available,
+  })
+  return { h = height, p = prims }
 end
 
 local function lay_stat(n, S, width)
@@ -1185,6 +1243,9 @@ lay_node = function(n, S, width)
 
   elseif kind == "stat" then
     return lay_stat(n, S, width)
+
+  elseif kind == "tile" then
+    return lay_tile(n, S, width)
 
   elseif kind == "gauge" then
     return lay_gauge(n, S, width)

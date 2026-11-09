@@ -1,6 +1,12 @@
 /target
 **/*.rs.bk
 
+# Packaged Spore artifacts and per-Spore build trees
+dist/
+spores/sfx/target/
+._*
+.DS_Store
+
 # Generated live inbox snapshot (metadata from AgentMail)
 spores/unibus/examples/inbox_live.lua
 spores/unibus/tools/__pycache__/

@@ -1,0 +1,96 @@
+#!/bin/sh
+# One entry point for the repeated Spore build/test/package/audio loop.
+#
+#   bin/tend-spore test sfx
+#   bin/tend-spore ui sfx
+#   bin/tend-spore build sfx
+#   bin/tend-spore pack sfx
+#   bin/tend-spore check sfx
+#   bin/tend-spore probe sfx mac|loopback|home-pi
+#
+# Set SOIL_SPORE, WASI_AUDIO, CARGO_TARGET_DIR, or CARGO_HOME when the defaults
+# do not match the machine.
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+command=${1:-}
+spore=${2:-sfx}
+dir="$root/spores/$spore"
+target=${CARGO_TARGET_DIR:-/tmp/tend-spore-target}
+export CARGO_TARGET_DIR="$target"
+export RUSTC_WRAPPER="${RUSTC_WRAPPER-}"
+
+if [ ! -d "$dir" ]; then
+  echo "tend-spore: no Spore at $dir" >&2
+  exit 2
+fi
+
+cargo_run() {
+  if [ -n "${CARGO_HOME-}" ]; then
+    CARGO_HOME="$CARGO_HOME" cargo "$@"
+  else
+    cargo "$@"
+  fi
+}
+
+find_soil_spore() {
+  if [ -n "${SOIL_SPORE-}" ]; then printf '%s\n' "$SOIL_SPORE"; return; fi
+  if command -v soil-spore >/dev/null 2>&1; then command -v soil-spore; return; fi
+  for candidate in "$root/../soil/target/debug/soil-spore" /tmp/sfx-target/debug/soil-spore; do
+    if [ -x "$candidate" ]; then printf '%s\n' "$candidate"; return; fi
+  done
+  echo "tend-spore: soil-spore not found; set SOIL_SPORE" >&2
+  exit 2
+}
+
+run_test() {
+  ( cd "$dir" && cargo_run fmt --all --check && cargo_run test --lib && cargo_run clippy --all-targets -- -D warnings )
+  if command -v lua >/dev/null 2>&1; then
+    ( cd "$dir" && lua tests/ui_fixture.lua )
+    if [ -f "$dir/tests/pads_fixture.lua" ]; then ( cd "$dir" && lua tests/pads_fixture.lua ); fi
+  fi
+}
+
+run_ui() {
+  ( cd "$dir" && lua tests/ui_fixture.lua )
+  if [ -f "$dir/tests/pads_fixture.lua" ]; then ( cd "$dir" && lua tests/pads_fixture.lua ); fi
+  out=${3:-/tmp/spore-$spore-ui}
+  ( cd "$dir" && lua tools/compose_"$spore".lua "$out" )
+}
+
+run_build() {
+  ( cd "$dir" && cargo_run build --release --target wasm32-wasip2 )
+  ( cd "$dir" && cp "$target/wasm32-wasip2/release/spore_${spore}.wasm" module.wasm )
+  ( cd "$dir" && wasm-tools validate module.wasm && wasm-tools component wit module.wasm | sed -n '1,12p' )
+}
+
+run_pack() {
+  tool=$(find_soil_spore)
+  ( cd "$dir" && "$tool" lock . )
+  version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$dir/spore.toml" | head -1)
+  out="$root/dist/$spore-$version.spore"
+  ( cd "$root" && "$tool" pack "spores/$spore" -o "$out" && "$tool" verify "$out" )
+}
+
+run_probe() {
+  mode=${3:-mac}
+  audio=${WASI_AUDIO:-$target/debug/wasi-audio}
+  wasm="$root/dist/sfx-probe.wasm"
+  if [ ! -x "$audio" ]; then echo "tend-spore: missing $audio; set WASI_AUDIO" >&2; exit 2; fi
+  case "$mode" in
+    mac) "$audio" "$wasm" ;;
+    loopback) "$audio" "$wasm" --isochrone-destination 127.0.0.1:50040 --isochrone-bind 127.0.0.1:0 --isochrone-ssrc 1399813484 ;;
+    home-pi) "$audio" "$wasm" --isochrone-destination 192.168.2.74:50040 --isochrone-bind 0.0.0.0:0 --isochrone-ssrc 1399813484 ;;
+    *) echo "tend-spore: probe mode must be mac, loopback, or home-pi" >&2; exit 2 ;;
+  esac
+}
+
+case "$command" in
+  test) run_test ;;
+  ui) run_ui "$@" ;;
+  build) run_build ;;
+  pack) run_pack ;;
+  check) run_test; run_build; run_pack ;;
+  probe) run_probe "$@" ;;
+  *) echo "usage: tend-spore test|ui|build|pack|check|probe [spore] [mode|out]" >&2; exit 2 ;;
+esac

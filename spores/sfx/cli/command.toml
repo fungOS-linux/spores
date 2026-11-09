@@ -1,0 +1,13 @@
+schema = 1
+
+[command]
+name = "sfx"
+version = "0.1.0"
+summary = "Event-driven soundboard over the room-aware audio path"
+module = "module.wasm"
+
+[limits]
+timeout_ms = 120000
+max_stdout_bytes = 1048576
+max_stderr_bytes = 1048576
+max_memory_bytes = 268435456

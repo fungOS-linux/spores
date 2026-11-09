@@ -1,0 +1,9 @@
+package fungos:sfx-probe@0.1.0;
+
+// Dev-only: plays the built-in pads through the existing `wasi-audio` harness.
+// It is not the Spore (no appdata, VFS, Canvas, or rooms) and is not packaged.
+world probe {
+  import wasi:audio/playback@0.1.0;
+
+  export run: func() -> u32;
+}
