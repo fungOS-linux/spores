@@ -249,6 +249,23 @@ function ui.chart(series, props)
   return node("chart", props)
 end
 
+-- A graph of nodes and edges. Positions are data: every node carries `x`/`y` in
+-- 0..1, and the layout engine (site rings, force, Barnes-Hut) stays outside the
+-- library. A node without a position falls back to a ring, which is a place to
+-- start rather than a second layout engine — the same rule `fungos.graph`
+-- follows, so one snapshot draws the same shape on every host.
+--
+-- `resource` places a host-owned GPU surface over the plot instead of marks: the
+-- native GraphGPU producer draws the same nodes and edges, and the view never
+-- sees a pixel. Without it the node draws rotated rects for edges and marks for
+-- nodes, which is the portable fallback every host can render.
+function ui.graph(nodes, edges, props)
+  props = props or {}
+  props.nodes = nodes or props.nodes or {}
+  props.edges = edges or props.edges or {}
+  return node("graph", props)
+end
+
 -- A host-owned surface placed in the Lua layout. `resource` names a manifest
 -- grant; the host resolves it to a scene, texture, or device surface. The view
 -- never sees a texture handle or pixels, and the library never draws over it.
@@ -323,6 +340,26 @@ local function estimate_width(value, size, S)
   return ulen(value) * size * 0.62 * S.ux
 end
 
+-- Cut a label to the width its column gave it. A cell that draws its full text
+-- into the next column is not a cell; the whole value stays in the row and in
+-- the action body, so only the pixels are lost.
+local function fit_text(value, size, S, width)
+  local text = tostring(value or "")
+  if width <= 0 or estimate_width(text, size, S) <= width then return text end
+  for count = ulen(text) - 1, 1, -1 do
+    local head = text
+    if utf8 and utf8.offset then
+      local offset = utf8.offset(text, count)
+      if offset then head = string.sub(text, 1, offset - 1) end
+    else
+      head = string.sub(text, 1, count)
+    end
+    local candidate = head .. "…"
+    if estimate_width(candidate, size, S) <= width then return candidate end
+  end
+  return "…"
+end
+
 -- A wrap budget comes from the column in *pixels*, not from a global constant:
 -- the same view on a wider surface fits more characters.
 local function budget(S, size, width)
@@ -337,11 +374,17 @@ local function text_prim(value, size, S, color, x, y)
   -- is 1.25 at the z a flat label sits at. Ask for 1/1.25 of the target so the
   -- rendered glyph is the size the layout reserved.
   local scale = math.sqrt(size / (S.theme.body * S.depth))
-  return { text = value, ink = color, translation = { x, y, 0 }, scale = { scale, scale, 1 } }
+  return { text = value, ink = INK_ALIAS[color] or color,
+    translation = { x, y, 0 }, scale = { scale, scale, 1 } }
 end
 
 local function rect_prim(color, opacity, r, x, y, w, h)
-  return { ink = color, opacity = opacity, radius = r or 0, translation = { x, y, -0.5 }, scale = { w, h, 1 } }
+  -- The alias table exists so a component can name `surface_sunken`; normalizing
+  -- here is what makes that true for the primitives the library emits itself
+  -- (`card`, `table` zebra rows, dividers) and not only for callers who happen
+  -- to go through `ink()`.
+  return { ink = INK_ALIAS[color] or color, opacity = opacity, radius = r or 0,
+    translation = { x, y, -0.5 }, scale = { w, h, 1 } }
 end
 
 local function append(out, prims)
@@ -392,9 +435,9 @@ local function intrinsic(n, S)
     -- The same formula `lay` uses, not a second opinion: two width estimates for
     -- one control is how a row ends up overlapping its neighbour.
     local size = n.small and theme.small or theme.body
-    -- Theme sizes are scene units, so padding is `size * S.ux`, not `wx(size)`:
-    -- the second form converts a unit value as if it were pixels and collapsed
-    -- to zero, which is how a row of buttons ended up stacked on one spot.
+    -- `size * S.ux` is `wx(size)`: theme sizes are pixels, and a scene length
+    -- is a fraction, so the two forms are the same number. Kept spelled out
+    -- beside the per-character advance so the whole estimate reads in one unit.
     return ulen(n.label) * size * 0.95 * S.ux + size * 0.52 * S.ux * 2
   elseif n.kind == "text" then
     return estimate_width(n.value, n.px or size_for(theme, n.style), S)
@@ -441,11 +484,12 @@ local function lay_text(n, S, width)
   local name = style(n.style)
   local size = n.px or S.theme[STYLE[name]]
   local lines = text_lines(n, S, width)
-  -- Theme sizes are scene units (a fraction of the 8-unit square), so the
-  -- advance is too: `hy` converts pixels, and feeding it a unit value made a
-  -- body line advance 8 px while its glyphs were 14 px, so stacked text
-  -- overlapped by a third of a line.
-  local advance = size * ui.leading
+  -- Theme sizes are logical pixels: Canvas hands `metrics.micro` in pixels and
+  -- every theme file here carries pixels. A scene position is a fraction of the
+  -- 8-unit square, so a pixel length goes through `wx`/`hy` exactly once — and
+  -- this is that once. Advancing by the bare pixel count put the first title 42
+  -- scene units below the top edge instead of 42 pixels.
+  local advance = hy(S, size * ui.leading)
   local color = n.ink or (name == "title" and "primary" or "text")
   local prims = {}
   for index, line in ipairs(lines) do
@@ -812,7 +856,8 @@ local function lay_table(n, S, width)
     cursor = cursor + widths[index] + gap
   end
   for index, column in ipairs(columns) do
-    prims[#prims + 1] = text_prim(tostring(column.label or column.key or ""),
+    prims[#prims + 1] = text_prim(
+      fit_text(tostring(column.label or column.key or ""), theme.micro, S, widths[index]),
       theme.micro, S, "muted", xs[index], y)
   end
   y = y - header
@@ -822,14 +867,15 @@ local function lay_table(n, S, width)
   local available = math.max(0, math.floor((height + y + hy(S, 14)) / hy(S, row_px)))
   for row_index = 1, math.min(#rows, available) do
     local row = rows[row_index]
-    if row_index % 2 == 0 then
+    if n.zebra ~= false and row_index % 2 == 0 then
       prims[#prims + 1] = rect_prim(ink("surface_raised", "table.row.ink"), 0.28, radius("sm", "table.row"),
         pad - wx(S, 4), y, width - pad * 2 + wx(S, 8), hy(S, row_px))
     end
     for index, column in ipairs(columns) do
       local value = row[column.key]
       if column.kind == "status" then
-        local status = tostring(value or "")
+        local status = fit_text(tostring(value or ""), theme.micro, S,
+          math.max(0, widths[index] - wx(S, 12)))
         if status ~= "" then
           prims[#prims + 1] = rect_prim(status_ink(status, column.status_ink), 1,
             radius("pill", "table.status"), xs[index], y + hy(S, 5), wx(S, 6), hy(S, 6))
@@ -837,7 +883,8 @@ local function lay_table(n, S, width)
             status_ink(status, column.status_ink), xs[index] + wx(S, 10), y)
         end
       else
-        local text = tostring(value or "")
+        local text = fit_text(tostring(value or ""), theme.micro, S,
+          math.max(0, widths[index] - wx(S, 8)))
         if text ~= "" then
           local x = xs[index]
           if column.align == "right" then
@@ -1009,6 +1056,188 @@ local function lay_chart(n, S, width)
   return { h = height, p = prims }
 end
 
+-- ---- graph --------------------------------------------------------------
+
+-- Positions are data. A node without one is not an error: a snapshot that only
+-- knows its topology still draws, and a ring is the only layout this library
+-- will invent. Site rings, force and Barnes-Hut belong to the producer, which
+-- knows what the graph means.
+local function graph_positions(nodes)
+  local placed, missing = {}, false
+  for _, item in ipairs(nodes) do
+    if tonumber(item.x) == nil or tonumber(item.y) == nil then missing = true end
+  end
+  local count = math.max(1, #nodes)
+  for index, item in ipairs(nodes) do
+    local x, y = tonumber(item.x), tonumber(item.y)
+    if missing then
+      local angle = -math.pi / 2 + (index - 1) * math.pi * 2 / count
+      x, y = 0.5 + math.cos(angle) * 0.34, 0.5 + math.sin(angle) * 0.34
+    end
+    placed[tostring(item.id)] = { x = x, y = y }
+  end
+  return placed
+end
+
+-- A graph card. Edges are rotated rects, which is a line the host already knows
+-- how to draw on every surface. A node is a dot (with an optional halo), so a
+-- producer that wants one GPU primitive per colour has the ink it needs.
+local function lay_graph(n, S, width)
+  local theme = S.theme
+  local nodes, edges = n.nodes or {}, n.edges or {}
+  local height = hy(S, n.h or 420)
+  local pad = wx(S, space(n.pad or "md", "graph.pad"))
+  local prims = {
+    rect_prim(n.ink or "surface", 0.9, radius(n.radius or "md", "graph.radius"),
+      -wx(S, 4), 0, width + wx(S, 8), height),
+  }
+  local y = -hy(S, 12)
+  local header_y = y
+  if n.title and tostring(n.title) ~= "" then
+    prims[#prims + 1] = text_prim(tostring(n.title), theme.small, S, "text", pad, y)
+    y = y - hy(S, theme.small * 1.5)
+  end
+  if n.subtitle and tostring(n.subtitle) ~= "" then
+    prims[#prims + 1] = text_prim(tostring(n.subtitle), theme.micro, S, "muted", pad, y)
+    y = y - hy(S, theme.micro * 1.5)
+  end
+  if n.status and tostring(n.status) ~= "" then
+    local status = tostring(n.status)
+    prims[#prims + 1] = text_prim(status, theme.micro, S, status_ink(n.status, n.status_ink),
+      width - pad - estimate_width(status, theme.micro, S), header_y)
+  end
+  local left, right = pad, width - pad
+  local legend = n.legend or {}
+  local bottom = -height + hy(S, (#legend > 0) and 44 or 28)
+  local top = y - hy(S, 6)
+  local plot_w = math.max(wx(S, 16), right - left)
+  local plot_h = math.max(hy(S, 16), top - bottom)
+
+  if n.resource and tostring(n.resource) ~= "" then
+    -- The producer owns every pixel after this point, including the labels.
+    prims[#prims + 1] = {
+      host = { id = n.id or ("graph-" .. tostring(n.resource)), resource = n.resource },
+      translation = { left, top, 0 }, scale = { plot_w, plot_h, 1 },
+    }
+    return { h = height, p = prims }
+  end
+
+  prims[#prims + 1] = rect_prim("surface_sunken", 0.55, radius("sm", "graph.plot"),
+    left, top, plot_w, plot_h)
+  local placed = graph_positions(nodes)
+  local function px(x) return left + x * plot_w end
+  local function py(graph_y) return bottom + graph_y * plot_h end
+  -- Rows first: a layered graph is a table with dots, and the rail is the line
+  -- that makes nine rows read as one shape rather than nine coincidences.
+  for _, item in ipairs(nodes) do
+    local point = placed[tostring(item.id)]
+    if item.rail and point then
+      prims[#prims + 1] = rect_prim("muted", 0.07, 0, left, py(point.y), plot_w, hy(S, 1))
+    end
+  end
+
+  local edge_width = hy(S, n.edge_width or 1.4)
+  for _, edge in ipairs(edges) do
+    local a, b = placed[tostring(edge.source)], placed[tostring(edge.target)]
+    if a and b then
+      local x1, y1, x2, y2 = px(a.x), py(a.y), px(b.x), py(b.y)
+      local dx, dy = x2 - x1, y2 - y1
+      local length = math.sqrt(dx * dx + dy * dy)
+      if length > 0.0001 then
+        local stale = edge.state == "stale"
+        prims[#prims + 1] = {
+          ink = ink(edge.ink or n.edge_ink or "muted", "graph.edge.ink"),
+          opacity = tonumber(edge.opacity) or (stale and 0.08 or n.edge_opacity or 0.24),
+          radius = radius("pill", "graph.edge"),
+          translation = { x1, y1, -0.6 },
+          scale = { length, edge_width, 1 },
+          -- `math.atan2` was folded into `math.atan(y, x)` in Lua 5.3; a
+          -- host on 5.4 has no atan2 at all.
+          rotation = quat_z(math.atan(dy, dx)),
+        }
+      end
+    end
+  end
+
+  local size = tonumber(n.node_size) or 7
+  local halo = tonumber(n.halo_size) or 2.6
+  local sx, sy = wx(S, size), hy(S, size)
+  local target_w, target_h = wx(S, 18), hy(S, 18)
+  local label_size = theme[n.label_size or "micro"] or theme.micro
+  for _, item in ipairs(nodes) do
+    local point = placed[tostring(item.id)]
+    if point then
+      local x, y = px(point.x), py(point.y)
+      local state = tostring(item.state or "live")
+      local color = ink(item.ink or n.node_ink or "primary", "graph.node.ink")
+      local opacity = tonumber(item.opacity) or (state == "stale" and 0.4 or 0.95)
+      -- A halo is one extra node per dot, so it is opt-in: a graph of thirty
+      -- peers pays for the glow on the ones that are live, not on all of them.
+      if item.halo then
+        prims[#prims + 1] = rect_prim(color, opacity * 0.16, radius("pill", "graph.halo"),
+          x - sx * halo * 0.5, y + sy * halo * 0.5, sx * halo, sy * halo)
+      end
+      prims[#prims + 1] = rect_prim(color, opacity, radius("pill", "graph.node"),
+        x - sx * 0.5, y + sy * 0.5, sx, sy)
+      if n.labels ~= false and item.label and tostring(item.label) ~= "" then
+        local label = tostring(item.label)
+        local label_w = estimate_width(label, label_size, S)
+        -- A layered graph puts hosts in a row, so their labels hang below the
+        -- dot; a star graph puts them beside it. The producer knows which
+        -- shape it drew, and one rule for both is how labels land on top of
+        -- their neighbours.
+        local position = item.label_position or (point.x > 0.5 and "left" or "right")
+        local lx, ly
+        if position == "below" then
+          lx, ly = x - label_w * 0.5, y - hy(S, label_size * 1.7)
+        elseif position == "left" then
+          lx, ly = x - sx - label_w, y - hy(S, label_size * 0.45)
+        else
+          lx, ly = x + sx, y - hy(S, label_size * 0.45)
+        end
+        prims[#prims + 1] = text_prim(label, label_size, S,
+          state == "stale" and "muted" or "text",
+          math.max(left, math.min(right - label_w, lx)),
+          math.max(bottom + hy(S, 2), ly))
+      end
+      if n.node_action and widget and widget.button then
+        prims[#prims + 1] = control_prim {
+          id = (n.id or "graph") .. ":" .. tostring(item.id),
+          label = item.label and tostring(item.label) or tostring(item.id),
+          action = n.node_action,
+          body = item.body or { id = item.id, label = item.label, state = item.state },
+          enabled = item.enabled ~= false,
+          translation = { x - target_w * 0.5, y + target_h * 0.5, 0 },
+          scale = { target_w, target_h, 1 },
+        }
+      end
+    end
+  end
+
+  if #nodes == 0 then
+    local text = tostring(n.empty or "no nodes")
+    prims[#prims + 1] = text_prim(text, theme.micro, S, "muted",
+      left + plot_w * 0.5 - estimate_width(text, theme.micro, S) * 0.5,
+      bottom + plot_h * 0.5)
+  end
+
+  local legend_y = -height + hy(S, 18)
+  local lx = pad
+  for _, item in ipairs(legend) do
+    local dot = wx(S, 6)
+    local label = tostring(item.label or "")
+    prims[#prims + 1] = rect_prim(ink(item.ink or "muted", "graph.legend.ink"), 0.9,
+      radius("pill", "graph.legend"), lx, legend_y, dot, hy(S, 6))
+    prims[#prims + 1] = text_prim(label, theme.micro, S, "muted",
+      lx + dot + wx(S, 5), legend_y + hy(S, 1))
+    lx = lx + dot + wx(S, 5) + estimate_width(label, theme.micro, S) + wx(S, 14)
+  end
+  local caption = n.caption or (("%d nodes · %d edges"):format(#nodes, #edges))
+  prims[#prims + 1] = text_prim(caption, theme.micro, S, "muted",
+    right - estimate_width(caption, theme.micro, S), legend_y + hy(S, 1))
+  return { h = height, p = prims }
+end
+
 -- The invariant that would have caught the toolbar bug: a node's primitives must
 -- stay inside the box it claimed. Checked only when `ui.debug` is set, because
 -- the message costs bytes in every module that never trips it.
@@ -1069,7 +1298,7 @@ lay_node = function(n, S, width)
 
   elseif kind == "icon" then
     local size = n.size and theme[n.size] or theme.body
-    return { h = size * ui.leading,
+    return { h = hy(S, size * ui.leading),
              p = { text_prim(n.glyph, size, S, n.ink or "muted", 0, 0) } }
 
   elseif kind == "icon_button" then
@@ -1179,7 +1408,7 @@ lay_node = function(n, S, width)
     } }
 
   elseif kind == "bullets" then
-    local advance = theme.body * ui.leading
+    local advance = hy(S, theme.body * ui.leading)
     local indent = wx(S, 26)
     local prims, height = {}, 0
     for _, item in ipairs(n.items) do
@@ -1192,7 +1421,7 @@ lay_node = function(n, S, width)
     return { h = height, p = prims }
 
   elseif kind == "quote" then
-    local advance = theme.body * ui.leading
+    local advance = hy(S, theme.body * ui.leading)
     local indent = wx(S, 14)
     local lines = wrap(n.value, n.chars or budget(S, theme.body, width - indent))
     local height = #lines * advance
@@ -1213,6 +1442,9 @@ lay_node = function(n, S, width)
 
   elseif kind == "chart" then
     return lay_chart(n, S, width)
+
+  elseif kind == "graph" then
+    return lay_graph(n, S, width)
 
   elseif kind == "row" then
     -- Rows place aligned pairs, or weighted columns when `widths` is given.
@@ -1397,7 +1629,7 @@ local function euler(rotation)
   if math.abs(x) > 1e-6 or math.abs(y) > 1e-6 then
     fail("soil documents carry Z rotation only", 3)
   end
-  return { 0, 0, 2 * math.atan2(z, w) }
+  return { 0, 0, 2 * math.atan(z, w) }
 end
 
 -- The Lua peer of soil_scene::Present. A node is flat: the one-pass layout has

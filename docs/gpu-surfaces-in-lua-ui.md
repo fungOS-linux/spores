@@ -15,6 +15,9 @@ latter without pretending a Lua tree can draw a million points.
   dense source and the 20k-point 3D cloud.
 - `soil-viz` already runs a `LiveSpec` at 60 Hz. `dense-3d` and
   `chartgpu-dashboard` are Lua-authored `fungos.live` specs.
+- `ui.graph` in the Spore library draws a typed graph as rotated rects for the
+  current ABI and, when a host sets `module.inputs.graph_surface`, places a
+  `host_surface` instead. `spores/fleet` is the first view built on it.
 - Canvas's frontier (`canvas-soil-scene`, `pi/soil-scene`) has
   `Present::GpuLease`, `spore_socket::gpu_frame_shm`, and `gpu_lease_layer` for
   displaying a producer's frame.
@@ -79,6 +82,14 @@ Make the Soil vocabulary the scene vocabulary:
   names a host resource and a rect.
 - Keep GPU resources host-local. Lua references a source id; a million points do
   not cross JSON.
+
+The scene schema already carries `polyline`/`points`, and `soil-scene-gpu`
+renders them; what the Lua library does not do yet is emit them. `ui.graph`
+currently draws rotated rects (so every host works) and can place a GPU surface
+by grant, which is the honest first step. Emitting the richer vocabulary is a
+separate change with two halves: make `ui.present` choose a document over the
+legacy primitives, and make the Canvas bridge draw the document instead of
+degrading it to `Group`.
 
 This is the better long-term model: one scene tree, composable charts and
 particles, one hit-test path. It is more work because Canvas has to render the

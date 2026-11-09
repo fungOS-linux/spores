@@ -30,7 +30,7 @@ local prims = {}
 _G.canvas = {
   rect = function(s)
     prims[#prims + 1] = { type = "rect", id = s.id, ink = s.ink,
-      translation = s.translation, scale = s.scale,
+      translation = s.translation, scale = s.scale, rotation = s.rotation,
       opacity = s.opacity or 1, radius = s.radius or 0 }
   end,
   text = function(s)
@@ -42,14 +42,34 @@ _G.canvas = {
 _G.widget = { hit = function() end }
 _G.module = {
   viewport = { width = width, height = height },
-  theme = { micro = TYPE.micro, small = TYPE.small, body = TYPE.body, large = TYPE.large,
+  inputs = { width = width, height = height },
+  -- The complete type scale, not the four sizes the worklog happens to use: a
+  -- dashboard stat draws at `title`, and a theme without it fails at the first
+  -- number instead of rendering one size too small.
+  theme = { micro = TYPE.micro, small = TYPE.small, body = TYPE.body,
+    large = TYPE.large, title = TYPE.title or TYPE.large,
+    display = TYPE.display or TYPE.title or TYPE.large,
     radius = theme.radius or 10 },
 }
 
--- The SDK is a build-time import in a package; here it is a checkout.
+-- The SDK is a build-time import in a package; here it is a checkout. Two
+-- layouts are in flight at once: `fungos-sdk/lua/fungos/ui.lua` is the surface
+-- library the worklog composes, and `spores/sdk/ui/ui.lua` is the tree library
+-- the gallery and the fleet view compose. Name one, and take whichever the
+-- checkout actually contains rather than making every caller learn the split.
 local sdk = os.getenv("FUNGOS_SDK") or (os.getenv("HOME") .. "/src/fungos-sdk")
+local function sdk_ui()
+  for _, candidate in ipairs({ sdk .. "/lua/fungos/ui.lua", sdk .. "/sdk/ui/ui.lua" }) do
+    local handle = io.open(candidate, "rb")
+    if handle then
+      handle:close()
+      return candidate
+    end
+  end
+  error("shot: no fungos.ui under " .. sdk .. " (pass FUNGOS_SDK)")
+end
 package.preload["fungos.ui"] = function()
-  return dofile(sdk .. "/lua/fungos/ui.lua")
+  return dofile(sdk_ui())
 end
 
 local view = assert(loadfile(view_path))()
@@ -79,13 +99,18 @@ end
 -- palette, `px` from the type scale — and adds nothing else, so a page that reads
 -- this reads the same document Canvas does.
 local function node_json(node)
+  -- Canvas takes a Z quaternion; the document takes Euler XYZ. Only Z is drawn,
+  -- so the conversion is one two-argument atan and the x/y terms stay zero.
+  local rotation = node.rotation or { 0, 0, 0, 1 }
+  local angle = 2 * math.atan(rotation[3] or 0, rotation[4] or 1)
   local fields = {
     quote("id") .. ":" .. quote(node.id),
     quote("type") .. ":" .. quote(node.type),
     quote("ink") .. ":" .. quote(node.ink),
-    string.format('%s:{"translation":[%.5f,%.5f,%.5f],"scale":[%.5f,%.5f,%.5f]}',
+    string.format('%s:{"translation":[%.5f,%.5f,%.5f],"rotation":[0,0,%.5f],"scale":[%.5f,%.5f,%.5f]}',
       quote("transform"),
       node.translation[1], node.translation[2], node.translation[3] or 0,
+      angle,
       node.scale[1], node.scale[2], node.scale[3] or 1),
     string.format('%s:%.5f', quote("opacity"), node.opacity or 1),
   }

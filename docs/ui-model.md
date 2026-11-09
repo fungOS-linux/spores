@@ -42,11 +42,17 @@ that exceed the chart's mark count, and `ui.chart_window` keeps a streaming
 window without mutating the snapshot. This is the portable counterpart of the
 native host's resident dense-buffer decimation.
 
+`ui.graph` is the same rule for relationships. Positions are data in 0..1, so a
+producer — site rings, force, Barnes-Hut, a GPU layout — owns the shape and the
+library owns the marks. Edges become rotated rects, one node each, which the
+current rect/text ABI already draws; a `resource` prop places a host surface
+instead, so a native GraphGPU producer can take over without changing the view.
+
 ## What we adopted from the proposal
 
 | Proposal | Here |
 |---|---|
-| Declarative `ui.*` tree | `ui.column`, `ui.row`, `ui.card`, `ui.stack`, `ui.text`, `ui.code`, `ui.diagram`, `ui.bullets`, `ui.quote`, `ui.rule`, `ui.spacer`, `ui.stat`, `ui.gauge`, `ui.table`, `ui.chart`, `ui.host_surface` |
+| Declarative `ui.*` tree | `ui.column`, `ui.row`, `ui.card`, `ui.stack`, `ui.text`, `ui.code`, `ui.diagram`, `ui.bullets`, `ui.quote`, `ui.rule`, `ui.spacer`, `ui.stat`, `ui.gauge`, `ui.table`, `ui.chart`, `ui.graph`, `ui.host_surface` |
 | Named tokens over raw values | `gap = "sm"`, `style = "title"`, `ink = "muted"`; sizes come from `module.theme` |
 | Layout primitives instead of coordinates | column/row/card flow, measured in the library |
 | Incomplete UI must not blank | already true: a rejected reload keeps the last good scene on screen |

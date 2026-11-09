@@ -1,0 +1,51 @@
+# Fleet: the mycelium environment on one surface.
+#
+# This is a Lua-only Spore, like the bar: the host resolves peer facts and hands
+# the view one snapshot, so there is no guest ABI to widen. The host-side half
+# (`fleet-serve` and the projection in `src/`) owns the daemon JSON, the socket
+# and the page; the Spore owns only what the wall looks like.
+schema = 1
+
+[spore]
+id = "dev.fungos.fleet"
+name = "fleet"
+version = "0.1.0"
+license = "MIT"
+summary = "Read-only wall of mycelium peers, sites and observed topology"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+# No guest triple: the view is Lua and Soil runs it directly. A wasm module would
+# have nothing to do that the host does not already do with more authority.
+target = "soil"
+abi = { canvas = "1.0.0" }
+
+[deps]
+"fungos.ui" = "0.5.0"
+
+[ui]
+entry = "ui/fleet.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+canvas_module = "spore-dev-fleet"
+surfaces = ["canvas", "native", "web"]
+
+[grants]
+# The host reads the daemon and hands over a classified snapshot; the view can
+# draw and nothing else. `soil:mycelium.read` is the grant this becomes when a
+# Soil host owns that projection (see README, "Known gaps").
+"soil:canvas" = "present the fleet surface"
+
+[denied]
+"soil:records.write" = ["an observation that can write is not an observation"]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+
+[presentation]
+# A launcher row needs a mark, not an asset.
+badge = "F"
+color = "#6ca8ff"

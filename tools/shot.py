@@ -10,6 +10,7 @@ Anything without a colour is drawn in the fallback ink so a missing theme is
 visible, not invisible.
 """
 import json
+import math
 import os
 import sys
 from PIL import Image, ImageDraw, ImageFont
@@ -67,12 +68,25 @@ def main() -> int:
             left, top = x_of(translation[0]), y_of(translation[1])
             w = extent[0] / 8.0 * width * scale
             h = extent[1] / 8.0 * height * scale
-            # `radius` is a length in logical pixels in the scene ABI — Canvas
-            # feeds it straight to iced's border radius — so it scales like every
-            # other length here. Treating it as a fraction of the rect turned
-            # every panel into a pill.
-            radius = min(prim.get("radius", 0) * scale, min(w, h) / 2)
-            draw.rounded_rectangle([left, top, left + w, top + h], radius=max(0.0, radius), fill=colour + (alpha,))
+            # A rotated rect is anchored at its top-left and turns about it, the
+            # same rule the scene and Canvas use. The page is y-down and the
+            # scene is y-up, so the sign flips.
+            angle = (transform.get("rotation") or [0, 0, 0])[2]
+            if abs(angle) > 1e-6:
+                cos, sin = math.cos(-angle), math.sin(-angle)
+
+                def corner(x, y):
+                    return (left + x * cos - y * sin, top + x * sin + y * cos)
+
+                draw.polygon([corner(0, 0), corner(w, 0), corner(w, h), corner(0, h)],
+                             fill=colour + (alpha,))
+            else:
+                # `radius` is a length in logical pixels in the scene ABI — Canvas
+                # feeds it straight to iced's border radius — so it scales like every
+                # other length here. Treating it as a fraction of the rect turned
+                # every panel into a pill.
+                radius = min(prim.get("radius", 0) * scale, min(w, h) / 2)
+                draw.rounded_rectangle([left, top, left + w, top + h], radius=max(0.0, radius), fill=colour + (alpha,))
         elif prim["type"] == "text":
             draw.text((x_of(translation[0]), y_of(translation[1])), prim.get("text", ""),
                       font=font(prim.get("px", 12)), fill=colour + (alpha,), anchor="la")

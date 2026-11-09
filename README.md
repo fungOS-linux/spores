@@ -50,6 +50,7 @@ spores/spore-browser       installed-Spore browser, launched through soil:spore
 spores/spore-browser-host  wasmtime host for the browser Spore
 spores/dragshift           convert and edit a dropped file from a radial menu
 spores/search              fuzzy search, ranking, and action dispatch
+spores/fleet               mycelium peers, sites and topology on one wall
 spores/markdown            Markdown reader/editor
 spores/unibus              read-only inbox (dev.fungos.inbox)
 spores/worklog             cross-tool timeline (dev.fungos.worklog)
@@ -104,6 +105,10 @@ spores/worklog      the worklog Spore (id `dev.fungos.worklog`) + receiver
                     ui/    the timeline view Canvas renders
                     (composed by tend, like every other Lua view)
 docs/               host/spore contract, records/sync, AI inbox spec
+spores/fleet        the mycelium wall
+                    src/   fleet status + topology -> one snapshot
+                    ui/    the graph-and-tables view Canvas renders
+                    web/   the same scene document, served at fleet.myc
 ```
 
 ## Build and check

@@ -7,7 +7,7 @@ source:close()
 _G.ui = ui
 ui.debug = true
 _G.module = {
-  inputs = { width = 1200, height = 1800 },
+  inputs = { width = 1200, height = 2400 },
   theme = { title = 28, large = 22, body = 16, small = 13, micro = 10, radius = 10 },
 }
 local drawn = { rects = {}, texts = {}, buttons = {} }
@@ -34,6 +34,8 @@ assert(has_text("Throughput"), "stat label missing")
 assert(has_text("CPU pressure"), "gauge title missing")
 assert(has_text("Services"), "table title missing")
 assert(has_text("Request latency"), "chart title missing")
+assert(has_text("Topology"), "graph title missing")
+assert(has_text("canvas") and has_text("soil"), "graph node labels missing")
 assert(has_text("p50") and has_text("p95") and has_text("p99"), "chart legend missing")
 
 local function count_buttons(action)
@@ -48,6 +50,7 @@ assert(count_buttons("inspect-stat") == 3, "stat drill-in hit regions missing")
 assert(count_buttons("inspect-gauge") == 1, "gauge hit region missing")
 assert(count_buttons("open-service") == 4, "table row hit regions missing")
 assert(count_buttons("toggle-series") == 3, "legend hit regions missing")
+assert(count_buttons("inspect-node") == 7, "graph node hit regions missing")
 assert(count_buttons("select-range") == 1, "chart selection hit region missing")
 
 -- Dense series are decimated before they become bars. LTTB must keep the
@@ -69,5 +72,13 @@ assert(#ui.lttb(dense, 6000) == 5000, "lttb should leave small series alone")
 assert(#ui.chart_window(dense, 100) == 100, "chart window should keep the newest points")
 assert(ui.chart_window(dense, 100)[1] == dense[4901], "chart window should start at the right point")
 
-print(string.format("gallery: ok (%d rects, %d texts, %d hit regions)",
-  #drawn.rects, #drawn.texts, #drawn.buttons))
+-- The graph draws its edges as rotated rects; a gallery that lost them would
+-- still draw every node and read as a scatter, which is the bug this catches.
+local rotated = 0
+for _, rect in ipairs(drawn.rects) do
+  if rect.rotation then rotated = rotated + 1 end
+end
+assert(rotated >= 6, "graph edges are missing")
+
+print(string.format("gallery: ok (%d rects, %d texts, %d hit regions, %d edges)",
+  #drawn.rects, #drawn.texts, #drawn.buttons, rotated))

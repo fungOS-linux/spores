@@ -60,6 +60,31 @@ local function fixture()
         { service = "search", p95 = "190 ms", errors = "0.21%", status = "ok" },
       },
     },
+    graph = {
+      title = "Topology",
+      subtitle = "sites and peers · positions are data",
+      nodes = {
+        { id = "site:home", label = "home", x = 0.12, y = 0.78, ink = "info", state = "live", rail = true, halo = true, label_position = "left" },
+        { id = "site:lab", label = "lab", x = 0.12, y = 0.40, ink = "success", state = "live", rail = true, halo = true, label_position = "left" },
+        { id = "p:canvas", label = "canvas", x = 0.42, y = 0.78, ink = "info", state = "live", halo = true, label_position = "below" },
+        { id = "p:soil", label = "soil", x = 0.62, y = 0.78, ink = "info", state = "live", halo = true, label_position = "below" },
+        { id = "p:spore", label = "spore", x = 0.82, y = 0.78, ink = "muted", state = "stale", label_position = "below" },
+        { id = "p:pi", label = "pi", x = 0.42, y = 0.40, ink = "success", state = "live", halo = true, label_position = "below" },
+        { id = "p:edge", label = "edge", x = 0.62, y = 0.40, ink = "muted", state = "stale", label_position = "below" },
+      },
+      edges = {
+        { source = "site:home", target = "p:canvas", ink = "info", state = "live" },
+        { source = "site:home", target = "p:soil", ink = "info", state = "live" },
+        { source = "site:home", target = "p:spore", ink = "muted", state = "stale" },
+        { source = "site:lab", target = "p:pi", ink = "success", state = "live" },
+        { source = "site:lab", target = "p:edge", ink = "muted", state = "stale" },
+        { source = "p:canvas", target = "p:soil", ink = "info", state = "live" },
+      },
+      legend = {
+        { ink = "success", label = "live" },
+        { ink = "muted", label = "stale" },
+      },
+    },
     chart = {
       title = "Request latency",
       subtitle = "p50 / p95 / p99 · incident replay",
@@ -100,7 +125,7 @@ function M.render(snapshot)
 
   ui.present(
     ui.column {
-      h = 1800,
+      h = 2400,
       gap = "md",
       pad = "md",
       children = {
@@ -119,6 +144,15 @@ function M.render(snapshot)
             ui.table({ id = "services", title = snapshot.table and snapshot.table.title, subtitle = snapshot.table and snapshot.table.subtitle, status = snapshot.table and snapshot.table.status, columns = snapshot.table and snapshot.table.columns, rows = snapshot.table and snapshot.table.rows, row_action = "open-service", row_key = "service", h = 240 }),
           },
         },
+        ui.graph(snapshot.graph.nodes, snapshot.graph.edges, {
+          id = "topology",
+          title = snapshot.graph.title,
+          subtitle = snapshot.graph.subtitle,
+          status = "live",
+          legend = snapshot.graph.legend,
+          node_action = "inspect-node",
+          h = 520,
+        }),
         ui.chart(snapshot.chart and snapshot.chart.series or {}, {
           id = "latency",
           title = snapshot.chart and snapshot.chart.title,
