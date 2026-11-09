@@ -367,7 +367,15 @@ fn modified(path: &Path) -> Result<u64, String> {
 /// supplies the `canvas` ABI, resolves the SDK library and writes the scene
 /// document. Anything this file drew itself would be a second renderer.
 fn render_scene(config: &Config, key: &CacheKey) -> Result<String, String> {
-    let out = std::env::temp_dir().join(format!("worklog-scene-{}.json", std::process::id()));
+    // The renderer's output goes beside the process, not into whatever TMPDIR it
+    // inherited: a service started from an agent's terminal inherits that
+    // terminal's per-turn scratch directory, and reaping it mid-run turned every
+    // later request into `No such file or directory`. Creating the directory each
+    // time costs one syscall and makes the path self-healing.
+    let scratch = std::env::temp_dir().join("worklog-serve");
+    std::fs::create_dir_all(&scratch)
+        .map_err(|error| format!("create {}: {error}", scratch.display()))?;
+    let out = scratch.join(format!("scene-{}.json", std::process::id()));
     let mut command = Command::new("lua");
     command
         .env("FUNGOS_SDK", &config.sdk)
