@@ -34,7 +34,7 @@ worklog-serve — serve the worklog view to a browser
   --renderer <file>    the scene renderer (default <root>/../../tools/shot.lua)
   --sdk <dir>          fungos-sdk checkout holding lua/fungos/ui.lua (default $FUNGOS_SDK)
   --snapshot <file>    the snapshot Lua to render (default examples/worklog_mock.lua)
-  --theme <file>       preview palette and type scale (default ../themes/graphite.lua)
+  --theme <file>       preview palette and type scale (default ../themes/paper.lua)
 ";
 
 fn main() -> ExitCode {
@@ -91,7 +91,7 @@ fn run(args: &[String]) -> Result<(), String> {
             .unwrap_or_else(|| root.join("examples/worklog_mock.lua")),
         theme: option(args, "--theme")
             .map(PathBuf::from)
-            .unwrap_or_else(|| root.join("../themes/graphite.lua")),
+            .unwrap_or_else(|| root.join("../themes/paper.lua")),
         root,
     };
     if !config.sdk.join("lua/fungos/ui.lua").exists() {
@@ -171,10 +171,34 @@ fn handle(
     let target = parts.next().unwrap_or_default();
     // Nothing reads the body, and a GET has none — draining the stream here waits
     // out the read timeout on every request, because the client is waiting for the
-    // response, not sending anything.
+    // response, not sending anything. The headers are worth reading though: the
+    // page asks whether the scene changed, and answering that is what keeps it
+    // from repainting a page that has not moved.
+    let mut headers = String::new();
+    loop {
+        let mut header = String::new();
+        let read = reader
+            .by_ref()
+            .take(MAX_LINE)
+            .read_line(&mut header)
+            .map_err(|error| format!("read header: {error}"))?;
+        if read == 0 || header.trim().is_empty() {
+            break;
+        }
+        headers.push_str(&header);
+        if headers.len() > MAX_LINE as usize {
+            break;
+        }
+    }
 
     if method != "GET" && method != "HEAD" {
-        return respond(&mut stream, 405, "text/plain", "this host answers GET only");
+        return respond(
+            &mut stream,
+            405,
+            "text/plain",
+            "this host answers GET only",
+            &[],
+        );
     }
     let (path, query) = match target.split_once('?') {
         Some((path, query)) => (path, query),
@@ -182,7 +206,13 @@ fn handle(
     };
 
     match path {
-        "/" | "/index.html" => respond(&mut stream, 200, "text/html; charset=utf-8", PAGE),
+        "/" | "/index.html" => respond(
+            &mut stream,
+            200,
+            "text/html; charset=utf-8",
+            PAGE,
+            &[("cache-control", "no-store")],
+        ),
         "/scene.json" => {
             let width = query_value(query, "w").unwrap_or(1182).clamp(1, MAX_SIDE);
             let height = query_value(query, "h").unwrap_or(1569).clamp(1, MAX_SIDE);
@@ -191,34 +221,63 @@ fn handle(
                 width,
                 height,
             };
-            let mut guard = cached
-                .lock()
-                .map_err(|error| format!("cache lock: {error}"))?;
-            let hit = match guard.as_ref() {
-                Some((cached_key, body)) if *cached_key == key => Some(body.clone()),
-                _ => None,
+            let body = {
+                let mut guard = cached
+                    .lock()
+                    .map_err(|error| format!("cache lock: {error}"))?;
+                let hit = match guard.as_ref() {
+                    Some((cached_key, body)) if *cached_key == key => Some(body.clone()),
+                    _ => None,
+                };
+                match hit {
+                    Some(body) => body,
+                    None => match render_scene(config, width, height) {
+                        Ok(body) => {
+                            *guard = Some((key.clone(), body.clone()));
+                            body
+                        }
+                        // A dropped connection reaches the page as "Failed to
+                        // fetch", which says nothing about the view. The status
+                        // line can, so the render's own error is the response.
+                        Err(error) => {
+                            return respond(
+                                &mut stream,
+                                500,
+                                "text/plain; charset=utf-8",
+                                &error,
+                                &[],
+                            );
+                        }
+                    },
+                }
             };
-            let body = match hit {
-                Some(body) => body,
-                None => match render_scene(config, width, height) {
-                    Ok(body) => {
-                        *guard = Some((key, body.clone()));
-                        body
-                    }
-                    // A dropped connection reaches the page as "Failed to
-                    // fetch", which says nothing about the view. The status line
-                    // can, so the render's own error is the response.
-                    Err(error) => {
-                        drop(guard);
-                        return respond(&mut stream, 500, "text/plain; charset=utf-8", &error);
-                    }
-                },
-            };
-            drop(guard);
-            respond(&mut stream, 200, "application/json", &body)
+            // The page polls, and repainting a scene that has not moved is what
+            // flicker is made of. The tag names everything that can change the
+            // picture, so an unchanged scene costs a 304 and no redraw.
+            let etag = format!("\"{}-{width}-{height}-{}\"", key.stamp, body.len());
+            if header(&headers, "if-none-match")
+                .is_some_and(|value| value.split(',').any(|tag| tag.trim() == etag))
+            {
+                return respond(&mut stream, 304, "application/json", "", &[("etag", &etag)]);
+            }
+            respond(
+                &mut stream,
+                200,
+                "application/json",
+                &body,
+                &[("etag", &etag), ("cache-control", "no-cache")],
+            )
         }
-        _ => respond(&mut stream, 404, "text/plain", "not found"),
+        _ => respond(&mut stream, 404, "text/plain", "not found", &[]),
     }
+}
+
+/// A request header, case-insensitively, without its trailing CRLF.
+fn header<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
+    headers.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.trim().eq_ignore_ascii_case(name).then(|| value.trim())
+    })
 }
 
 fn query_value(query: &str, name: &str) -> Option<u32> {
@@ -270,18 +329,30 @@ fn render_scene(config: &Config, width: u32, height: u32) -> Result<String, Stri
     Ok(body)
 }
 
-fn respond(stream: &mut TcpStream, status: u16, kind: &str, body: &str) -> Result<(), String> {
+fn respond(
+    stream: &mut TcpStream,
+    status: u16,
+    kind: &str,
+    body: &str,
+    extra: &[(&str, &str)],
+) -> Result<(), String> {
     let reason = match status {
         200 => "OK",
+        304 => "Not Modified",
         404 => "Not Found",
         405 => "Method Not Allowed",
         500 => "Internal Server Error",
         _ => "Error",
     };
-    let head = format!(
-        "HTTP/1.1 {status} {reason}\r\ncontent-type: {kind}\r\ncontent-length: {}\r\ncache-control: no-store\r\nconnection: close\r\n\r\n",
-        body.len()
-    );
+    let mut head = format!("HTTP/1.1 {status} {reason}\r\ncontent-type: {kind}\r\n");
+    // A 304 carries no body and must not claim a length for one.
+    if status != 304 {
+        head.push_str(&format!("content-length: {}\r\n", body.len()));
+    }
+    for (name, value) in extra {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    head.push_str("connection: close\r\n\r\n");
     stream
         .write_all(head.as_bytes())
         .and_then(|()| stream.write_all(body.as_bytes()))

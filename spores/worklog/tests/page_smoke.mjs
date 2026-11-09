@@ -36,31 +36,71 @@ const canvas = { width: 0, height: 0, style: {}, getContext: () => context };
 const status = { textContent: 'loading' };
 
 const scene = readFileSync(scene_path, 'utf8');
+const ETAG = '"smoke"';
+let requests = 0;
+let tick = null;
 const sandbox = {
   document: { getElementById: (id) => (id === 'scene' ? canvas : status) },
   window: { devicePixelRatio: 2 },
   innerWidth: 1182,
   innerHeight: 1569,
   addEventListener() {},
-  setInterval: () => 0,
+  // The page polls; the test drives the poll by hand instead of waiting.
+  setInterval: (fn) => { tick = fn; return 0; },
   setTimeout: () => 0,
   clearTimeout() {},
-  fetch: async () => ({ ok: true, status: 200, json: async () => JSON.parse(scene), text: async () => '' }),
+  fetch: async (url, options) => {
+    requests += 1;
+    const revalidating = (options?.headers?.['if-none-match'] || null) === ETAG;
+    // The second request revalidates, which is what a poll of an unchanged scene
+    // looks like: a 304 and nothing to draw.
+    if (revalidating) {
+      return {
+        ok: true, status: 304,
+        headers: { get: (name) => (name.toLowerCase() === 'etag' ? ETAG : null) },
+        json: async () => { throw new Error('304 has no body'); },
+        text: async () => '',
+      };
+    }
+    return {
+      ok: true, status: 200,
+      headers: { get: (name) => (name.toLowerCase() === 'etag' ? ETAG : null) },
+      json: async () => JSON.parse(scene),
+      text: async () => '',
+    };
+  },
   console, Date, Math, parseInt, JSON,
 };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 vm.runInContext(match[1], sandbox);
 // `refresh()` is async: let its fetch and draw settle before looking.
-await new Promise((resolve) => setImmediate(resolve));
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+await settle();
 
 const problems = [];
+const firstPaint = { rects: drawn.rects, texts: drawn.texts.length };
 if (drawn.texts.length === 0) problems.push('the page drew no text');
 if (drawn.rects === 0) problems.push('the page drew no rects');
 if (!/nodes/.test(status.textContent)) problems.push(`status is not a node count: ${status.textContent}`);
 if (!drawn.texts.some((entry) => entry.text === 'WORKLOG')) {
   problems.push('the masthead is missing');
 }
+
+// Polling an unchanged scene must not repaint it. A page that clears and redraws
+// on every 304 is the flicker this guards: the second pass would record a second
+// copy of every node.
+if (tick) {
+  tick();
+  await settle();
+}
+if (requests < 2) problems.push(`the poll never ran (${requests} requests)`);
+if (drawn.texts.length !== firstPaint.texts || drawn.rects !== firstPaint.rects) {
+  problems.push(
+    `the page repainted an unchanged scene: ${firstPaint.rects}/${firstPaint.texts} then ` +
+    `${drawn.rects}/${drawn.texts.length}`);
+}
+
 // A rect drawn at the far edge, or text off the surface, is the same class of
 // defect the Lua fixture guards: the browser is the one host nobody can inspect
 // by reading the scene.

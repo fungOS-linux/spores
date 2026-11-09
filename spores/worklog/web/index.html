@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Worklog</title>
   <style>
-    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0d0f14;color:#e6ebf5;font:13px ui-monospace,monospace}
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#ffffff;color:#37352f;font:13px ui-sans-serif,-apple-system,Helvetica,Arial,sans-serif}
     canvas{display:block;width:100%;height:100%}
-    #status{position:fixed;right:16px;bottom:12px;color:#8b96ab;pointer-events:none}
+    #status{position:fixed;right:14px;bottom:10px;color:#b8b6b1;font-size:11px;pointer-events:none}
   </style>
 </head>
 <body>
@@ -23,6 +23,10 @@ const canvas = document.getElementById('scene');
 const ctx = canvas.getContext('2d');
 const status = document.getElementById('status');
 let dpr = 1, size = { w: 0, h: 0 };
+// The last body we painted, and the tag that names it. A poll that comes back
+// unchanged must not touch the canvas: clearing and repainting a picture that has
+// not moved is exactly what reads as a flicker.
+let painted = null, tag = null, inFlight = false;
 
 // What a role means when the palette did not resolve it. A missing colour should
 // look like a missing colour, not like invisible text.
@@ -43,11 +47,16 @@ function fillOf(node) {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
 }
 
+// Resizing the backing store clears the canvas, so it happens only when the
+// window actually changed size — never on a poll.
 function fit() {
+  const next = { w: innerWidth, h: innerHeight };
+  if (next.w === size.w && next.h === size.h && canvas.width > 0) return false;
   dpr = window.devicePixelRatio || 1;
-  size = { w: innerWidth, h: innerHeight };
+  size = next;
   canvas.width = Math.floor(size.w * dpr);
   canvas.height = Math.floor(size.h * dpr);
+  return true;
 }
 
 function draw(scene, w, h) {
@@ -84,25 +93,35 @@ function draw(scene, w, h) {
 }
 
 async function refresh() {
+  if (inFlight) return;
+  inFlight = true;
   fit();
   const w = Math.round(size.w), h = Math.round(size.h);
   try {
-    const response = await fetch(`scene.json?w=${w}&h=${h}`, { cache: 'no-store' });
+    const headers = tag ? { 'if-none-match': tag } : {};
+    const response = await fetch(`scene.json?w=${w}&h=${h}`, { cache: 'no-store', headers });
+    if (response.status === 304) {
+      status.textContent = `unchanged · ${new Date().toLocaleTimeString()}`;
+      return;
+    }
     if (!response.ok) throw new Error(`scene ${response.status}: ${await response.text()}`);
     const scene = await response.json();
     if (scene.error) throw new Error(scene.error);
+    tag = response.headers.get('etag');
+    painted = scene;
+    // One synchronous pass: clear and paint in the same frame, so there is never
+    // an empty canvas on screen.
     draw(scene, w, h);
     status.textContent = `${scene.nodes.length} nodes · ${new Date().toLocaleTimeString()}`;
   } catch (error) {
     status.textContent = String(error.message || error);
+  } finally {
+    inFlight = false;
   }
 }
 
-let pending = 0, lastSize = '';
+let pending = 0;
 addEventListener('resize', () => {
-  const next = `${innerWidth}x${innerHeight}`;
-  if (next === lastSize) return;
-  lastSize = next;
   clearTimeout(pending);
   pending = setTimeout(refresh, 120);
 });
