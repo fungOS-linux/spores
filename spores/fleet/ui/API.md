@@ -1,8 +1,15 @@
 # Fleet Lua API
 
-`ui/fleet.lua` exports one entry point:
+`ui/fleet.lua` is one surface: the mycelium wall — masthead, four stat cards, the
+site-to-peer topology graph, the attention rail, the site table, the release
+drift gauge and the mesh counts.
 
-- `M.render(snapshot) -> nil` — paints the fleet surface through `fungos.ui`.
+## Entrypoint
+
+`ui/fleet.lua` exports one function:
+
+- `M.render(snapshot) -> nil` — builds the tree and presents it with `ui.present`,
+  so every coordinate comes from the layout in `fungos.ui` and none from here.
 
 The view has no WIT imports, no producer, no filesystem, no clock and no
 network. The snapshot is produced by `spore-fleet`'s Rust library; the shape
@@ -86,6 +93,58 @@ The view registers host-owned hit regions and never receives a callback:
 
 An action is a name the host routes to the Spore that owns it; the view has no
 idea what opening a peer means.
+
+## Slots
+
+None. The wall is a complete view, not a component contributed into another
+window: there is no named region a host can replace. A host that wants a piece
+of it renders that piece's producer instead.
+
+## Components
+
+`fungos.ui` only: `ui.column`, `ui.row`, `ui.card`, `ui.text`, `ui.stat`,
+`ui.table`, `ui.graph`, `ui.gauge` and `ui.present`. The view places nothing by
+hand and draws no rectangle of its own, so a theme or spacing change lands here
+without an edit.
+
+`ui.graph` draws positions the producer chose; its edges are rotated rectangles,
+because that is the line primitive the scene ABI has. When the host declares
+`module.inputs.graph_surface`, the same node is emitted as
+`canvas.host_resource` and the host paints the GPU surface instead.
+
+## Theme/config
+
+The view names ink roles, never colours: `text`, `muted`, `primary`, `success`,
+`warning`, `danger`, `surface`, `surface_sunken` and `background`. Type sizes and
+radii come from the host's `module.theme` in pixels (`micro` / `small` / `body` /
+`large` / `title`, plus `radius`); `DEFAULT_THEME` is the authoring fallback, not
+a second scale.
+
+Every height the view computes is snapped to the 4px layout grid through
+`ui.viewport`, because a browser window is whatever size the reader dragged it
+to. Spacing is a token (`"sm"`, `"md"`) or a multiple of that base.
+
+## Stable ids
+
+The cards and tables are addressable by id: `fleet-stat-<1..4>` for the stat
+cards, `fleet-graph`, `fleet-attention`, `fleet-sites`, `fleet-release` and
+`fleet-mesh`. Graph peers are `fleet-graph:<peer-id>`.
+
+Table rows take the library's shape `<table>-row-<index>-<key>`, where the key
+is the snapshot's `host`, `site` or `fact`: `fleet-attention-row-3-home-pi`,
+`fleet-sites-row-1-auto`, `fleet-mesh-row-2-dhcp-leases`. A host that hit-tests
+or addresses a row uses that id, and the index is the row's position in the
+snapshot — which is why the producer's order is load-bearing.
+
+## Authority
+
+No ambient authority: the view cannot read a file, call a clock, open a socket,
+or load code. It reads only `module.viewport` / `module.inputs`, `module.theme`
+and the snapshot it is handed.
+
+The interactions it declares are host-owned hit regions (`widget.button`). A
+host that cannot place them still renders every pixel of the view; it just has
+nothing to route.
 
 ## What the view does not do
 
