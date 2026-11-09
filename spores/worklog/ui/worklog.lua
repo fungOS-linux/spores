@@ -222,11 +222,17 @@ M.chars_per_line = chars_per_line
 -- constant. Drawing every event in a 40-event snapshot put a third of them past
 -- the bottom edge of the surface (2,309 px of ink on a 1,569 px surface): they
 -- were painted, invisible, and counted in "1–40 of 40".
--- A row is one line plus its breathing room. The height is derived from the
--- tallest thing on it (the summary, at body size) rather than picked.
-local ROW_H = (TYPE.body + 4) + GAP.sm * 2
--- The row pitch is part of the contract: the host scrolls in pixels and the
--- view turns them into rows, so both sides need the same number.
+-- Rows fill the page. A fixed pitch either leaves the bottom third empty in a
+-- tall window or overflows a short one, so the pitch is derived: take the rows
+-- that fit between a floor and the node budget, then stretch them over the
+-- height that is left. Between 44 and 96 px a row can carry a header line and a
+-- summary line, which is what a log needs to read like one.
+local MIN_ROW_H = 44
+local MAX_ROW_H = 132
+local TALL_ROW_H = 56
+local ROW_H = MIN_ROW_H
+-- The pitch is part of the contract: the host scrolls in pixels and the view
+-- turns them into rows, so both sides need the same number.
 M.row_height = ROW_H
 local CHROME = 120
 -- The detail column is a fixed slice of the surface: wide enough for a summary at
@@ -241,18 +247,32 @@ local SUMMARY_LINES = 8
 -- a tall window could hold produced a scene the host rejected outright — the
 -- whole surface became an error card.
 local NODE_BUDGET = 240 -- the host's 256, less room for the chrome to move
-local CHROME_NODES = 48
--- A row costs six drawn nodes and, when it has a locator, one control.
-local NODES_PER_ROW = 8
+-- Measured, not guessed: the header, the panes and a detail column that can run
+-- to eight summary lines cost about eighty nodes before the first row.
+local CHROME_NODES = 80
+-- A row costs: a rule, the kind, the actor, the summary, the age, and — when it
+-- has a locator — a chip, its label and the control over it.
+local NODES_PER_ROW = 9
 local MAX_ROWS = math.floor((NODE_BUDGET - CHROME_NODES) / NODES_PER_ROW)
 
-local function visible_count(snapshot)
+-- How many rows the window holds, and how tall each one is. Both answers come
+-- from one place: a list that filled the height with rows but kept a short pitch
+-- would still leave the page half empty.
+local function plan_rows(snapshot)
   local total = #(snapshot.events or {})
   -- An empty log shows zero rows, not the max(1, …) floor: there is no first
   -- event to draw.
-  if total == 0 then return 0 end
-  local fits = math.floor((H - CHROME) / ROW_H)
-  return math.max(1, math.min(total, fits, MAX_ROWS))
+  if total == 0 then
+    ROW_H = MIN_ROW_H
+    M.row_height = ROW_H
+    return 0
+  end
+  local space = math.max(0, H - CHROME)
+  local fits = math.max(1, math.floor(space / MIN_ROW_H))
+  local rows = math.min(total, MAX_ROWS, fits)
+  ROW_H = math.max(MIN_ROW_H, math.min(MAX_ROW_H, math.floor(space / rows)))
+  M.row_height = ROW_H
+  return rows
 end
 
 -- A row is one line with things embedded in it: the kind, who did it, the
@@ -261,30 +281,30 @@ end
 -- locator, which is the part a reader wants to click.
 local function row_segments(event, show_source)
   local segments = {
-    { key = "kind", text = kind_word(event.kind), ink = "primary", size = TYPE.micro, w = 72 },
+    { key = "kind", text = kind_word(event.kind), ink = "primary", size = TYPE.micro, w = 92, line = 1 },
   }
   -- One source means the column is the same word on every row: it costs space
   -- and tells the reader nothing.
   if show_source then
-    segments[#segments + 1] = { key = "source", text = event.source or "", ink = "muted", size = TYPE.micro, w = 56 }
+    segments[#segments + 1] = { key = "source", text = event.source or "", ink = "muted", size = TYPE.micro, w = 56, line = 1 }
   end
-  segments[#segments + 1] = { key = "actor", text = event.actor or "", ink = "muted", size = TYPE.micro, w = 88 }
+  segments[#segments + 1] = { key = "actor", text = event.actor or "", ink = "muted", size = TYPE.micro, w = 104, line = 1 }
   -- The summary comes before the locator: the sentence is the line, the chip is
   -- the footnote on it. Put the chip first and a long locator eats the row.
-  segments[#segments + 1] = { key = "summary", text = event.summary or "", ink = "text", size = TYPE.body, grow = true }
+  segments[#segments + 1] = { key = "summary", text = event.summary or "", ink = "text", size = TYPE.body, grow = true, line = ROW_H >= TALL_ROW_H and 2 or 1 }
   local seen = {}
   for position, link in ipairs(event.links or {}) do
     if not seen[link.locator] then
       seen[link.locator] = true
-      segments[#segments + 1] = { key = "locator-" .. position, chip = link.locator, rel = link.rel, size = TYPE.micro }
+      segments[#segments + 1] = { key = "locator-" .. position, chip = link.locator, rel = link.rel, size = TYPE.micro, line = 1 }
     end
   end
   local subject = event.subject or ""
   if subject:find("://", 1, true) and not seen[subject] then
     seen[subject] = true
-    segments[#segments + 1] = { key = "subject", chip = subject, rel = "subject", size = TYPE.micro }
+    segments[#segments + 1] = { key = "subject", chip = subject, rel = "subject", size = TYPE.micro, line = 1 }
   end
-  segments[#segments + 1] = { key = "age", text = event.age or "", ink = "muted", size = TYPE.micro, w = 40, align = "right" }
+  segments[#segments + 1] = { key = "age", text = event.age or "", ink = "muted", size = TYPE.micro, w = 40, align = "right", line = 1 }
   return segments
 end
 
@@ -382,7 +402,7 @@ local function tree(snapshot)
   local counts = snapshot.counts or {}
   local wide = W >= 620
   local show_source = #(snapshot.sources or {}) > 1
-  local shown = visible_count(snapshot)
+  local shown = plan_rows(snapshot)
   local first = window_start(snapshot, shown)
   local root = {
     id = "worklog-root", kind = "container",
@@ -443,36 +463,41 @@ local function measure(value, size)
   return #tostring(value or "") * size * GLYPH_W
 end
 
--- Rows carry segments instead of child nodes. The line is allocated before it
--- is drawn: fixed columns, then the age, then chips clipped to a third of what
--- is left, and the summary takes the remainder. Drawing first and discovering
--- the room afterwards is how a locator ended up on top of the next column.
-local function draw_row(laid_row, index, segments)
-  local row = laid_row.rect
-  local pad = 12
-  local left = row.x + pad
-  local right = row.x + row.width - pad
-  local age_w = 46
-  local line_h = TYPE.body + 4
-  local y = row.y + (ROW_H - line_h) / 2
-  local chip_h = TYPE.micro + 10
+-- A locator is an id under the hood. `marbles://local/mycelium-6us5` is Marbles
+-- issue `mycelium-6us5`; the reader does not need the transport in front of it,
+-- and the full URI still travels with the press for whoever opens it.
+local function locator_label(locator)
+  local value = tostring(locator or "")
+  local _, rest = value:match("^([%w+.-]+)://(.*)$")
+  if rest then
+    return rest:match("([^/]+)$") or rest
+  end
+  local repo, number = value:match("^(.+)#(%d+)$")
+  if repo then return (repo:match("([^/]+)$") or repo) .. "#" .. number end
+  return value
+end
+M.locator_label = locator_label
 
-  local fixed = 0
-  local chips = {}
-  for _, segment in ipairs(segments) do
+-- One line of a row: fixed columns first, the age at the far right, chips given
+-- a share of what is left, and the summary taking the remainder.
+local function draw_line(parts, index, left, right, y, age_w, chip_h)
+  local fixed, chips, has_age = 0, {}, false
+  for _, segment in ipairs(parts) do
     if segment.chip then
       chips[#chips + 1] = segment
-    elseif not segment.grow and not segment.align then
-      fixed = fixed + (segment.w or measure(segment.text, segment.size)) + GAP.xs
+    elseif segment.align == "right" then
+      has_age = true
+    elseif not segment.grow then
+      fixed = fixed + math.max(segment.w or 0, measure(segment.text, segment.size)) + GAP.xs
     end
   end
-  local available = right - left - fixed - age_w - GAP.sm
-  local chip_room = math.max(0, math.min(available * 0.34, 300))
+  local available = right - left - fixed - (has_age and (age_w + GAP.sm) or 0)
+  local chip_room = math.max(0, math.min(available * 0.5, 320))
   local chip_widths, chip_total, used = {}, 0, 0
   for _, segment in ipairs(chips) do
     local chars = math.floor((chip_room - used - 10) / (segment.size * GLYPH_W))
-    if chars >= 8 then
-      local label = clip(segment.chip, chars)
+    if chars >= 6 then
+      local label = clip(locator_label(segment.chip), chars)
       local width = measure(label, segment.size) + 10
       chip_widths[segment] = { label = label, width = width }
       chip_total = chip_total + width + GAP.xs
@@ -482,7 +507,7 @@ local function draw_row(laid_row, index, segments)
   local summary_room = math.max(0, available - chip_total)
 
   local x = left
-  for _, segment in ipairs(segments) do
+  for _, segment in ipairs(parts) do
     local id = string.format("event-%d-%s", index, segment.key)
     if segment.align == "right" then
       text(id, segment.text, right - age_w, y, segment.size, segment.ink)
@@ -507,7 +532,36 @@ local function draw_row(laid_row, index, segments)
       end
     else
       text(id, segment.text, x, y, segment.size, segment.ink)
-      x = x + (segment.w or measure(segment.text, segment.size)) + GAP.xs
+      x = x + math.max(segment.w or 0, measure(segment.text, segment.size)) + GAP.xs
+    end
+  end
+end
+
+-- A row is one or two lines depending on the pitch the page earned: a header of
+-- who and what, then the sentence. Rows carry segments instead of child nodes,
+-- so the draw pass places them rather than the layout.
+local function draw_row(laid_row, index, segments)
+  local row = laid_row.rect
+  local pad = 12
+  local left = row.x + pad
+  local right = row.x + row.width - pad
+  local age_w = 46
+  local tall = ROW_H >= TALL_ROW_H
+  local line_h = tall and (TYPE.micro + 14) or (TYPE.body + 4)
+  local lines = tall and 2 or 1
+  local top = row.y + (ROW_H - lines * line_h) / 2
+  local chip_h = TYPE.micro + 10
+
+  local grouped = {}
+  for _, segment in ipairs(segments) do
+    local line = math.min(segment.line or 1, lines)
+    grouped[line] = grouped[line] or {}
+    grouped[line][#grouped[line] + 1] = segment
+  end
+  for line = 1, lines do
+    local parts = grouped[line]
+    if parts and #parts > 0 then
+      draw_line(parts, index, left, right, top + (line - 1) * line_h, age_w, chip_h)
     end
   end
 end
@@ -516,7 +570,7 @@ function M.render(snapshot)
   use_viewport()
   snapshot = apply_event(snapshot or {})
   local events = snapshot.events or {}
-  local shown = visible_count(snapshot)
+  local shown = plan_rows(snapshot)
   local wide = W >= 620
   local laid = layout(tree(snapshot), W, H)
 

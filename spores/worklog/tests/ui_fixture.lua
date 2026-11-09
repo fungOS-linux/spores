@@ -241,12 +241,17 @@ for index = 1, 30 do
   }
 end
 
-_G.module.scroll = { offset = worklog.row_height * 3 }
+-- The pitch is derived per page, so it has to be read from a render of *this*
+-- snapshot: using the previous page's pitch would scroll to the wrong row.
+_G.module.scroll = nil
+render(many)
+local pitch = worklog.row_height
+_G.module.scroll = { offset = pitch * 3 }
 render(many)
 local scrolled = drawn_ids()
 assert(scrolled["event-4-summary"], "a scrolled window does not start at row 4")
 assert(not scrolled["event-1-summary"], "the first row is still drawn after scrolling")
-_G.module.scroll = { offset = worklog.row_height * 1000 }
+_G.module.scroll = { offset = pitch * 1000 }
 render(many)
 assert(drawn_ids()["event-30-summary"], "a scroll past the end does not clamp to the last page")
 _G.module.scroll = nil
