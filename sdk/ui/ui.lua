@@ -184,7 +184,7 @@ ui.glyph = {
   doc = "▤", files = "▣", grid = "▦", list = "☰", columns = "◫",
   chevron = "▸", check = "✓", dot = "●", eye = "◉",
   -- Launcher surfaces. A Spore names a mark; the host draws it.
-  home = "⌂", terminal = "❯", store = "◈", wiki = "▤", worklog = "▥",
+  home = "⌂", terminal = "❯", term = "❯", store = "◈", wiki = "▤", worklog = "▥",
   sfx = "♪", ai = "✧", mcp = "⌁", webhook = "☁", confluence = "☁",
   manavault = "⚿", chrome = "◉", contacts = "☺", crm = "◫",
   dfm = "◔", gallery = "◨", git = "⑂", inbox = "✉", notify = "⚑",
