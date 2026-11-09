@@ -13,6 +13,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # A vendored soil contract that drifted from its record is a Spore built
+      # against an interface the host may no longer have. Cheap and offline, so
+      # it runs before anything that has to compile.
+      - name: Vendored WIT provenance
+        run: sh tools/check-wit-provenance.sh
       - name: Lua
         run: sudo apt-get update && sudo apt-get install -y lua5.4
       - run: cargo fmt --all --check
