@@ -265,6 +265,29 @@ function ui.action(name, payload)
   return { action = name, payload = payload }
 end
 
+-- The host speaks a narrower language than this kit's nodes: `action` is a
+-- *name*, the payload rides in `body`, and appearance is the host's vocabulary,
+-- not ours. `ui.action` carries both halves in one table, so a control prim
+-- unwraps it here rather than at each of the four sites that draw one.
+local function control_prim(spec)
+  local action, body = spec.action, spec.body
+  if type(action) == "table" then
+    action, body = action.action, action.payload or body
+  end
+  return {
+    button = {
+      id = spec.id,
+      label = spec.label,
+      action = action,
+      body = body or {},
+      enabled = spec.enabled ~= false,
+      appearance = spec.appearance or "hit",
+    },
+    translation = spec.translation or { 0, 0, 0 },
+    scale = spec.scale or { 1, 1, 1 },
+  }
+end
+
 -- ---- text ---------------------------------------------------------------
 
 -- Byte length is not character count: a glyph is one character and three bytes,
@@ -399,15 +422,12 @@ local function hit_region(prims, spec)
   local w = tonumber(spec.w) or 0
   local h = tonumber(spec.h) or 0
   if w <= 0 or h <= 0 then return end
-  prims[#prims + 1] = {
-    button = {
-      id = spec.id,
-      label = spec.label,
-      action = spec.action,
-      body = spec.body or {},
-      enabled = spec.enabled ~= false,
-      appearance = "hit",
-    },
+  prims[#prims + 1] = control_prim {
+    id = spec.id,
+    label = spec.label,
+    action = spec.action,
+    body = spec.body,
+    enabled = spec.enabled,
     translation = { spec.x or 0, spec.y or 0, 0 },
     scale = { w, h, 1 },
   }
@@ -507,15 +527,12 @@ local function lay_radial(n, S)
     )
 
     if n.action and widget and widget.button then
-      prims[#prims + 1] = {
-        button = {
-          id = slice.id,
-          label = label,
-          action = n.action,
-          body = slice.body or { id = slice.id, value = slice.id },
-          enabled = available,
-          appearance = "hit",
-        },
+      prims[#prims + 1] = control_prim {
+        id = slice.id,
+        label = label,
+        action = n.action,
+        body = slice.body or { id = slice.id, value = slice.id },
+        enabled = available,
         translation = {
           cx + math.cos(middle) * middle_radius - segment_length * 0.5,
           cy + math.sin(middle) * middle_radius + band * 0.5,
@@ -1059,15 +1076,12 @@ lay_node = function(n, S, width)
                 wx(S, size * 0.45), -hy(S, size * 0.42)),
     }
     if n.action and widget and widget.button then
-      prims[#prims + 1] = {
-        button = {
-          id = control_id(n),
-          label = n.glyph,
-          action = n.action,
-          body = n.body,
-          enabled = n.enabled ~= false,
-          appearance = "hit",
-        },
+      prims[#prims + 1] = control_prim {
+        id = control_id(n),
+        label = n.glyph,
+        action = n.action,
+        body = n.body,
+        enabled = n.enabled,
         translation = { 0, 0, 0 }, scale = { wide, side, 1 },
       }
     end
@@ -1094,15 +1108,12 @@ lay_node = function(n, S, width)
     -- draws nothing for an invisible control, so the view keeps its own look
     -- while Canvas still owns the hit area and the press.
     if n.action and widget and widget.button then
-      prims[#prims + 1] = {
-        button = {
-          id = control_id(n),
-          label = n.label,
-          action = n.action,
-          body = n.body,
-          enabled = n.enabled ~= false,
-          appearance = "hit",
-        },
+      prims[#prims + 1] = control_prim {
+        id = control_id(n),
+        label = n.label,
+        action = n.action,
+        body = n.body,
+        enabled = n.enabled,
         translation = { 0, 0, 0 }, scale = { label_w, height, 1 },
       }
     end

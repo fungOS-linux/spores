@@ -89,11 +89,17 @@ for _, spec in ipairs(drawn.buttons) do
 end
 assert(decisions == with_pr, string.format("expected %d decision buttons, drew %d", with_pr, decisions))
 
--- Intents are emitted, never executed.
+-- Intents are emitted, never executed. The host wants the action's *name*:
+-- `widget.button` rejects a table, so the prim carries the name and the payload
+-- rides in `body` (tools/check-module-contract.lua enforces this end to end).
 local intents = {}
 for _, spec in ipairs(drawn.buttons) do
-  local action = spec.action
-  if type(action) == "table" and action.action then intents[action.action] = true end
+  assert(type(spec.action) == "string",
+    "a control prim owes the host the action name, got " .. type(spec.action))
+  assert(spec.appearance == "hit" or spec.appearance == "quiet" or spec.appearance == "standard",
+    "unknown control appearance: " .. tostring(spec.appearance))
+  assert(type(spec.body) == "table", "a control prim carries its payload as body")
+  intents[spec.action] = true
 end
 for _, expected in ipairs({ "git.land", "git.open_marble", "git.filter" }) do
   assert(intents[expected], "missing intent: " .. expected)
