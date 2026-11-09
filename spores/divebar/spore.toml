@@ -34,6 +34,12 @@ hot_reload = true
 
 [chrome]
 regions = ["top-bar"]
+# The height the host reserves before this package loads, and the height the
+# view is authored at. One number, declared once: the host draws its built-in
+# fallback at this height, then hands the region over. The view reads the extent
+# it is actually granted from `module.viewport`, so this is the default, not a
+# second copy of 44.
+height = 44
 
 # The region's Lua is composed, not authored: `require` is a build-time import
 # and a compositor has no such global, so the shipped artifact inlines it. Both
