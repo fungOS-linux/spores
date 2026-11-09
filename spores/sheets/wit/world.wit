@@ -1,0 +1,9 @@
+// Sheets Spore: workbooks and tabs live in soil:records; formulas are evaluated
+// in-guest by IronCalc so the host never needs a formula engine.
+package fungos:sheets@0.1.0;
+
+world sheets {
+  import soil:records/records@0.1.0;
+
+  export run: func(args: list<string>) -> result<_, string>;
+}

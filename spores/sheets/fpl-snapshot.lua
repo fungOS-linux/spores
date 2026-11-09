@@ -1,0 +1,36 @@
+-- Five-year cash model (base case, $149 SaaS). Snapshot built from the
+-- verified cash-forecast.mjs figures. Replace by computing from IronCalc cells.
+return {
+  tab = "fpl-cash",
+  title = "The five-year model",
+  subtitle = "Base case $149/month",
+  provenance = "estimate",
+  column_label = "LINE",
+  columns = { "Y1", "Y2", "Y3", "Y4", "Y5" },
+  rows = {
+    { id = "accounts", label = "Recurring SaaS accounts", format = "count",
+      values = { 103, 431, 1030, 1994, 3150 } },
+    { id = "arr", label = "Year-end total ARR", format = "money",
+      values = { 310950, 1066700, 2450753, 5418933, 8980120 } },
+    { id = "sdk", label = "  of which SDK/API", format = "money",
+      values = { 59000, 115050, 191898, 264903, 334257 } },
+    { id = "revenue", label = "Annual revenue", format = "money",
+      values = { 108951, 608409, 1470685, 3228459, 5694671 } },
+    { id = "margin", label = "Gross margin", format = "percent",
+      values = { 75, 84, 84, 85, 85 } },
+    { id = "outflows", label = "Cash outflows", format = "money",
+      values = { -720640, -1070505, -1549981, -2242322, -3331290 } },
+    { id = "net", label = "Net cash flow", format = "money",
+      values = { -611689, -462096, 20604, 986137, 2363381 } },
+    { id = "cash", label = "Cash / funding gap", format = "money",
+      values = { 1388311, 926215, 946819, 1932956, 4296337 } },
+  },
+  assumptions = {
+    { label = "SaaS churn", value = "15% / year" },
+    { label = "SaaS price", value = "$149/mo base" },
+    { label = "SDK", value = "$50k flat / $70k on-prem" },
+    { label = "Review", value = "0.12 h / account-month" },
+    { label = "Mix", value = "illustrative, no pipeline" },
+    { label = "Status", value = "model rebuild pending" },
+  },
+}

@@ -1,0 +1,35 @@
+-- Example snapshot for `ui/sheet.lua`. The host builds this shape from the
+-- workbook/tab records plus the latest `fungos.sheet/calc@1` record.
+return {
+  tab = "fpl-cash",
+  title = "The five-year model",
+  subtitle = "Growth case · 60 months",
+  provenance = "estimate · 2026-11-07",
+  column_label = "LINE",
+  columns = { "Y1", "Y2", "Y3", "Y4", "Y5" },
+  rows = {
+    { id = "accounts", label = "Recurring SaaS accounts", format = "count",
+      values = { 103, 431, 1030, 1994, 3150 } },
+    { id = "arr", label = "Year-end ARR", format = "money",
+      values = { 182950, 632608, 1428102, 3255551, 5059206 } },
+    { id = "sdk", label = "  of which SDK/API", format = "money",
+      values = { 59000, 115050, 191898, 264903, 334257 } },
+    { id = "revenue", label = "Annual revenue", format = "money",
+      values = { 59598, 379538, 983031, 2257869, 4093281 } },
+    { id = "margin", label = "Gross margin", format = "percent",
+      values = { 69, 80, 80, 82, 82 } },
+    { id = "outflows", label = "Cash outflows", format = "money",
+      values = { -716413, -1042356, -1520030, -2210636, -3225412 } },
+    { id = "net", label = "Net cash flow", format = "money",
+      values = { -671261, -699089, -601540, -101616, 719440 } },
+    { id = "cash", label = "Cash / funding gap", format = "money",
+      values = { 1328739, 629650, 28109, -73507, 645933 } },
+  },
+  assumptions = {
+    { label = "SaaS churn", value = "15% / year" },
+    { label = "SaaS price", value = "$100 → $125 / month" },
+    { label = "SDK", value = "$50k flat · $70k on-prem" },
+    { label = "Review", value = "0.12 h / account-month" },
+    { label = "Mix", value = "illustrative, no pipeline" },
+  },
+}

@@ -1,0 +1,28 @@
+schema = 1
+
+[spore]
+id = "dev.fungos.sheets"
+name = "sheets"
+version = "0.1.0"
+license = "Apache-2.0 OR MIT"
+summary = "Formula workbooks with Excel-compatible calculation and xlsx export"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { records = "0.1.0" }
+
+[module]
+path = "module.wasm"
+
+[ui]
+entry = "ui/sheet.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+surfaces = ["canvas", "native", "web"]
+
+[grants]
+"soil:records" = "read/write workbooks, tabs, and published calculation results"
