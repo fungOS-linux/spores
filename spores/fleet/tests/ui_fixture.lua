@@ -81,5 +81,39 @@ for _, list in ipairs({ drawn.rects, drawn.texts }) do
   end
 end
 
+-- The wall is whatever window the reader opened. A layout height has to be a
+-- multiple of the 4px grid, and a browser is 937px tall often enough that the raw
+-- window size used to reach `ui.column{h = H}` and fail the whole render.
+local function render_at(w, h)
+  drawn.rects, drawn.texts, drawn.buttons = {}, {}, {}
+  _G.module.viewport = { width = w, height = h }
+  _G.module.inputs = { width = w, height = h }
+  view.render(snapshot)
+end
+
+local vw, vh = ui.viewport(1001, 937)
+assert(vw % 4 == 0 and vh % 4 == 0, "ui.viewport handed back an off-grid size")
+
+for _, size in ipairs({ { 1500, 937 }, { 1001, 701 }, { 800, 601 } }) do
+  local w, h = size[1], size[2]
+  render_at(w, h)
+  local count = #drawn.rects + #drawn.texts
+  assert(count > 80, ("%dx%d: render produced only %d primitives"):format(w, h, count))
+  assert(count <= 256, ("%dx%d: over the wall budget (%d)"):format(w, h, count))
+  -- A table used to accept a row that did not fit its card, so the bottom row
+  -- hung below the surface on a short window.
+  for _, list in ipairs({ drawn.rects, drawn.texts }) do
+    for _, node in ipairs(list) do
+      local x, y = node.translation[1], node.translation[2]
+      assert(x >= -4.01 and x <= 4.01,
+        ("%dx%d: primitive outside the surface x: %.2f"):format(w, h, x))
+      assert(y >= -4.01 and y <= 4.01,
+        ("%dx%d: primitive outside the surface y: %.2f"):format(w, h, y))
+    end
+  end
+end
+
+render_at(1600, 1000)
+
 print(string.format("fleet: ok (%d rects, %d texts, %d edges, %d hit regions, %d primitives)",
   #drawn.rects, #drawn.texts, rotated, #drawn.buttons, total))

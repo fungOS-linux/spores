@@ -904,7 +904,10 @@ local function lay_table(n, S, width)
   prims[#prims + 1] = rect_prim(ink("divider", "table.divider.ink"), 0.35, 0,
     pad, y, width - pad * 2, hy(S, 1))
   y = y - hy(S, 6)
-  local available = math.max(0, math.floor((height + y + hy(S, 14)) / hy(S, row_px)))
+  -- Rows stop at the card floor, with the last one clear of the edge. The slack
+  -- is inside the card: added to the budget instead, it let the bottom row — and
+  -- its zebra — hang a row's worth of pixels below the card it belongs to.
+  local available = math.max(0, math.floor((height + y - hy(S, 14)) / hy(S, row_px)))
   -- Cells sit on the row's centre line, not its top edge. A 20px row with a
   -- 15px face leaves two pixels above and five below at the top, which reads as
   -- every row sagging; centring costs one subtraction.
@@ -1649,11 +1652,26 @@ end
 
 -- ---- render -------------------------------------------------------------
 
--- A Spore that is handed a surface size directly (a document pane, a test) can
--- set it here instead of declaring host inputs it does not own.
+-- The layout grid, and the reading that puts a host's window onto it. A window
+-- is whatever size the user dragged it to; every box the library places is a
+-- multiple of this base, which `space()` enforces. Snapping belongs with the
+-- reading — a view that rounds its own numbers has invented a second grid, and
+-- one that forgets gets a Lua error from `space()` instead of a layout.
+local BASE = 4
+
+local function snap(value) return math.max(BASE, math.floor(value / BASE) * BASE) end
+
+-- The surface being drawn on, resolved and returned: the host's
+-- `module.viewport` (a browser) or `module.inputs` (Canvas), else the fallback
+-- the view passes, else the authoring size. A Spore handed a surface directly
+-- (a document pane, a test) calls this instead of declaring host inputs it does
+-- not own. Both values come back on the 4px base, so they are legal heights.
 function ui.viewport(width, height)
-  ui.viewport_width = tonumber(width)
-  ui.viewport_height = tonumber(height)
+  local host = module and (module.viewport or module.inputs)
+  local w = (host and tonumber(host.width)) or tonumber(width) or ui.viewport_width or 1200
+  local h = (host and tonumber(host.height)) or tonumber(height) or ui.viewport_height or 1800
+  ui.viewport_width, ui.viewport_height = snap(w), snap(h)
+  return ui.viewport_width, ui.viewport_height
 end
 
 -- One pixel horizontally and one vertically, for the surface actually on
@@ -1661,8 +1679,7 @@ end
 -- surface, so horizontal and vertical density differ on every window that is
 -- not square, and a text size is a pixel count while a position is a fraction.
 --
--- The size comes from `module.inputs`, which a widget module declares. A
--- document Spore does not, so it may pass `ui.viewport(w, h)` itself; absent
+-- The size comes from `ui.viewport()`, which resolves the host's window; absent
 -- both, the layout assumes a portrait document surface and says so here rather
 -- than silently shrinking with the window.
 local function context(theme)

@@ -17,8 +17,10 @@ complete fixture.
 | `module.theme` | the type scale and radius tokens |
 | `module.inputs.graph_surface = true` | the host can place a `canvas.host_resource`; with it, `graph.resource` becomes a GPU surface instead of marks |
 
-The view calls `ui.viewport(w, h)` once with the resolved size because that is
-how this library hands the one-pass layout its surface.
+The view calls `ui.viewport(w, h)` once with its authoring size as the fallback.
+The library resolves the host's window (or the fallback) and hands back the size
+on the 4px layout grid: a browser window of 937px is not a legal layout height,
+and a view that rounded its own numbers would be inventing a second grid.
 
 ## Snapshot
 

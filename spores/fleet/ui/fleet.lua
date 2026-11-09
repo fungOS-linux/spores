@@ -55,15 +55,11 @@ local function table_node(spec, props)
   return ui.table(props)
 end
 
--- `ui.viewport` is a setter in this library, not a getter: the host's size has to
--- be read here and then handed to the one-pass layout. Reading `module.viewport`
--- as well as `module.inputs` covers Canvas (inputs) and the preview/browser host
--- (viewport), and the fallback is the authoring size.
+-- The library owns the reading of the host's window, and returns it already on
+-- the 4px layout grid: a browser window of 937px is not a legal height, and a
+-- view that rounded its own numbers would be inventing a second grid.
 local function use_viewport()
-  local host = _G.module and (_G.module.viewport or _G.module.inputs)
-  W = tonumber(host and host.width) or W
-  H = tonumber(host and host.height) or H
-  ui.viewport(W, H)
+  W, H = ui.viewport(W, H)
 end
 
 function M.render(snapshot)
