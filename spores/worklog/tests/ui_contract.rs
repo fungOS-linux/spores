@@ -134,11 +134,33 @@ fn page_draws_the_served_scene() {
         return;
     };
 
+    // A log long enough to scroll: the mock has five events, and a page that fits
+    // on one screen cannot exercise the wheel. This says the same thing the page
+    // will be asked — forty events, windowed.
+    let snapshot = std::env::temp_dir().join(format!("worklog-page-{}.lua", std::process::id()));
+    let loader = format!(
+        "local mock = dofile([[{}]])\n\
+         local events = {{}}\n\
+         for index = 1, 40 do\n\
+           local source = mock.events[(index - 1) % #mock.events + 1]\n\
+           local copy = {{}}\n\
+           for key, value in pairs(source) do copy[key] = value end\n\
+           copy.id = \"e\" .. index\n\
+           copy.summary = \"event \" .. index .. \": \" .. source.summary\n\
+           copy.selected = false\n\
+           events[index] = copy\n\
+         end\n\
+         return {{ title = mock.title, sort = mock.sort, sources = mock.sources,\n\
+           counts = {{ total = 40, today = 4 }}, events = events }}\n",
+        spore_dir().join("examples/worklog_mock.lua").display()
+    );
+    std::fs::write(&snapshot, loader).expect("write snapshot");
+
     let scene = std::env::temp_dir().join(format!("worklog-page-{}.json", std::process::id()));
     let render = Command::new(lua)
         .arg("../../tools/shot.lua")
         .arg("ui/worklog.lua")
-        .arg("examples/worklog_mock.lua")
+        .arg(&snapshot)
         .arg("../themes/graphite.lua")
         .arg(&scene)
         .arg("1182")
@@ -147,6 +169,7 @@ fn page_draws_the_served_scene() {
         .env("FUNGOS_SDK", &sdk)
         .output()
         .expect("run lua");
+    let _ = std::fs::remove_file(&snapshot);
     assert!(
         render.status.success(),
         "scene render failed:\n{}\n{}",

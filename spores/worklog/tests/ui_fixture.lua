@@ -298,6 +298,19 @@ render(snapshot)
 assert(ids_drawn()["event-hover-2"], "the hovered row is not lit")
 _G.module.hover = nil
 
+-- Search: the host owns the text, the view decides what matches, because what a
+-- hit is is a fact about the events. A filtered page also has to say how much it
+-- kept — "1–20 of 40" over a list of three reads as thirty-seven losses.
+_G.module.query = "spores-42"
+local found = render(snapshot)
+assert(found:find("match", 1, true), "a filtered list should say how much it kept")
+assert(found:find("spores-42", 1, true), "the matching events are not drawn")
+assert(not found:find("Render the worklog", 1, true), "a non-matching summary was drawn")
+_G.module.query = "nothing-matches-this"
+local none = render(snapshot)
+assert(none:find("Nothing matches", 1, true), "an empty result should say so, not look like an empty log")
+_G.module.query = nil
+
 -- A short surface: the view cannot ask for a size, so it has to survive one.
 -- Rows and the detail column are both computed from the height it was handed.
 view = { width = 1182, height = 797 }
@@ -320,7 +333,8 @@ drawn = { rects = {}, texts = {} }
 local rendered, render_error = pcall(worklog.render, snapshot)
 assert(rendered, "render crashed without widget.hit: " .. tostring(render_error))
 assert(#drawn.texts > 0, "the no-hit host drew nothing")
-assert(#worklog.pending_hits == worklog.rows_drawn, "every drawn row should stay addressable")
+assert(#worklog.pending_hits == worklog.rows_drawn + 1,
+  "every drawn row, and the search field, should stay addressable")
 
 local delivered = nil
 _G.widget = { hit = function(spec) delivered = spec end }

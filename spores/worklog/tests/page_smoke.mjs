@@ -1,12 +1,12 @@
-// Does the browser page actually draw the document the host serves?
+// Does the browser page actually work — draw, search, hover, scroll?
 //
 //   node tests/page_smoke.mjs <scene.json>
 //
-// The page shipped once without ever being executed — it read `scene.nodes` off a
-// document that was a bare array — and the only thing that noticed was the
-// person looking at an empty window. This runs the real `<script>` out of
-// `web/index.html` against a recording canvas and a `fetch` that answers with a
-// real scene, so a page that throws shows up as a failed test instead.
+// The page shipped once without ever being executed, so this runs the real
+// `<script>` out of `web/index.html` against a recording canvas, a stub input and
+// a `fetch` that answers with a real scene. It checks the two things a page can
+// get wrong without anyone noticing: drawing nothing, and drawing again when
+// nothing changed.
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
@@ -24,6 +24,11 @@ if (!match) {
   process.exit(1);
 }
 
+const WIDTH = 1182, HEIGHT = 1569;
+const sceneText = readFileSync(scene_path, 'utf8');
+const scene = JSON.parse(sceneText);
+const ETAG = '"smoke"';
+
 const drawn = { rects: 0, texts: [], blits: 0 };
 const recorder = () => ({
   setTransform() {}, clearRect() {}, beginPath() {}, fill() {},
@@ -35,66 +40,87 @@ const recorder = () => ({
 // The page paints off-screen and blits; a blit is one repaint, so counting them
 // is the clearest answer to "did this poll redraw anything".
 const blitter = { setTransform() {}, clearRect() {}, drawImage() { drawn.blits += 1; } };
-const canvas = { width: 0, height: 0, style: {}, getContext: () => blitter };
-const status = { textContent: 'loading' };
 
-const scene = readFileSync(scene_path, 'utf8');
-const ETAG = '"smoke"';
+function element(extra = {}) {
+  const handlers = {};
+  return {
+    width: 0, height: 0, style: {}, value: '',
+    getContext: () => blitter,
+    addEventListener: (type, fn) => { handlers[type] = fn; },
+    fire: (type, event) => { if (handlers[type]) handlers[type](event); },
+    ...extra,
+  };
+}
+
+const canvas = element();
+const input = element();
+const status = { textContent: 'loading' };
+const listeners = {};
+const seen = [];
 let requests = 0;
 let tick = null;
+
+// A scene that echoes the host state back, so a request that carried a query,
+// a hover or an offset produces different bytes to draw.
+const echo = (params) => {
+  const copy = JSON.parse(sceneText);
+  copy.nodes.push({
+    id: `echo-${params.q || ''}-${params.hover || ''}-${params.offset || ''}`,
+    type: 'text', ink: 'muted', text: '',
+    transform: { translation: [0, 0, 0], scale: [1, 1, 1] }, px: 1,
+  });
+  return JSON.stringify(copy);
+};
+
 const sandbox = {
   document: {
-    getElementById: (id) => (id === 'scene' ? canvas : status),
+    getElementById: (id) => ({ scene: canvas, q: input, status })[id],
     createElement: () => ({ width: 0, height: 0, getContext: () => recorder() }),
   },
   window: { devicePixelRatio: 2 },
-  innerWidth: 1182,
-  innerHeight: 1569,
-  addEventListener() {},
-  // The page polls; the test drives the poll by hand instead of waiting.
+  innerWidth: WIDTH,
+  innerHeight: HEIGHT,
+  addEventListener: (type, fn) => { listeners[type] = fn; },
+  // The page polls and debounces; the test drives both instead of waiting.
   setInterval: (fn) => { tick = fn; return 0; },
-  setTimeout: () => 0,
-  clearTimeout() {},
+  setTimeout: (fn, ms) => setTimeout(fn, 0),
+  clearTimeout: (id) => clearTimeout(id),
+  URLSearchParams, URL, JSON, Date, Math, parseInt, console,
   fetch: async (url, options) => {
     requests += 1;
-    // Two polls with nothing new, in the two shapes a browser can produce them:
-    // a revalidated 304, and a plain 200 whose bytes are the ones already on
-    // screen (the browser dropped the conditional header, which is how this
-    // shipped flickering in the first place).
-    const revalidating = (options?.headers?.['if-none-match'] || null) === ETAG;
-    if (requests === 2 && revalidating) {
+    const params = Object.fromEntries(new URL(url, 'https://worklog.myc/').searchParams);
+    seen.push(params);
+    const headers = { get: (name) => (name.toLowerCase() === 'etag' ? ETAG : null) };
+    if (requests === 2) {
+      // The revalidated shape: a 304 with nothing to draw.
       return {
-        ok: true, status: 304,
-        headers: { get: (name) => (name.toLowerCase() === 'etag' ? ETAG : null) },
+        ok: true, status: 304, headers,
         json: async () => { throw new Error('304 has no body'); },
         text: async () => '',
       };
     }
-    return {
-      ok: true, status: 200,
-      headers: { get: (name) => (name.toLowerCase() === 'etag' ? ETAG : null) },
-      json: async () => JSON.parse(scene),
-      text: async () => scene,
-    };
+    // The third poll is a 200 carrying the bytes already on screen — the shape
+    // that shipped flickering, when the browser dropped the conditional header.
+    // From the fourth request on the scene echoes the host state, so an
+    // interaction produces something new to draw.
+    const body = requests >= 4 ? echo(params) : sceneText;
+    return { ok: true, status: 200, headers, json: async () => JSON.parse(body), text: async () => body };
   },
-  console, Date, Math, parseInt, JSON,
 };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 vm.runInContext(match[1], sandbox);
-// `refresh()` is async: let its fetch and draw settle before looking.
-const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
 await settle();
 
 const problems = [];
-const firstPaint = { rects: drawn.rects, texts: drawn.texts.length, blits: drawn.blits };
+const first = { rects: drawn.rects, texts: drawn.texts.length, blits: drawn.blits };
 if (drawn.texts.length === 0) problems.push('the page drew no text');
 if (drawn.rects === 0) problems.push('the page drew no rects');
 if (drawn.blits === 0) problems.push('the page never blitted a frame');
 if (!/nodes/.test(status.textContent)) problems.push(`status is not a node count: ${status.textContent}`);
-if (!drawn.texts.some((entry) => entry.text === 'WORKLOG')) {
-  problems.push('the masthead is missing');
-}
+if (!drawn.texts.some((entry) => entry.text === 'WORKLOG')) problems.push('the masthead is missing');
 
 // Polling an unchanged scene must not repaint it, whichever way the poll comes
 // back. A page that clears and redraws on a repeat is the flicker this guards.
@@ -105,16 +131,48 @@ if (tick) {
   await settle();
 }
 if (requests < 3) problems.push(`the poll never ran (${requests} requests)`);
-if (drawn.blits !== firstPaint.blits || drawn.texts.length !== firstPaint.texts || drawn.rects !== firstPaint.rects) {
-  problems.push(
-    `the page repainted an unchanged scene: ${firstPaint.blits} paint(s) then ${drawn.blits}`);
+if (drawn.blits !== first.blits || drawn.texts.length !== first.texts || drawn.rects !== first.rects) {
+  problems.push(`the page repainted an unchanged scene: ${first.blits} paint(s) then ${drawn.blits}`);
 }
 
-// A rect drawn at the far edge, or text off the surface, is the same class of
-// defect the Lua fixture guards: the browser is the one host nobody can inspect
-// by reading the scene.
+// Search: typing asks the host for the query, and the answer is drawn.
+input.value = 'soil';
+input.fire('input');
+await settle();
+if (seen.at(-1)?.q !== 'soil') problems.push(`typing did not reach the host: ${JSON.stringify(seen.at(-1))}`);
+if (drawn.blits !== first.blits + 1) problems.push('a search result was not drawn');
+
+// Hover: the pointer names a row, the host returns the frame with it lit.
+const row = (scene.hits || []).find((hit) => /^event-\d+$/.test(hit.id));
+if (!row) {
+  problems.push('the scene carries no row hit targets');
+} else {
+  canvas.fire('mousemove', {
+    clientX: (row.x + 4) / 8 * WIDTH + 4,
+    clientY: (4 - row.y) / 8 * HEIGHT + 4,
+  });
+  await settle();
+  if (seen.at(-1)?.hover !== row.id) {
+    problems.push(`hovering a row did not report it: ${JSON.stringify(seen.at(-1))}`);
+  }
+}
+
+// Scroll: a wheel notch is pixels, and it goes to the host that windows the log.
+// A log that fits on one page has nowhere to go, which is also worth asserting.
+const scrollable = Number(scene.meta?.total) > Number(scene.meta?.shown);
+const before = seen.length;
+canvas.fire('wheel', { deltaY: 210, preventDefault() {} });
+await settle();
+if (scrollable) {
+  if (Number(seen.at(-1)?.offset) !== 210) {
+    problems.push(`the wheel did not scroll: ${JSON.stringify(seen.at(-1))}`);
+  }
+} else if (seen.length !== before) {
+  problems.push('the wheel scrolled a log that fits on one page');
+}
+
 for (const entry of drawn.texts) {
-  if (!(entry.x >= -0.5 && entry.x <= 1182.5 && entry.y >= -0.5 && entry.y <= 1569.5)) {
+  if (!(entry.x >= -0.5 && entry.x <= WIDTH + 0.5 && entry.y >= -0.5 && entry.y <= HEIGHT + 0.5)) {
     problems.push(`text outside the window: ${entry.text} at ${entry.x},${entry.y}`);
   }
 }
@@ -123,4 +181,5 @@ if (problems.length) {
   console.error(problems.join('\n'));
   process.exit(1);
 }
-console.log(`page: ok — ${drawn.blits} blit, ${drawn.rects} rects, ${drawn.texts.length} texts`);
+console.log(`page: ok — ${drawn.blits} blits, ${drawn.rects} rects, ${drawn.texts.length} texts, ` +
+  `search · hover · ${scrollable ? 'scroll' : 'no-scroll'} round-trip`);

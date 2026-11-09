@@ -1,16 +1,25 @@
 -- Render a Spore view to a scene document without a compositor.
 --
 --   lua tools/shot.lua <view.lua> <snapshot.lua> <theme.lua> <out.json> [w] [h]
+--                     [--query=<text>] [--scroll=<px>] [--hover=<id>]
 --
 -- A preview tool, not a host: it provides the same `canvas` ABI Canvas does,
--- resolves `require` for the SDK, and nothing else. Delete it the day a host can
--- render a view headlessly.
+-- resolves `require` for the SDK, and nothing else. The flags are the host state
+-- a view is allowed to read — a query, a scroll offset, the control under the
+-- pointer — so the picture a page shows can be asked for from a shell.
+local positional, flags = {}, {}
+for index = 1, #arg do
+  local key, value = arg[index]:match("^%-%-([%w_]+)=(.*)$")
+  if key then flags[key] = value else positional[#positional + 1] = arg[index] end
+end
+
 local view_path, snapshot_path, theme_path, out_path =
-  arg[1], arg[2], arg[3], arg[4]
-local width, height = tonumber(arg[5]) or 1200, tonumber(arg[6]) or 44
+  positional[1], positional[2], positional[3], positional[4]
+local width, height = tonumber(positional[5]) or 1200, tonumber(positional[6]) or 44
 
 assert(view_path and snapshot_path and theme_path and out_path,
-  "usage: lua tools/shot.lua <view.lua> <snapshot.lua> <theme.lua> <out.json> [w] [h]")
+  "usage: lua tools/shot.lua <view.lua> <snapshot.lua> <theme.lua> <out.json> [w] [h]"
+  .. " [--query=<text>] [--scroll=<px>] [--hover=<id>]")
 
 local theme = dofile(theme_path)
 local inks = theme.inks or {}
@@ -27,6 +36,7 @@ local function hex(value)
 end
 
 local prims = {}
+local hits, presses = {}, {}
 _G.canvas = {
   rect = function(s)
     prims[#prims + 1] = { type = "rect", id = s.id, ink = s.ink,
@@ -39,12 +49,20 @@ _G.canvas = {
       px = (s.scale[1] or 1) * (TYPE.body or 16) * 1.25 }
   end,
 }
-_G.widget = { hit = function() end }
+_G.widget = {
+  hit = function(s)
+    hits[#hits + 1] = { id = s.id, x = s.x, y = s.y, width = s.width, height = s.height }
+  end,
+  button = function(s) presses[#presses + 1] = s end,
+}
 _G.module = {
   viewport = { width = width, height = height },
   theme = { micro = TYPE.micro, small = TYPE.small, body = TYPE.body, large = TYPE.large,
     radius = theme.radius or 10 },
 }
+if flags.query then _G.module.query = flags.query end
+if flags.scroll then _G.module.scroll = { offset = tonumber(flags.scroll) or 0 } end
+if flags.hover then _G.module.hover = flags.hover end
 
 -- The SDK is a build-time import in a package; here it is a checkout.
 local sdk = os.getenv("FUNGOS_SDK") or (os.getenv("HOME") .. "/src/fungos-sdk")
@@ -106,8 +124,25 @@ end
 
 local parts = {}
 for _, node in ipairs(prims) do parts[#parts + 1] = node_json(node) end
+
+-- The hit targets and the window the view drew are what a page needs to be
+-- interactive: where a row is, and how far the log goes. They ride with the
+-- document because they are answers about this exact frame.
+local function hit_json(entry)
+  return string.format('{"id":%s,"x":%.5f,"y":%.5f,"width":%.5f,"height":%.5f}',
+    quote(entry.id), entry.x, entry.y, entry.width, entry.height)
+end
+local hit_parts = {}
+for _, entry in ipairs(hits) do hit_parts[#hit_parts + 1] = hit_json(entry) end
+
+local window = view.window or {}
+local meta = string.format('{"row_height":%.5f,"first":%d,"shown":%d,"total":%d,"presses":%d}',
+  tonumber(view.row_height) or 0, tonumber(window.first) or 0, tonumber(window.shown) or 0,
+  tonumber(window.total) or 0, #presses)
+
 local file = assert(io.open(out_path, "wb"))
-file:write('{"kind":"scene","schema":1,"nodes":[', table.concat(parts, ","), "]}")
+file:write('{"kind":"scene","schema":1,"nodes":[', table.concat(parts, ","),
+  '],"hits":[', table.concat(hit_parts, ","), '],"meta":', meta, "}")
 file:close()
 print(string.format("%s: %d primitives, %d themed -> %s",
   theme.name or "theme", #prims, themed, out_path))
