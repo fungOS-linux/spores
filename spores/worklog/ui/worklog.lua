@@ -139,6 +139,22 @@ local function wrap_text(value, per_line)
   return lines
 end
 
+-- One mark and one colour per producer, so a row says where it came from without
+-- spending a column on the word. These are characters the system font has: a
+-- Nerd Font icon would be prettier and does not draw here, because `canvas.text`
+-- carries no font and the host's own font has no fallback for private-use
+-- codepoints (measured: every nerd glyph renders as a tofu box).
+local SOURCE_MARK = {
+  marbles = { mark = "\u{25c6}", ink = "primary" },     -- the tracker's marble
+  github = { mark = "#", ink = "success" },             -- the number a PR is known by
+  confluence = { mark = "\u{2261}", ink = "warning" }, -- a page of lines
+  unibus = { mark = "\u{25e6}", ink = "info" },
+}
+
+local function source_mark(source)
+  return SOURCE_MARK[tostring(source or "")] or { mark = "\u{2022}", ink = "muted" }
+end
+
 -- Characters a line holds at this size. The host measures text; a view that
 -- cannot ask must estimate. Measured off a real Canvas frame — "listeners as"
 -- and "myceliumd/services.r" at 15 px, and the timestamp line at 27 chars — the
@@ -419,14 +435,18 @@ local function row_segments(event, show_source)
   -- Column widths are measured from the scale, not remembered from it: 92 px of
   -- kind column is right for a 12 px body and wrong for a 15 px one.
   local segments = {
-    { key = "kind", text = kind_word(event.kind), ink = "primary", size = TYPE.micro,
+    -- Neutral caps: colour in a row belongs to the producer, and a kind that
+    -- also changed colour would be a second opinion about what green means.
+    { key = "kind", text = kind_word(event.kind), ink = "muted", size = TYPE.micro,
       w = measure_caps("CHANGED", TYPE.micro) + GAP.sm, line = 1 },
   }
   -- One source means the column is the same word on every row: it costs space
   -- and tells the reader nothing.
   if show_source then
-    segments[#segments + 1] = { key = "source", text = event.source or "", ink = "muted", size = TYPE.micro,
-      w = measure("github", TYPE.micro) + GAP.sm, line = 1 }
+    -- The mark says which producer, in the colour that producer owns.
+    local mark = source_mark(event.source)
+    segments[#segments + 1] = { key = "source", text = mark.mark, ink = mark.ink, size = TYPE.micro,
+      w = measure_caps(mark.mark, TYPE.micro) + GAP.sm, line = 1 }
   end
   segments[#segments + 1] = { key = "actor", text = event.actor or "", ink = "muted", size = TYPE.micro,
     w = measure("ajmwagar", TYPE.micro) + GAP.md, line = 1 }
@@ -517,6 +537,11 @@ local function locator_label(locator)
   if rest then
     return rest:match("([^/]+)$") or rest
   end
+  -- A Confluence locator is `<space>/<page-id>` with no `//`: the space is the
+  -- part a reader recognises, so it survives and the id is appended the way a
+  -- GitHub number is.
+  local space, id = value:match("^confluence:([^/]+)/(.+)$")
+  if space then return space .. "#" .. id end
   local repo, number = value:match("^(.+)#(%d+)$")
   if repo then return (repo:match("([^/]+)$") or repo) .. "#" .. number end
   return value
@@ -564,7 +589,11 @@ local function sources(snapshot)
   local rows = snapshot.sources or {}
   local parts = {}
   for _, source in ipairs(rows) do
-    parts[#parts + 1] = string.format("%s %d", source.label or source.id or "?", source.count or 0)
+    -- The legend carries the same mark the rows carry, so the mapping is read
+    -- once and not guessed from a colour.
+    local mark = source_mark(source.id)
+    parts[#parts + 1] = string.format("%s %s %d", mark.mark,
+      source.label or source.id or "?", source.count or 0)
   end
   return table.concat(parts, "  ·  ")
 end

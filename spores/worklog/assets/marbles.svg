@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Marbles.
+
+  Three marbles resting against each other: a rack, not a logo-shaped swirl. The
+  first attempt drew a circle with a twist inside it and read as a copyright
+  symbol at every size, which is the wrong thing for a tracker to look like.
+
+  Filled discs, no strokes, so it holds at 16 px in a log row: one big marble and
+  two smaller ones, the big one inheriting full strength and the pair behind it
+  held back so the mark has a front and a back. `currentColor` throughout, so a
+  theme that moves its accent moves the mark with it.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"
+     fill="currentColor" role="img" aria-label="Marbles">
+  <circle cx="7.1" cy="16.4" r="4.5" opacity="0.62"/>
+  <circle cx="16.9" cy="16.4" r="4.5" opacity="0.82"/>
+  <circle cx="12" cy="8.6" r="5.6"/>
+</svg>
