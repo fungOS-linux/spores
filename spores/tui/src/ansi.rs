@@ -85,9 +85,8 @@ impl Backend for AnsiBackend {
             // omitted. A frame here is a complete repaint of a screen the host
             // just cleared, so an omitted run is blank and has to be written
             // as spaces — otherwise the text would be split by invisible gaps.
-            let gap = previous.and_then(|(px, py)| {
-                (py == y && px + 1 < x).then(|| usize::from(x - px - 1))
-            });
+            let gap = previous
+                .and_then(|(px, py)| (py == y && px + 1 < x).then(|| usize::from(x - px - 1)));
             if let Some(width) = gap {
                 self.out.extend_from_slice(b"\x1b[0m");
                 self.out.extend(std::iter::repeat_n(b' ', width));

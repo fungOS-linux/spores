@@ -545,7 +545,10 @@ fn decode(response: Response) -> Result<Value, String> {
         } else {
             ""
         };
-        return Err(format!("spotify: HTTP {}{hint}: {message}", response.status));
+        return Err(format!(
+            "spotify: HTTP {}{hint}: {message}",
+            response.status
+        ));
     }
     if response.body.is_empty() {
         return Ok(Value::Null);
@@ -595,7 +598,9 @@ mod tests {
     impl Http for MockHttp {
         fn fetch(&mut self, request: Request) -> Result<Response, String> {
             self.requests.push(request);
-            self.responses.pop_front().ok_or_else(|| "no response".to_string())
+            self.responses
+                .pop_front()
+                .ok_or_else(|| "no response".to_string())
         }
     }
 
@@ -645,27 +650,27 @@ mod tests {
 
     #[test]
     fn play_a_track_sends_uris() {
-        let mut http = MockHttp::new([
-            (200, devices_reply(true)),
-            (204, Value::Null),
-        ]);
-        run(&args("--device raspotify play spotify:track:abc"), &mut http).unwrap();
-        let body: Value = serde_json::from_slice(http.requests[1].body.as_deref().unwrap()).unwrap();
+        let mut http = MockHttp::new([(200, devices_reply(true)), (204, Value::Null)]);
+        run(
+            &args("--device raspotify play spotify:track:abc"),
+            &mut http,
+        )
+        .unwrap();
+        let body: Value =
+            serde_json::from_slice(http.requests[1].body.as_deref().unwrap()).unwrap();
         assert_eq!(body, json!({ "uris": ["spotify:track:abc"] }));
     }
 
     #[test]
     fn an_open_spotify_link_becomes_a_context_uri() {
-        let mut http = MockHttp::new([
-            (200, devices_reply(true)),
-            (204, Value::Null),
-        ]);
+        let mut http = MockHttp::new([(200, devices_reply(true)), (204, Value::Null)]);
         run(
             &args("--device raspotify play https://open.spotify.com/album/1DFixLWuPkv3KT3TnV35m3?si=x"),
             &mut http,
         )
         .unwrap();
-        let body: Value = serde_json::from_slice(http.requests[1].body.as_deref().unwrap()).unwrap();
+        let body: Value =
+            serde_json::from_slice(http.requests[1].body.as_deref().unwrap()).unwrap();
         assert_eq!(
             body,
             json!({ "context_uri": "spotify:album:1DFixLWuPkv3KT3TnV35m3" })
@@ -718,7 +723,10 @@ mod tests {
             }),
         )]);
         let output = run(&args("status"), &mut http).unwrap();
-        assert!(output.contains("device: raspotify (home-pi) (40%)"), "{output}");
+        assert!(
+            output.contains("device: raspotify (home-pi) (40%)"),
+            "{output}"
+        );
         assert!(output.contains("state: playing 1:23 / 3:45"), "{output}");
         assert!(output.contains("track: Dead Wax — The Needle"), "{output}");
         assert!(output.contains("repeat: context"), "{output}");
@@ -762,10 +770,7 @@ mod tests {
 
     #[test]
     fn transfer_picks_by_substring() {
-        let mut http = MockHttp::new([
-            (200, devices_reply(false)),
-            (204, Value::Null),
-        ]);
+        let mut http = MockHttp::new([(200, devices_reply(false)), (204, Value::Null)]);
         let output = run(&args("transfer home-pi"), &mut http).unwrap();
         assert_eq!(output, "transferred to raspotify (home-pi)");
         assert_eq!(http.requests[1].url, "https://api.spotify.com/v1/me/player");

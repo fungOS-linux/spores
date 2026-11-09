@@ -142,7 +142,11 @@ impl App {
     }
 
     fn draw_log(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
-        let lines: Vec<Line> = self.log.iter().map(|line| Line::from(line.clone())).collect();
+        let lines: Vec<Line> = self
+            .log
+            .iter()
+            .map(|line| Line::from(line.clone()))
+            .collect();
         let paragraph = Paragraph::new(lines)
             .block(Block::bordered().title(" log "))
             .wrap(Wrap { trim: true });
@@ -203,7 +207,10 @@ mod tests {
     #[test]
     fn frames_are_ansi_and_utf8() {
         let frame = App::preview(40, 12, 3).render().unwrap();
-        assert!(frame.contains('\x1b'), "a frame must carry escape sequences");
+        assert!(
+            frame.contains('\x1b'),
+            "a frame must carry escape sequences"
+        );
         assert!(frame.contains("\x1b["), "{frame}");
     }
 

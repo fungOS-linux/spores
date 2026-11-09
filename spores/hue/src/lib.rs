@@ -131,7 +131,8 @@ impl Command {
             });
         }
 
-        let bridge = bridge.ok_or("--bridge is required, for example --bridge http://192.168.1.10")?;
+        let bridge =
+            bridge.ok_or("--bridge is required, for example --bridge http://192.168.1.10")?;
         if !(bridge.starts_with("http://") || bridge.starts_with("https://")) {
             return Err("bridge must be an absolute http(s) URL".into());
         }
@@ -298,7 +299,11 @@ impl Command {
         if self.json {
             return Ok(pretty(&response));
         }
-        Ok(format!("{}: {}", self.label(), if on { "on" } else { "off" }))
+        Ok(format!(
+            "{}: {}",
+            self.label(),
+            if on { "on" } else { "off" }
+        ))
     }
 
     fn toggle(&self, http: &mut dyn Http) -> Result<String, String> {
@@ -332,7 +337,10 @@ impl Command {
         if self.json {
             return Ok(pretty(&response));
         }
-        Ok(format!("{}: #{r:02x}{g:02x}{b:02x} -> xy ({x}, {y})", self.label()))
+        Ok(format!(
+            "{}: #{r:02x}{g:02x}{b:02x} -> xy ({x}, {y})",
+            self.label()
+        ))
     }
 
     fn recall_scene(&self, http: &mut dyn Http, name: &str) -> Result<String, String> {
@@ -447,7 +455,11 @@ fn decode(response: Response) -> Result<Value, String> {
 fn sorted(value: &Value) -> Vec<(String, Value)> {
     let mut entries: Vec<(String, Value)> = value
         .as_object()
-        .map(|map| map.iter().map(|(key, value)| (key.clone(), value.clone())).collect())
+        .map(|map| {
+            map.iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect()
+        })
         .unwrap_or_default();
     entries.sort_by_key(|(key, _)| key.parse::<u64>().unwrap_or(u64::MAX));
     entries
@@ -493,7 +505,9 @@ mod tests {
     impl Http for MockHttp {
         fn fetch(&mut self, request: Request) -> Result<Response, String> {
             self.requests.push(request);
-            self.responses.pop_front().ok_or_else(|| "no response".to_string())
+            self.responses
+                .pop_front()
+                .ok_or_else(|| "no response".to_string())
         }
     }
 
@@ -515,7 +529,10 @@ mod tests {
         assert_eq!(output, "group 0: on");
         let request = &http.requests[0];
         assert_eq!(request.method, Method::Put);
-        assert_eq!(request.url, "http://bridge.local/api/testkey/groups/0/action");
+        assert_eq!(
+            request.url,
+            "http://bridge.local/api/testkey/groups/0/action"
+        );
         assert_eq!(request.body.as_deref(), Some(br#"{"on":true}"#.as_slice()));
         assert!(
             request
@@ -535,7 +552,10 @@ mod tests {
             http.requests[0].url,
             "http://bridge.local/api/testkey/lights/3/state"
         );
-        assert_eq!(http.requests[0].body.as_deref(), Some(br#"{"on":false}"#.as_slice()));
+        assert_eq!(
+            http.requests[0].body.as_deref(),
+            Some(br#"{"on":false}"#.as_slice())
+        );
     }
 
     #[test]
@@ -598,7 +618,8 @@ mod tests {
     fn colour_is_converted_to_xy() {
         let mut http = MockHttp::new([json!([{ "success": {} }])]);
         run(&base("color #ff0000"), &mut http).unwrap();
-        let body: Value = serde_json::from_slice(http.requests[0].body.as_deref().unwrap()).unwrap();
+        let body: Value =
+            serde_json::from_slice(http.requests[0].body.as_deref().unwrap()).unwrap();
         let xy = body.get("xy").unwrap().as_array().unwrap();
         assert!(xy[0].as_f64().unwrap() > 0.6, "{body}");
         assert!(xy[1].as_f64().unwrap() < 0.4, "{body}");
