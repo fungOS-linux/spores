@@ -217,6 +217,47 @@ end
 assert(summary_lines >= 2, "the long summary was not wrapped into lines")
 assert(summary_lines <= 8, "the detail summary drew more lines than the column reserved: " .. summary_lines)
 
+-- Scrolling: the host owns the offset, the view windows the log to it. A wheel
+-- notch is pixels, and a view that ignored them would render the same first row
+-- no matter how far the reader scrolled.
+local function drawn_ids()
+  local ids = {}
+  for _, spec in ipairs(drawn.texts) do ids[tostring(spec.id)] = true end
+  for _, spec in ipairs(drawn.rects) do ids[tostring(spec.id)] = true end
+  return ids
+end
+
+-- A log longer than the window: with every event already visible there is
+-- nothing to scroll, so the fixture has to have more events than fit.
+local many = { title = "WORKLOG", counts = { total = 30, today = 3 },
+  sources = { { id = "marbles", label = "Marbles", count = 30 } }, events = {} }
+for index = 1, 30 do
+  local template = snapshot.events[(index - 1) % #snapshot.events + 1]
+  many.events[index] = {
+    id = "e" .. index, kind = template.kind, source = template.source,
+    actor = template.actor, summary = "event " .. index .. ": " .. template.summary,
+    subject = template.subject, age = template.age, at_text = template.at_text,
+    selected = index == 1, links = template.links,
+  }
+end
+
+_G.module.scroll = { offset = worklog.row_height * 3 }
+render(many)
+local scrolled = drawn_ids()
+assert(scrolled["event-4-summary"], "a scrolled window does not start at row 4")
+assert(not scrolled["event-1-summary"], "the first row is still drawn after scrolling")
+_G.module.scroll = { offset = worklog.row_height * 1000 }
+render(many)
+assert(drawn_ids()["event-30-summary"], "a scroll past the end does not clamp to the last page")
+_G.module.scroll = nil
+
+-- Hover: the id the host hit is the row under the pointer, so it is the row the
+-- view lights — no geometry guess of its own.
+_G.module.hover = "event-2"
+render(snapshot)
+assert(drawn_ids()["event-hover-2"], "the hovered row is not lit")
+_G.module.hover = nil
+
 -- The size the wall actually hands this surface. The view cannot ask for it, so
 -- it has to survive it: rows and the detail column are both computed from H.
 _G.module.viewport = { width = 1182, height = 797 }

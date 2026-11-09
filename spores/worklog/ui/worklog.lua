@@ -40,6 +40,22 @@ local function use_viewport()
 end
 
 local function theme() return (_G.module and _G.module.theme) or { body = 16, radius = 9.6 } end
+
+-- Input the host owns and the view merely reads. A module is re-executed for
+-- every render, so it cannot remember a scroll position of its own: the wheel
+-- moves the host's offset, the host hands it back here, and the view windows the
+-- log to it. `hover` is the id of the control under the pointer, or nil.
+local function scroll_offset()
+  local scroll = _G.module and _G.module.scroll
+  local offset = scroll and tonumber(scroll.offset)
+  if offset and offset > 0 then return offset end
+  return 0
+end
+
+local function hover_id()
+  local hover = _G.module and _G.module.hover
+  return type(hover) == "string" and hover or nil
+end
 local function base() return (theme().body or 16) end
 local function nx(px) return -4 + 8 * px / W end
 local function ny(px) return 4 - 8 * px / H end
@@ -209,6 +225,9 @@ M.chars_per_line = chars_per_line
 -- A row is one line plus its breathing room. The height is derived from the
 -- tallest thing on it (the summary, at body size) rather than picked.
 local ROW_H = (TYPE.body + 4) + GAP.sm * 2
+-- The row pitch is part of the contract: the host scrolls in pixels and the
+-- view turns them into rows, so both sides need the same number.
+M.row_height = ROW_H
 local CHROME = 120
 -- The detail column is a fixed slice of the surface: wide enough for a summary at
 -- title size, narrow enough to leave the list the room its rows need.
@@ -284,11 +303,24 @@ local function event_row(event, index, show_source)
   }
 end
 
-local function list(snapshot, shown, show_source)
+-- Which event the window starts at. The host owns the scroll offset and hands
+-- back a pixel value; the view turns it into a row, so a wheel notch that lands
+-- mid-row still shows a whole row rather than half of two.
+local function window_start(snapshot, shown)
+  local total = #(snapshot.events or {})
+  if total == 0 or shown <= 0 then return 1 end
+  local last_start = math.max(1, total - shown + 1)
+  local start = math.floor(scroll_offset() / ROW_H) + 1
+  return math.max(1, math.min(start, last_start))
+end
+
+local function list(snapshot, shown, show_source, first)
   local events = snapshot.events or {}
   local counts = snapshot.counts or {}
+  first = first or 1
+  local last = math.min(#events, first + shown - 1)
   local range = (#events == 0) and "0 of 0"
-    or string.format("1–%d of %d", shown, counts.total or #events)
+    or string.format("%d–%d of %d", first, last, counts.total or #events)
   local children = {
     {
       id = "worklog-head", kind = "container", layout = { direction = "row", height = 20 },
@@ -301,7 +333,7 @@ local function list(snapshot, shown, show_source)
   if #events == 0 then
     children[#children + 1] = label("worklog-empty", "Nothing has arrived yet.", TYPE.body, { height = 24 })
   end
-  for index = 1, shown do
+  for index = first, last do
     children[#children + 1] = event_row(events[index], index, show_source)
   end
   return { id = "worklog-list", kind = "container", layout = { flex_grow = 1, direction = "column", gap = 0 }, children = children }
@@ -350,6 +382,8 @@ local function tree(snapshot)
   local counts = snapshot.counts or {}
   local wide = W >= 620
   local show_source = #(snapshot.sources or {}) > 1
+  local shown = visible_count(snapshot)
+  local first = window_start(snapshot, shown)
   local root = {
     id = "worklog-root", kind = "container",
     layout = { width = W, height = H, direction = "column", gap = GAP.sm, padding = { top = GAP.md, right = GAP.md, bottom = GAP.md, left = GAP.md } },
@@ -375,12 +409,12 @@ local function tree(snapshot)
     root.children[#root.children + 1] = {
       id = "worklog-main", kind = "container", layout = { flex_grow = 1, direction = "row", gap = GAP.md },
       children = {
-        { id = "worklog-list-pane", kind = "container", layout = { width = list_w, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = GAP.sm, right = GAP.sm, bottom = GAP.sm, left = GAP.sm } }, children = { list(snapshot, visible_count(snapshot), show_source) } },
+        { id = "worklog-list-pane", kind = "container", layout = { width = list_w, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = GAP.sm, right = GAP.sm, bottom = GAP.sm, left = GAP.sm } }, children = { list(snapshot, shown, show_source, first) } },
         { id = "worklog-detail-pane", kind = "container", layout = { width = PANE_W, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = GAP.sm, right = GAP.md, bottom = GAP.sm, left = GAP.md } }, children = { detail(snapshot) } },
       },
     }
   else
-    root.children[#root.children + 1] = { id = "worklog-main", kind = "container", layout = { flex_grow = 1 }, children = { list(snapshot, visible_count(snapshot), show_source) } }
+    root.children[#root.children + 1] = { id = "worklog-main", kind = "container", layout = { flex_grow = 1 }, children = { list(snapshot, shown, show_source, first) } }
   end
   return root
 end
@@ -492,10 +526,17 @@ function M.render(snapshot)
   local detail_pane = find(laid, "worklog-detail-pane")
   if detail_pane then rect("worklog-detail-bg", detail_pane.rect.x, detail_pane.rect.y, detail_pane.rect.width, detail_pane.rect.height, "surface", 0.22, 10, Z_PANEL) end
 
-  for index = 1, shown do
+  local hovered = hover_id()
+  local first = window_start(snapshot, shown)
+  for index = first, first + shown - 1 do
     local row = find(laid, "event-" .. index)
     if row then
       rect("event-rule-" .. index, row.rect.x + 10, row.rect.y + row.rect.height - 1, row.rect.width - 20, 1, "muted", 0.05, 0, Z_PANEL)
+      -- Hover is the host's pointer, not a guess: the id it names is the control
+      -- it hit, so the row that lights up is the row under the cursor.
+      if hovered == ("event-" .. index) then
+        rect("event-hover-" .. index, row.rect.x, row.rect.y, row.rect.width, row.rect.height, "primary", 0.08, 6, Z_PANEL)
+      end
     end
   end
   local _, selected_index = selected_event(snapshot)
@@ -506,7 +547,7 @@ function M.render(snapshot)
 
   -- One line per event, drawn after its background so the highlight sits under
   -- the text it belongs to.
-  for index = 1, shown do
+  for index = first, first + shown - 1 do
     local row = find(laid, "event-" .. index)
     local segments = ROW_SEGMENTS[index]
     if row and segments and on_surface(row.rect) then
