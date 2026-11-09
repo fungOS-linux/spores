@@ -3,9 +3,9 @@
 `ui/rooms.lua` is the flat presenter for a shared room: a pure projection from
 one room snapshot to one Canvas scene. The same file renders three
 presentations of that snapshot: the full room, a compact room widget, and one
-shared screen in fullscreen. It is fixture-driven because the room module and
-`soil:room` do not exist yet. The same snapshot's `space` id is what the
-Holodeck presenter opens.
+shared screen in fullscreen. A live host supplies the snapshot through Canvas
+module text inputs; the reviewed fixture is only the headless fallback. The
+same snapshot's `space` id is what the Holodeck presenter opens.
 
 ## Entrypoint
 
@@ -33,8 +33,15 @@ The presentation comes from `snapshot.view`:
 
 One flat, string-keyed table:
 
+- `live` — `true` when a host supplied this snapshot; the fixture leaves it
+  absent.
 - `revision` — monotonic snapshot revision.
-- `view` — `mode` (`room`, `widget`) and `focus` (a screen id or `nil`).
+- `view` — `mode` (`room`, `widget`), `focus` (a screen id or `nil`) and
+  `selected` (the host's echo of the last scene selection).
+- `call` — `state` (`idle`, `starting`, `connected`, `muted`, `failed`),
+  `route`, `format`, `frame_ms`, `pid`, `frame_count`, `received_samples`,
+  `mic_rms`, `muted`, `error`. A live host owns these; the fixture may use the
+  local `module.select` sample instead.
 - `workspace` — `name`, `presence` (`connected`, `reconnecting`, `offline`).
 - `self` — `member`, `name`, `room`, `mic`.
 - `rooms[]` — `id`, `name`, `kind` (`voice`, `text`), `members`, `unread`, `vr`.
@@ -57,6 +64,19 @@ One flat, string-keyed table:
 Ids are opaque host-issued strings. The view never sees an address, SSRC, SDP,
 token or key.
 
+## Layout
+
+The composed `fungos.ui` library lays out in **logical pixels** and maps them
+onto Canvas's 8×8 scene. Canvas stamps the real surface size as
+`module.viewport`; the library reads it through `ui.viewport_size()`. The
+fixture supplies the same numbers through `module.inputs` so headless previews
+and older hosts keep working. A view that assumes a portrait page would put
+controls outside a wide room surface, which Canvas rejects as a whole module.
+
+Controls and host surfaces are asserted to stay inside the scene. Panels with a
+fixed column height use that height to pin the composer to the bottom, the way
+a chat client keeps its message field at the foot of the window.
+
 ## Actions
 
 Intent strings, with the payload in `body`:
@@ -69,16 +89,41 @@ Intent strings, with the payload in `body`:
 | `open-rooms` | — | open the rooms workspace from an empty widget |
 | `enter-holodeck` | `{ space = <id> }` | open the room in the VR presenter |
 | `address-agent` | `{ member = <id> }` | address the agent for the next turn |
+| `message-room` | — | focus the host's text field; `rooms.myc` sends the typed text back as `send-message` |
 | `share-surface` | — | ask the host to share one chosen surface |
 | `fullscreen-screen` | `{ id = <screen> }` | put that screen in fullscreen |
 | `exit-fullscreen` | — | leave fullscreen |
+| `join-call` | — | ask the host bridge to start the local Mac call |
+| `leave-call` | — | ask the host bridge to stop it |
+| `toggle-mic` | — | ask the host bridge to mute or unmute |
+| `request-agent` | — | host-visible marker for an addressed turn |
+| `call-request-*` | — | host-visible marker for start/stop/mute/unmute |
+| `request-holodeck` | — | host-visible marker for the VR handoff |
 
 `fullscreen-screen` and `exit-fullscreen` are view intents, not media calls. The
 host decides whether the screen is still live, updates `view.focus`, and owns the
 surface alias. The view never opens, captures, decodes or scales a surface.
 
-No action is routed yet: there is no module to receive it. The view never
-performs an action itself.
+With `soil:surface-import` granted, a screen is a host surface. Without it, the
+view draws a compact placeholder in the room and a centered stage in fullscreen;
+neither branch invents pixels or hides the missing capability behind a fake
+preview.
+
+All controls are **local** Canvas buttons: they carry no declared action route
+and do not publish to Unibus. A click re-renders the module with
+`module.event.target_id`; the view records its choice in `module.select`.
+
+A live click is a **bounded request marker**, not an optimistic final state.
+The marker is a disabled control (`call-request-start`, `call-request-stop`,
+`call-request-mute`, `call-request-unmute`, `request-holodeck`,
+`request-agent`) that `room-host` reads from the retained scene. The host acts,
+then publishes a snapshot whose `view.selected` omits the marker. The call
+panel therefore shows the real `starting`, `connected`, `muted` or `failed`
+state from the child process, not a painted guess.
+
+The fixture has no host, so it keeps the earlier optimistic `module.select`
+sample for call state. A live snapshot (`live = true`) ignores that remembered
+call choice and uses `snapshot.call`.
 
 ## Slots
 
@@ -91,7 +136,11 @@ The scene promises a host-surface id derived from each screen id
 (`share-current`, `quest-camera`) and the fixed `focus-screen` id for the
 fullscreen placement. Repeated controls carry explicit ids
 (`join-<room>`, `fullscreen-<screen>`); singleton controls use the action name.
-Room, member and message ids are data, not scene ids.
+The host depends on the fixed marker ids `call-request-*`, `request-holodeck`
+and `request-agent`, and on the `join-<room>` label `Here` for room selection.
+The persistent controls `join-call`, `toggle-mic` and `leave-call` are panel
+affordances; their mere presence is not a click. Room, member and message ids
+are data, not scene ids.
 
 ## Components
 
