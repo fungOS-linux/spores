@@ -41,7 +41,14 @@ local function hex(value)
 end
 
 local prims = {}
-local hits, presses = {}, {}
+local hits, presses = {}, 0
+-- Press regions travel with the scene. Canvas owns hit-testing, so a view states
+-- a rectangle and an intent; a host that can route the intent draws nothing for
+-- it. `tools/shot.lua` used to drop these, which is why a preview could not
+-- answer a click. The document now carries them and the page can.
+local function record_hit(spec)
+  if type(spec) == "table" then hits[#hits + 1] = spec end
+end
 _G.canvas = {
   rect = function(s)
     prims[#prims + 1] = { type = "rect", id = s.id, ink = s.ink,
@@ -55,10 +62,11 @@ _G.canvas = {
   end,
 }
 _G.widget = {
-  hit = function(s)
-    hits[#hits + 1] = { id = s.id, x = s.x, y = s.y, width = s.width, height = s.height }
+  hit = record_hit,
+  button = function(spec)
+    presses = presses + 1
+    record_hit(spec)
   end,
-  button = function(s) presses[#presses + 1] = s end,
 }
 _G.module = {
   viewport = { width = width, height = height },
@@ -137,15 +145,57 @@ end
 local parts = {}
 for _, node in ipairs(prims) do parts[#parts + 1] = node_json(node) end
 
--- The hit targets and the window the view drew are what a page needs to be
--- interactive: where a row is, and how far the log goes. They ride with the
--- document because they are answers about this exact frame.
-local function hit_json(entry)
-  return string.format('{"id":%s,"x":%.5f,"y":%.5f,"width":%.5f,"height":%.5f}',
-    quote(entry.id), entry.x, entry.y, entry.width, entry.height)
+-- A hit target is a rectangle plus an intent. The payload is the view's own, so
+-- it has to survive the document: strings, numbers, booleans and flat tables are
+-- enough to name a path and say what to do with it.
+local function json_value(value)
+  local kind = type(value)
+  if kind == "string" then
+    return quote(value)
+  elseif kind == "number" then
+    if value ~= value or value == math.huge or value == -math.huge then return "null" end
+    return string.format("%.17g", value)
+  elseif kind == "boolean" then
+    return tostring(value)
+  elseif kind == "table" then
+    local keys = {}
+    for key in pairs(value) do keys[#keys + 1] = key end
+    if #keys == 0 then return "{}" end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+    local array = true
+    for index, key in ipairs(keys) do
+      if key ~= index then array = false end
+    end
+    local out = {}
+    if array then
+      for _, key in ipairs(keys) do out[#out + 1] = json_value(value[key]) end
+      return "[" .. table.concat(out, ",") .. "]"
+    end
+    for _, key in ipairs(keys) do
+      out[#out + 1] = quote(tostring(key)) .. ":" .. json_value(value[key])
+    end
+    return "{" .. table.concat(out, ",") .. "}"
+  end
+  return "null"
 end
+
+local function hit_json(hit)
+  return "{" .. table.concat({
+    quote("id") .. ":" .. quote(hit.id or ""),
+    quote("label") .. ":" .. quote(hit.label or ""),
+    quote("action") .. ":" .. (hit.action and quote(hit.action) or "null"),
+    quote("body") .. ":" .. json_value(hit.body),
+    string.format('%s:%.6f', quote("x"), hit.x or 0),
+    string.format('%s:%.6f', quote("y"), hit.y or 0),
+    string.format('%s:%.6f', quote("width"), hit.width or 0),
+    string.format('%s:%.6f', quote("height"), hit.height or 0),
+    string.format('%s:%.6f', quote("w"), hit.width or 0),
+    string.format('%s:%.6f', quote("h"), hit.height or 0),
+  }, ",") .. "}"
+end
+
 local hit_parts = {}
-for _, entry in ipairs(hits) do hit_parts[#hit_parts + 1] = hit_json(entry) end
+for _, hit in ipairs(hits) do hit_parts[#hit_parts + 1] = hit_json(hit) end
 
 local window = view.window or {}
 -- What the frame *is*, as opposed to what it draws. Worklog publishes the row
@@ -156,7 +206,7 @@ local meta_table = {
   first = tonumber(window.first) or 0,
   shown = tonumber(window.shown) or 0,
   total = tonumber(window.total) or 0,
-  presses = #presses,
+  presses = presses,
 }
 if type(view.meta) == "table" then
   for key, value in pairs(view.meta) do meta_table[key] = value end
@@ -186,12 +236,5 @@ local file = assert(io.open(out_path, "wb"))
 file:write('{"kind":"scene","schema":1,"nodes":[', table.concat(parts, ","),
   '],"hits":[', table.concat(hit_parts, ","), '],"meta":', meta, "}")
 file:close()
-if #prims == 0 then
-  -- Not an error: an empty snapshot legitimately draws an empty scene. But it is
-  -- also what a view that returns a tree instead of presenting it looks like, and
-  -- that failure used to be silent.
-  io.stderr:write("shot: the view painted no primitives; a returned tree is not a painted scene\n")
-end
-
-print(string.format("%s: %d primitives, %d themed -> %s",
-  theme.name or "theme", #prims, themed, out_path))
+print(string.format("%s: %d primitives, %d themed, %d hit(s) -> %s",
+  theme.name or "theme", #prims, themed, #hits, out_path))

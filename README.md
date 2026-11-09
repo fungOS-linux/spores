@@ -51,6 +51,7 @@ spores/spore-browser-host  wasmtime host for the browser Spore
 spores/dragshift           convert and edit a dropped file from a radial menu
 spores/search              fuzzy search, ranking, and action dispatch
 spores/markdown            Markdown reader/editor
+spores/files               VFS browser + storage census (files.myc)
 spores/unibus              read-only inbox (dev.fungos.inbox)
 spores/worklog             cross-tool timeline (dev.fungos.worklog)
 spores/terminal            terminal Spore
@@ -103,6 +104,10 @@ spores/worklog      the worklog Spore (id `dev.fungos.worklog`) + receiver
                     src/   fungos.worklog/event@1: normalize, order, store
                     ui/    the timeline view Canvas renders
                     (composed by tend, like every other Lua view)
+spores/files        the VFS browser and storage census (id `dev.fungos.files`)
+                    src/   VFS adapter, bounded scan, flat snapshot
+                    ui/    the three-pane view Canvas and files.myc render
+                    src/bin/serve.rs  the host stand-in that serves files.myc
 docs/               host/spore contract, records/sync, AI inbox spec
 ```
 

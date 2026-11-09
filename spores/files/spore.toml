@@ -1,0 +1,56 @@
+# Spore manifest, schema 1. See fungOS-linux/soil docs/spore-package.md.
+#
+# A grant is a statement of intent reviewed with the pull request, not a
+# capability the Spore can widen at runtime.
+
+schema = 1
+
+[spore]
+id = "dev.fungos.files"
+name = "files"
+version = "0.1.0"
+license = "MIT"
+summary = "VFS browser and storage census"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { canvas = "1.0.0", vfs = "1.0.0" }
+
+# Produced by the Soil guest build. `files-serve` stands in for the host until
+# then: it supplies the same Vfs and runs the same Lua view.
+[module]
+path = "module.wasm"
+
+[ui]
+entry = "ui/files.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+canvas_module = "spore-dev-files"
+surfaces = ["canvas", "native", "web"]
+
+[grants]
+# Read-only namespace access: list entries, sizes, media types and times. The
+# Spore never reads bytes, so a census cannot leak content it only counted.
+"soil:vfs" = "list workspace entries with sizes and media types"
+"soil:canvas" = "present the browser and census surface"
+
+[denied]
+# A view that could also rename, write or unlink is a view whose totals can
+# change under the person reading them. Mutation is a separate Spore.
+"soil:vfs-mut" = ["a census that can write cannot be trusted to describe the disk"]
+"soil:records.write" = ["the census is derived; nothing here is a new record"]
+"soil:records.sync" = ["sync is a store concern; this Spore reads one namespace"]
+# Backup and projection are the obvious next steps and are deliberately absent:
+# a transport is a second grant with its own threat model, and it should arrive
+# with the first operation that actually moves bytes.
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+
+[presentation]
+badge = "F"
+color = "#7fb2a8"
