@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>spore</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; background: #0b0e11; overflow: hidden; }
+  #screen { position: fixed; inset: 0; overflow: hidden; }
+  #screen .n { position: absolute; }
+  #screen .t {
+    white-space: pre;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    line-height: 1;
+    letter-spacing: 0;
+  }
+  #hint {
+    position: fixed; right: 10px; bottom: 8px; z-index: 10;
+    font: 11px ui-monospace, monospace; color: #5b6b78; opacity: .0;
+    transition: opacity .2s; pointer-events: none;
+  }
+  body:hover #hint { opacity: .7; }
+  #hint b { color: #7dd3a8; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="screen"></div>
+<div id="hint"><b>click</b> to type · <b>esc</b> clears · resize the window to reflow</div>
+<script>
+(() => {
+  const screen = document.getElementById('screen');
+  const session = new URLSearchParams(location.search).get('session') || '';
+  const qs = (extra) => {
+    const p = new URLSearchParams(extra || {});
+    if (session) p.set('session', session);
+    const text = p.toString();
+    return text ? '?' + text : '';
+  };
+
+  // A terminal is sized in cells, not stretched to the window: pick a font size
+  // and let the grid follow. The view fits that grid to the same surface, so the
+  // page and the scene agree on where a cell is.
+  const FONT = 14;
+  const CELL_W = FONT * 0.6;
+  const CELL_H = FONT * 1.2;
+
+  let meta = {};
+  let sentSize = '';
+  let rendering = false;
+
+  function px(value, total) { return (value + 4) / 8 * total; }
+
+  function draw(scene) {
+    const W = window.innerWidth, H = window.innerHeight;
+    const frag = document.createDocumentFragment();
+    for (const node of scene.nodes || []) {
+      const t = node.transform || {};
+      const tr = t.translation || [0, 0, 0];
+      const sc = t.scale || [0, 0, 1];
+      const left = px(tr[0], W);
+      const top = px(tr[1], H);
+      if (node.type === 'rect') {
+        const el = document.createElement('div');
+        el.className = 'n';
+        el.style.left = left + 'px';
+        el.style.top = top + 'px';
+        el.style.width = (sc[0] / 8 * W) + 'px';
+        el.style.height = (sc[1] / 8 * H) + 'px';
+        if (node.rgb) el.style.background = `rgb(${node.rgb[0]},${node.rgb[1]},${node.rgb[2]})`;
+        if (node.opacity !== undefined) el.style.opacity = node.opacity;
+        if (node.radius) el.style.borderRadius = (node.radius / 8 * W) + 'px';
+        frag.appendChild(el);
+      } else if (node.type === 'text') {
+        const el = document.createElement('span');
+        el.className = 'n t';
+        el.textContent = node.text || '';
+        el.style.left = left + 'px';
+        el.style.top = top + 'px';
+        el.style.fontSize = (node.px || 14) + 'px';
+        if (node.rgb) el.style.color = `rgb(${node.rgb[0]},${node.rgb[1]},${node.rgb[2]})`;
+        frag.appendChild(el);
+      }
+    }
+    screen.replaceChildren(frag);
+  }
+
+  async function poll() {
+    if (rendering) return;
+    rendering = true;
+    try {
+      const w = window.innerWidth, h = window.innerHeight;
+      const response = await fetch('/scene.json' + qs({ w, h }), { cache: 'no-store' });
+      if (response.ok) {
+        const scene = await response.json();
+        meta = scene.meta || meta;
+        if (meta.title) document.title = meta.title;
+        draw(scene);
+      }
+    } catch (error) {
+      // A dropped poll is a frame not drawn; the next one is 200ms away.
+    } finally {
+      rendering = false;
+    }
+  }
+
+  function post(path, body) {
+    return fetch(path + qs(), { method: 'POST', body }).catch(() => {});
+  }
+
+  function resize() {
+    const cols = Math.max(20, Math.floor(window.innerWidth / CELL_W));
+    const rows = Math.max(6, Math.floor(window.innerHeight / CELL_H));
+    const key = cols + 'x' + rows;
+    if (key === sentSize) return;
+    if (meta.cols === cols && meta.rows === rows) { sentSize = key; return; }
+    sentSize = key;
+    post('/resize', JSON.stringify({ cols, rows }));
+  }
+
+  function encode(event) {
+    if (event.metaKey) return '';
+    const named = {
+      Enter: '\r', Backspace: '\x7f', Tab: '\t', Escape: '\x1b',
+      ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D',
+      Home: '\x1b[H', End: '\x1b[F', Delete: '\x1b[3~',
+      PageUp: '\x1b[5~', PageDown: '\x1b[6~',
+    };
+    let text = named[event.key] || (event.key.length === 1 ? event.key : '');
+    if (!text) return '';
+    if (event.ctrlKey && event.key.length === 1) {
+      const code = event.key.toUpperCase().charCodeAt(0);
+      if (code >= 64 && code < 128) text = String.fromCharCode(code - 64);
+    }
+    if (event.altKey) text = '\x1b' + text;
+    return text;
+  }
+
+  window.addEventListener('keydown', (event) => {
+    const text = encode(event);
+    if (!text) return;
+    event.preventDefault();
+    post('/input', new TextEncoder().encode(text));
+  });
+
+  window.addEventListener('resize', resize);
+  window.addEventListener('click', () => document.body.focus());
+  resize();
+  poll();
+  setInterval(poll, 200);
+})();
+</script>
+</body>
+</html>

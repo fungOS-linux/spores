@@ -1,0 +1,19 @@
+[package]
+name = "spore-serve"
+description = "Serve one Spore view as a page: snapshot in, scene out"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "spore-serve"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

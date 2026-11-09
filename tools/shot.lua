@@ -45,12 +45,12 @@ local hits, presses = {}, {}
 _G.canvas = {
   rect = function(s)
     prims[#prims + 1] = { type = "rect", id = s.id, ink = s.ink,
-      translation = s.translation, scale = s.scale,
+      translation = s.translation, scale = s.scale, rgb = s.rgb,
       opacity = s.opacity or 1, radius = s.radius or 0 }
   end,
   text = function(s)
     prims[#prims + 1] = { type = "text", id = s.id, ink = s.ink, text = s.text,
-      translation = s.translation, scale = s.scale,
+      translation = s.translation, scale = s.scale, rgb = s.rgb,
       px = (s.scale[1] or 1) * (TYPE.body or 16) * 1.25 }
   end,
 }
@@ -86,8 +86,12 @@ view.render(snapshot)
 -- free of colour, and lets one file restyle every Spore at once.
 local themed = 0
 for _, node in ipairs(prims) do
-  local rgb = hex(inks[node.ink or ""])
-  if rgb then node.rgb, themed = rgb, themed + 1 end
+  -- A literal colour wins: a terminal cell names its own ink, and a theme role
+  -- cannot express sixteen ANSI colours without sixteen roles.
+  if not node.rgb then
+    local rgb = hex(inks[node.ink or ""])
+    if rgb then node.rgb, themed = rgb, themed + 1 end
+  end
 end
 
 -- Lua's `%q` is not JSON: it can emit decimal escapes a JSON reader rejects.
@@ -144,9 +148,39 @@ local hit_parts = {}
 for _, entry in ipairs(hits) do hit_parts[#hit_parts + 1] = hit_json(entry) end
 
 local window = view.window or {}
-local meta = string.format('{"row_height":%.5f,"first":%d,"shown":%d,"total":%d,"presses":%d}',
-  tonumber(view.row_height) or 0, tonumber(window.first) or 0, tonumber(window.shown) or 0,
-  tonumber(window.total) or 0, #presses)
+-- What the frame *is*, as opposed to what it draws. Worklog publishes the row
+-- window it chose; a terminal publishes the grid it is showing. A view adds its
+-- own keys through `M.meta` rather than a second document beside this one.
+local meta_table = {
+  row_height = tonumber(view.row_height) or 0,
+  first = tonumber(window.first) or 0,
+  shown = tonumber(window.shown) or 0,
+  total = tonumber(window.total) or 0,
+  presses = #presses,
+}
+if type(view.meta) == "table" then
+  for key, value in pairs(view.meta) do meta_table[key] = value end
+end
+
+local function meta_value(value)
+  local kind = type(value)
+  if kind == "string" then return quote(value) end
+  if kind == "boolean" then return value and "true" or "false" end
+  if kind == "number" then return string.format("%.6g", value) end
+  if kind == "table" then
+    local keys = {}
+    for key in pairs(value) do keys[#keys + 1] = tostring(key) end
+    table.sort(keys)
+    local out = {}
+    for _, key in ipairs(keys) do
+      local encoded = meta_value(value[key])
+      if encoded then out[#out + 1] = quote(key) .. ":" .. encoded end
+    end
+    return "{" .. table.concat(out, ",") .. "}"
+  end
+  return nil
+end
+local meta = meta_value(meta_table)
 
 local file = assert(io.open(out_path, "wb"))
 file:write('{"kind":"scene","schema":1,"nodes":[', table.concat(parts, ","),

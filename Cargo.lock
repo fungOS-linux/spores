@@ -2055,6 +2055,13 @@ name = "spore-search"
 version = "0.1.0"
 
 [[package]]
+name = "spore-serve"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "spore-spotify"
 version = "0.1.0"
 dependencies = [
