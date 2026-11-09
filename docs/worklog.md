@@ -158,6 +158,26 @@ Order of operations on every delivery, because each step protects the next:
 4. **Append, sync, then acknowledge.** The id is only claimed once the bytes are
    on disk, so a failed write leaves the producer free to retry.
 
+### Reconciliation
+
+A webhook that was down still has to be caught up, so push is not the only
+input. `worklog ingest-batch` reads one envelope per line and appends them in a
+single process — one process per row would re-read the whole log each time,
+which is quadratic in exactly the case that matters.
+
+For Marbles, `tools/pull-marbles.sh` is the reconciliation leg, and it goes
+through `mb backup` rather than opening the live store: a WAL database cannot be
+read by a read-only reader at all (`attempt to write a readonly database`), and
+`mb backup` is Marbles' own atomic `VACUUM INTO`.
+
+The outbox is also where Marbles keeps what its webhook envelope drops.
+`outbound_event.seq` is the rowid of the `history` row the same transaction
+wrote, so joining them recovers the actor and the detail text — the difference
+between `closed spores-42` credited to nobody and `ajmwagar closed spores-42 —
+ack: superseded by scan recognition`. That join is why the pulled log is richer
+than the pushed one, and it is the evidence for adding those columns to the
+envelope rather than working around their absence.
+
 ### Durability
 
 An append is acknowledged only after its terminating newline is durable. That

@@ -21,6 +21,8 @@ worklog — the fungos.worklog/event@1 receiver and reader
   worklog ingest   --source marbles|github --log PATH --secret-file PATH
                    [--signature VALUE] [--at MS]
                    read one payload from stdin
+  worklog ingest-batch --source marbles|github --log PATH --allow-unsigned
+                   [--at MS]                read one payload per line
   worklog serve    --bind ADDR --log PATH
                    --marbles-secret-file PATH --github-secret-file PATH
   worklog tail     --log PATH [--limit N] [--all]
@@ -47,6 +49,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     };
     match command.as_str() {
         "ingest" => ingest(rest),
+        "ingest-batch" => ingest_batch(rest),
         "serve" => serve(rest),
         "tail" => tail(rest),
         "render-lua" => render_lua(rest),
@@ -241,6 +244,58 @@ const MAX_LINE: u64 = 8 << 10;
 struct Routes {
     marbles: Option<Vec<u8>>,
     github: Option<Vec<u8>>,
+}
+
+/// Read many envelopes in one process.
+///
+/// A webhook delivers one event at a time; catching up after an outage delivers
+/// thousands, and one process per row would re-read the whole log each time —
+/// quadratic in exactly the case that matters. This is the reconciliation leg.
+///
+/// There is no per-line signature to check here: the input is a payload this
+/// operator already holds, so `--allow-unsigned` is required and explicit.
+fn ingest_batch(args: &[String]) -> Result<(), String> {
+    let source = required(args, "--source")?;
+    let log = required(args, "--log")?;
+    if !has(args, "--allow-unsigned") {
+        return Err(
+            "ingest-batch needs --allow-unsigned: a batch has no per-line signature\n\n"
+                .to_string()
+                + USAGE,
+        );
+    }
+    let now = match option(args, "--at") {
+        Some(raw) => raw
+            .parse()
+            .map_err(|_| format!("--at expects milliseconds, got {raw:?}"))?,
+        None => now_ms(),
+    };
+
+    let body = read_stdin()?;
+    let mut store = Store::open(&log)?;
+    let (mut written, mut duplicate, mut rejected) = (0_u32, 0_u32, 0_u32);
+    for (index, line) in body.split(|byte| *byte == b'\n').enumerate() {
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        let event = match accept(&source, line, None, None, now) {
+            Ok(event) => event,
+            Err(rejection) => {
+                rejected += 1;
+                eprintln!("worklog: line {}: {}", index + 1, rejection.reason);
+                continue;
+            }
+        };
+        match store.append_at(event, now)? {
+            Append::Written(_) => written += 1,
+            Append::Duplicate => duplicate += 1,
+        }
+    }
+    println!("worklog: {written} written, {duplicate} duplicate, {rejected} rejected");
+    if rejected > 0 {
+        return Err(format!("{rejected} line(s) could not be normalized"));
+    }
+    Ok(())
 }
 
 fn serve(args: &[String]) -> Result<(), String> {

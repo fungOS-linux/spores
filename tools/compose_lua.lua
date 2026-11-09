@@ -185,6 +185,10 @@ function compose.install(options)
   assert(options.out_dir, "compose.install needs an out_dir")
   assert(options.name, "compose.install needs a name")
   local source = compose.build(options)
+  -- The caller names a directory, not necessarily an existing one; `tend` creates
+  -- its output directory too, and a composer that cannot write where it was told
+  -- is a worse error than the one it reports.
+  os.execute(string.format("mkdir -p %q", options.out_dir))
   local path = options.out_dir .. "/" .. options.name .. ".lua"
   if #source > compose.LIMIT then
     io.stderr:write(string.format(

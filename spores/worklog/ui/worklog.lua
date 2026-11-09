@@ -80,6 +80,20 @@ end
 M.pending_hits = pending_hits
 M.hit = hit
 
+-- Pressable controls go through `widget.button`, the primitive a host actually
+-- implements; `widget.hit` is kept only for rows, which predate it. A locator
+-- rendered as a chip that cannot be pressed is decoration.
+local pending_presses = {}
+local function press(spec)
+  if type(widget) == "table" and type(widget.button) == "function" then
+    widget.button(spec)
+  else
+    pending_presses[#pending_presses + 1] = spec
+  end
+end
+M.pending_presses = pending_presses
+M.press = press
+
 local function layout(tree, width, height)
   if canvas and canvas.layout then return canvas.layout(tree, width, height) end
   return ui.layout(tree, width, height)
@@ -267,6 +281,24 @@ function M.render(snapshot)
     rect("event-selected", selected.rect.x, selected.rect.y, selected.rect.width, selected.rect.height, "primary", 0.14, 7)
   end
 
+  -- Locators are drawn as chips behind their label, so a link reads as a thing
+  -- you can open rather than as a line of monospaced text.
+  local opened = events[selected_index] or events[1]
+  local pressed = {}
+  for index, link in ipairs((opened and opened.links) or {}) do
+    local node = find(laid, "worklog-detail-link-" .. index)
+    if node then
+      rect("worklog-link-chip-" .. index, node.rect.x - 4, node.rect.y - 2,
+        node.rect.width + 8, node.rect.height + 4, "surface", 0.4, 5)
+      pressed[#pressed + 1] = {
+        id = "worklog-link-" .. index,
+        label = link.locator,
+        locator = link.locator, rel = link.rel,
+        rect = node.rect,
+      }
+    end
+  end
+
   for _, node in ipairs(laid.nodes or {}) do
     if node.kind == "text" and node.style then
       local ink_role = "text"
@@ -292,6 +324,18 @@ function M.render(snapshot)
         x = nx(row.rect.x), y = ny(row.rect.y), width = sw(row.rect.width), height = sh(row.rect.height),
       }
     end
+  end
+
+  -- Opening a locator is the host's job: it owns the scheme. The view names the
+  -- intent and hands over the locator; it does not resolve, fetch, or launch.
+  for _, spec in ipairs(pressed) do
+    press {
+      id = spec.id, label = spec.label,
+      action = "worklog.open_locator",
+      body = { locator = spec.locator, rel = spec.rel },
+      x = nx(spec.rect.x), y = ny(spec.rect.y),
+      width = sw(spec.rect.width), height = sh(spec.rect.height),
+    }
   end
   M.wide = wide
 end
