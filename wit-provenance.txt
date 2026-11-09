@@ -1,0 +1,26 @@
+# Vendored soil WIT, and where each copy came from.
+#
+# A Spore builds its guest against its own `wit/deps`, so soil's contracts are
+# copied into each package rather than linked. A symlink cannot be used from
+# here: this repository is checked out both on its own and as soil's
+# `spores-public` submodule, and no relative target resolves in both. A copy it
+# is, then -- but a recorded one, so drift is loud instead of silent.
+#
+# `tools/check-wit-provenance.sh` fails when a listed file hashes to something
+# other than the blob beside it (a hand edit, or a bump that changed the copy
+# without changing this record), and when a vendored copy exists that this file
+# does not name. It needs no network and no soil checkout.
+#
+# It cannot tell that soil has moved on: noticing that needs soil present, which
+# is a dependency decision rather than a check.
+#
+# source:      fungOS-linux/soil, wit/soil-records.wit
+# soil-commit: a7f23664f0912b31809cae50c97752a95df18ca7 (soil main)
+#
+# Each row is <path> and the git blob SHA of the canonical file it was copied
+# from. Bumping a copy means copying soil's file over it and putting the new
+# blob here in the same commit.
+
+spores/contacts/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
+spores/crm/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
+spores/unibus/wit/deps/soil-records/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
