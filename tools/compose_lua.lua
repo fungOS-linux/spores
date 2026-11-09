@@ -104,6 +104,21 @@ local function ui_chunk(view_source, ui_lib_path)
   return table.concat({ "local ui = {}", "(function()", compose.layout_section(ui_lib_path), "end)()" }, "\n"), false
 end
 
+-- Drop the dashboard-node section from a UI library for a view that only uses
+-- layout and shell nodes. The section boundaries are explicit source markers,
+-- not a second copy of the library: a dashboard component stays in one place and
+-- a view opts out only when it never draws one.
+function compose.without_dashboard(source)
+  local start = source:find("\n-- ---- dashboard nodes", 1, true)
+  local lay = source:find("\nlay = function", start or 1, true)
+  local finish = source:find("\n-- ---- render", lay or 1, true)
+  assert(start and lay and finish and finish > lay,
+    "UI library is missing its dashboard/lay/render section markers")
+  -- Keep `lay` itself: it is the dispatcher the layout profile still needs.
+  -- Only the dashboard node implementations and their helper functions go.
+  return source:sub(1, start) .. source:sub(lay, finish) .. source:sub(finish)
+end
+
 -- Build the composed module source.
 --
 --   view      path to the view; required
@@ -141,7 +156,11 @@ function compose.build(options)
     parts[#parts + 1] = "local __libs = {"
     for name, path in pairs(options.libs) do
       parts[#parts + 1] = string.format("  [%q] = function()", name)
-      parts[#parts + 1] = compose.strip_comments(compose.read(path))
+      local library = compose.read(path)
+      if options.ui_profile == "layout" and name == "fungos.ui" then
+        library = compose.without_dashboard(library)
+      end
+      parts[#parts + 1] = compose.strip_comments(library)
       parts[#parts + 1] = "  end,"
     end
     parts[#parts + 1] = "}"
@@ -217,6 +236,14 @@ function compose.install(options)
   file:write(source)
   file:close()
 
+  local input_declarations, read_inputs = {}, {}
+  for _, input in ipairs(options.inputs or {}) do
+    input_declarations[#input_declarations + 1] = string.format(
+      '{"id":%q,"kind":%q,"required":%s}',
+      input.id, input.kind, input.required and "true" or "false")
+    read_inputs[#read_inputs + 1] = string.format("%q", input.id)
+  end
+
   -- A control the host must route is a grant the manifest has to declare: an
   -- unlisted `widget.button` action is rejected at render time, which is how a
   -- surface that composed fine ends up as an error card on the wall. The caller
@@ -237,9 +264,9 @@ function compose.install(options)
 
   local manifest = table.concat({
     '{"schema_version":1,"id":"' .. options.name .. '","title":"' .. (options.title or options.name) .. '",',
-    '"inputs":[],"resources":[],',
+    '"inputs":[' .. table.concat(input_declarations, ",") .. '],"resources":[],',
     '"actions":[' .. table.concat(actions, ",") .. '],',
-    '"capabilities":{"write_scene":true,"read_inputs":[],"read_theme":true}}',
+    '"capabilities":{"write_scene":true,"read_inputs":[' .. table.concat(read_inputs, ",") .. '],"read_theme":true}}',
   })
   local manifest_path = options.out_dir .. "/" .. options.name .. ".json"
   file = assert(io.open(manifest_path, "wb"), "cannot write " .. manifest_path)

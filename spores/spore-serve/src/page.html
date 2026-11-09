@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; background: #0b0e11; overflow: hidden; }
+  #screen { position: fixed; inset: 0; overflow: hidden; }
+  #screen .n { position: absolute; }
+  #screen .t {
+    white-space: pre;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    line-height: 1;
+    letter-spacing: 0;
+  }
+  #menu {
+    position: fixed; top: 8px; right: 8px; z-index: 20;
+    font: 11px ui-monospace, monospace; color: #8395a2; background: #141b21;
+    border: 1px solid #1c252d; border-radius: 6px; padding: 4px 8px; cursor: pointer;
+    opacity: .25; transition: opacity .2s;
+  }
+  #menu:hover, body:hover #menu { opacity: 1; }
+  #picker {
+    position: fixed; inset: 0; z-index: 30; display: none;
+    background: rgba(11,14,17,.92); padding: 24px 28px; overflow: auto;
+    font: 12px ui-monospace, monospace; color: #dce5ea;
+  }
+  #picker.open { display: block; }
+  #picker h2 { font-size: 11px; letter-spacing: .12em; color: #8395a2; margin: 18px 0 8px; text-transform: uppercase; }
+  #picker button {
+    display: block; width: 100%; max-width: 520px; text-align: left;
+    background: #141b21; color: #dce5ea; border: 1px solid #1c252d; border-radius: 6px;
+    padding: 7px 10px; margin: 0 0 4px; font: inherit; cursor: pointer;
+  }
+  #picker button:hover { border-color: #7dd3a8; }
+  #picker .live { color: #7dd3a8; }
+  #picker .meta { color: #5b6b78; margin-left: 8px; }
+  #hint {
+    position: fixed; right: 10px; bottom: 8px; z-index: 10;
+    font: 11px ui-monospace, monospace; color: #5b6b78; opacity: .0;
+    transition: opacity .2s; pointer-events: none;
+  }
+  body:hover #hint { opacity: .7; }
+  #hint b { color: #7dd3a8; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="screen"></div>
+<button id="menu" type="button">sessions</button>
+<div id="picker"></div>
+<div id="hint"><b>click</b> to type · <b>esc</b> clears · resize the window to reflow</div>
+<script>
+(() => {
+  const screen = document.getElementById('screen');
+  const session = new URLSearchParams(location.search).get('session') || '';
+  const qs = (extra) => {
+    const p = new URLSearchParams(extra || {});
+    if (session) p.set('session', session);
+    const text = p.toString();
+    return text ? '?' + text : '';
+  };
+
+  // A terminal is sized in cells, not stretched to the window: pick a font size
+  // and let the grid follow. The view fits that grid to the same surface, so the
+  // page and the scene agree on where a cell is.
+  const FONT = 14;
+  const CELL_W = FONT * 0.6;
+  const CELL_H = FONT * 1.2;
+
+  let meta = {};
+  let sentSize = '';
+  let rendering = false;
+
+  // The scene is the Canvas space: x runs -4..4 left to right, y runs 4..-4 top
+  // to bottom. Inverting them is not the same operation, and using the x rule for
+  // y draws the grid upside down — the first rows land past the bottom edge and
+  // the screen appears to start at the bottom and build upward.
+  function fromX(value, total) { return (value + 4) / 8 * total; }
+  function fromY(value, total) { return (4 - value) / 8 * total; }
+  function spanX(value, total) { return value / 8 * total; }
+  function spanY(value, total) { return value / 8 * total; }
+
+  function draw(scene) {
+    const W = window.innerWidth, H = window.innerHeight;
+    const frag = document.createDocumentFragment();
+    for (const node of scene.nodes || []) {
+      const t = node.transform || {};
+      const tr = t.translation || [0, 0, 0];
+      const sc = t.scale || [0, 0, 1];
+      const left = fromX(tr[0], W);
+      const top = fromY(tr[1], H);
+      if (node.type === 'rect') {
+        const el = document.createElement('div');
+        el.className = 'n';
+        el.style.left = left + 'px';
+        el.style.top = top + 'px';
+        el.style.width = spanX(sc[0], W) + 'px';
+        el.style.height = spanY(sc[1], H) + 'px';
+        if (node.rgb) el.style.background = `rgb(${node.rgb[0]},${node.rgb[1]},${node.rgb[2]})`;
+        if (node.opacity !== undefined) el.style.opacity = node.opacity;
+        if (node.radius) el.style.borderRadius = (node.radius / 8 * W) + 'px';
+        frag.appendChild(el);
+      } else if (node.type === 'text') {
+        const el = document.createElement('span');
+        el.className = 'n t';
+        el.textContent = node.text || '';
+        el.style.left = left + 'px';
+        el.style.top = top + 'px';
+        el.style.fontSize = (node.px || 14) + 'px';
+        if (node.rgb) el.style.color = `rgb(${node.rgb[0]},${node.rgb[1]},${node.rgb[2]})`;
+        frag.appendChild(el);
+      }
+    }
+    screen.replaceChildren(frag);
+  }
+
+  async function poll() {
+    if (rendering) return;
+    rendering = true;
+    try {
+      const w = window.innerWidth, h = window.innerHeight;
+      const response = await fetch('/scene.json' + qs({ w, h }), { cache: 'no-store' });
+      if (response.ok) {
+        const scene = await response.json();
+        meta = scene.meta || meta;
+        if (meta.title) document.title = meta.title;
+        draw(scene);
+      }
+    } catch (error) {
+      // A dropped poll is a frame not drawn; the next one is 200ms away.
+    } finally {
+      rendering = false;
+    }
+  }
+
+  function post(path, body) {
+    return fetch(path + qs(), { method: 'POST', body }).catch(() => {});
+  }
+
+  function resize() {
+    const cols = Math.max(20, Math.floor(window.innerWidth / CELL_W));
+    const rows = Math.max(6, Math.floor(window.innerHeight / CELL_H));
+    const key = cols + 'x' + rows;
+    if (key === sentSize) return;
+    if (meta.cols === cols && meta.rows === rows) { sentSize = key; return; }
+    sentSize = key;
+    post('/resize', JSON.stringify({ cols, rows }));
+  }
+
+  function encode(event) {
+    if (event.metaKey) return '';
+    const named = {
+      Enter: '\r', Backspace: '\x7f', Tab: '\t', Escape: '\x1b',
+      ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D',
+      Home: '\x1b[H', End: '\x1b[F', Delete: '\x1b[3~',
+      PageUp: '\x1b[5~', PageDown: '\x1b[6~',
+    };
+    let text = named[event.key] || (event.key.length === 1 ? event.key : '');
+    if (!text) return '';
+    if (event.ctrlKey && event.key.length === 1) {
+      const code = event.key.toUpperCase().charCodeAt(0);
+      if (code >= 64 && code < 128) text = String.fromCharCode(code - 64);
+    }
+    if (event.altKey) text = '\x1b' + text;
+    return text;
+  }
+
+  const picker = document.getElementById('picker');
+  const menu = document.getElementById('menu');
+  let pickerOpen = false;
+
+  async function openPicker() {
+    pickerOpen = true;
+    picker.classList.add('open');
+    picker.replaceChildren(Object.assign(document.createElement('h2'), { textContent: 'loading…' }));
+    try {
+      const [sessions, targets] = await Promise.all([
+        fetch('/sessions' + qs()).then((r) => r.json()),
+        fetch('/targets' + qs()).then((r) => r.json()),
+      ]);
+      const parts = [];
+      const heading = (text) => parts.push(Object.assign(document.createElement('h2'), { textContent: text }));
+      heading('sessions');
+      for (const item of sessions.sessions || []) {
+        const button = document.createElement('button');
+        button.innerHTML = `<span class="live">${item.exited ? '·' : '●'}</span> ${item.label || item.target}` +
+          `<span class="meta">session ${item.id}</span>`;
+        button.onclick = () => { location.search = '?session=' + item.id; };
+        parts.push(button);
+      }
+      if (!(sessions.sessions || []).length) {
+        parts.push(Object.assign(document.createElement('div'), { textContent: 'none open', className: 'meta' }));
+      }
+      heading('targets');
+      for (const item of targets.targets || []) {
+        const button = document.createElement('button');
+        button.innerHTML = `${item.label || item.name}<span class="meta">${item.kind || 'target'} · ${item.detail || ''}</span>`;
+        button.onclick = async () => {
+          const response = await fetch('/sessions' + qs(), {
+            method: 'POST',
+            body: JSON.stringify({ target: item.name }),
+          });
+          if (response.ok) {
+            const opened = await response.json();
+            location.search = '?session=' + opened.id;
+          }
+        };
+        parts.push(button);
+      }
+      picker.replaceChildren(...parts);
+    } catch (error) {
+      picker.replaceChildren(Object.assign(document.createElement('h2'), { textContent: 'could not list sessions' }));
+    }
+  }
+
+  menu.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (pickerOpen) { pickerOpen = false; picker.classList.remove('open'); }
+    else openPicker();
+  });
+  picker.addEventListener('click', (event) => {
+    if (event.target === picker) { pickerOpen = false; picker.classList.remove('open'); }
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if (pickerOpen) {
+      if (event.key === 'Escape') { pickerOpen = false; picker.classList.remove('open'); }
+      return;
+    }
+    const text = encode(event);
+    if (!text) return;
+    event.preventDefault();
+    post('/input', new TextEncoder().encode(text));
+  });
+
+  // The producer owns the scrollback; the page only says how far the wheel moved.
+  window.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const delta = event.deltaMode === 1 ? event.deltaY : event.deltaY / 24;
+    post('/scroll', JSON.stringify({ delta: Math.trunc(delta) }));
+  }, { passive: false });
+
+  // A paste is text typed quickly: same path as a keystroke, so the shell decides
+  // what to do with it (including bracketed paste, which it sets up itself).
+  window.addEventListener('paste', (event) => {
+    const text = event.clipboardData && event.clipboardData.getData('text');
+    if (!text) return;
+    event.preventDefault();
+    post('/input', new TextEncoder().encode(text));
+  });
+
+  window.addEventListener('resize', resize);
+  window.addEventListener('click', () => document.body.focus());
+  resize();
+  poll();
+  setInterval(poll, 200);
+})();
+</script>
+</body>
+</html>

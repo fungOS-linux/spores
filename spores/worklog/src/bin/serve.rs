@@ -147,6 +147,12 @@ struct CacheKey {
     stamp: u64,
     width: u32,
     height: u32,
+    /// The host state the view reads. Two queries are two pictures, so they are
+    /// two cache entries — a page that searches must not be handed the last
+    /// unfiltered scene.
+    query: String,
+    offset: u32,
+    hover: String,
 }
 
 fn handle(
@@ -220,6 +226,9 @@ fn handle(
                 stamp: modified(&config.snapshot)?,
                 width,
                 height,
+                query: query_text(query, "q"),
+                offset: query_value(query, "offset").unwrap_or(0),
+                hover: query_text(query, "hover"),
             };
             let body = {
                 let mut guard = cached
@@ -231,7 +240,7 @@ fn handle(
                 };
                 match hit {
                     Some(body) => body,
-                    None => match render_scene(config, width, height) {
+                    None => match render_scene(config, &key) {
                         Ok(body) => {
                             *guard = Some((key.clone(), body.clone()));
                             body
@@ -254,7 +263,14 @@ fn handle(
             // The page polls, and repainting a scene that has not moved is what
             // flicker is made of. The tag names everything that can change the
             // picture, so an unchanged scene costs a 304 and no redraw.
-            let etag = format!("\"{}-{width}-{height}-{}\"", key.stamp, body.len());
+            let etag = format!(
+                "\"{}-{width}-{height}-{}-{}-{}-{}\"",
+                key.stamp,
+                key.query,
+                key.offset,
+                key.hover,
+                body.len()
+            );
             if header(&headers, "if-none-match")
                 .is_some_and(|value| value.split(',').any(|tag| tag.trim() == etag))
             {
@@ -292,6 +308,50 @@ fn query_value(query: &str, name: &str) -> Option<u32> {
     })
 }
 
+/// A query parameter as text, percent-decoded enough for a search box: `%20` and
+/// `+` are the two a browser actually sends, and a query containing `&` arrives
+/// encoded, so decoding after splitting is correct.
+fn query_text(query: &str, name: &str) -> String {
+    query
+        .split('&')
+        .find_map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            (key == name).then(|| decode(value))
+        })
+        .unwrap_or_default()
+}
+
+fn decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                match u8::from_str_radix(&value[index + 1..index + 3], 16) {
+                    Ok(byte) => {
+                        out.push(byte);
+                        index += 3;
+                    }
+                    Err(_) => {
+                        out.push(bytes[index]);
+                        index += 1;
+                    }
+                }
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn modified(path: &Path) -> Result<u64, String> {
     let meta =
         std::fs::metadata(path).map_err(|error| format!("stat {}: {error}", path.display()))?;
@@ -306,17 +366,30 @@ fn modified(path: &Path) -> Result<u64, String> {
 /// Render through the view the wall runs. `tools/shot.lua` is the renderer: it
 /// supplies the `canvas` ABI, resolves the SDK library and writes the scene
 /// document. Anything this file drew itself would be a second renderer.
-fn render_scene(config: &Config, width: u32, height: u32) -> Result<String, String> {
+fn render_scene(config: &Config, key: &CacheKey) -> Result<String, String> {
     let out = std::env::temp_dir().join(format!("worklog-scene-{}.json", std::process::id()));
-    let result = Command::new("lua")
+    let mut command = Command::new("lua");
+    command
         .env("FUNGOS_SDK", &config.sdk)
         .arg(&config.renderer)
         .arg(config.root.join("ui/worklog.lua"))
         .arg(&config.snapshot)
         .arg(&config.theme)
         .arg(&out)
-        .arg(width.to_string())
-        .arg(height.to_string())
+        .arg(key.width.to_string())
+        .arg(key.height.to_string());
+    // The host state a view is allowed to read travels as flags, so the page and
+    // the wall ask for a picture the same way.
+    if !key.query.is_empty() {
+        command.arg(format!("--query={}", key.query));
+    }
+    if key.offset > 0 {
+        command.arg(format!("--scroll={}", key.offset));
+    }
+    if !key.hover.is_empty() {
+        command.arg(format!("--hover={}", key.hover));
+    }
+    let result = command
         .output()
         .map_err(|error| format!("run lua: {error}"))?;
     if !result.status.success() {

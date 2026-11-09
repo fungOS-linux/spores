@@ -57,6 +57,14 @@ local function hover_id()
   local hover = _G.module and _G.module.hover
   return type(hover) == "string" and hover or nil
 end
+
+-- The host's search box, as a string. The view decides what matches, because
+-- "what counts as a hit" is a fact about the events; the host only owns the text
+-- and the caret.
+local function query_text()
+  local query = _G.module and _G.module.query
+  return type(query) == "string" and query or ""
+end
 -- One surface per render. It owns the pixel-to-scene-unit conversion, the text
 -- scale the host applies, and text measurement: doing that arithmetic here (as
 -- this view used to) meant a second opinion about the host's own transform, and
@@ -244,6 +252,9 @@ local MAX_ROW_H = 132
 local TALL_ROW_H = 56
 local CHROME_PX = 120
 local PANE_W = 300
+-- The search field's width, before the window gets a say. Narrower than this and
+-- a query of two words is unreadable; wider and it eats the legend.
+local SEARCH_W = 260
 local ROW_H = MIN_ROW_H
 -- The pitch is part of the contract: the host scrolls in pixels and the view
 -- turns them into rows, so both sides need the same number.
@@ -339,7 +350,8 @@ M.summary_lines = SUMMARY_LINES
 -- string than the one drawn reserves lines that stay empty.
 local DETAIL_SUMMARY_CHARS = 240
 
--- Canvas caps one module scene at 256 nodes, so how many rows exist is bounded
+-- The installed Canvas caps one module scene at a combined node budget (rects +
+-- text + controls), well below the tree's 256, so how many rows exist is bounded
 -- by what a row costs as well as by how much height is left; asking for the rows
 -- a tall window could hold produced a scene the host rejected outright and the
 -- whole surface became an error card.
@@ -361,8 +373,9 @@ local ROW_BASE_NODES = 5 -- the rule under the row, the kind, the actor, the sum
 local SOURCE_NODES = 1 -- the source column, when more than one source is reporting
 local CHIP_NODES = 3 -- a chip's pill, its label, and the press target over it
 -- The chrome that is there whether or not there are rows: the backdrop, the two
--- panes, the selection and hover bands, the toolbar and the list header.
-local CHROME_FIXED_NODES = 10
+-- panes, the selection and hover bands, the toolbar, the search field and its
+-- rule, and the list header.
+local CHROME_FIXED_NODES = 11
 -- A row carries at most this many locators: one reference is a pointer, two is a
 -- join. Past that the row stops being a line you can read at a glance, and the
 -- rest of them belong in the detail column, which lists all of them.
@@ -548,31 +561,51 @@ local function head_labels(snapshot, box, first, shown)
   local events = snapshot.events or {}
   local counts = snapshot.counts or {}
   local last = math.min(#events, first + shown - 1)
-  local range = (#events == 0) and "0 of 0"
-    or string.format("%d–%d of %d", first, last, counts.total or #events)
+  local range
+  if #events == 0 then
+    range = "0 of 0"
+  elseif snapshot.matches then
+    -- A filtered list says what it is a filter of: "5 of 40 match" alone would
+    -- read as thirty-five events that went missing.
+    range = string.format("%d–%d · %d of %d match", first, last, snapshot.matches,
+      counts.total or #events)
+  else
+    range = string.format("%d–%d of %d", first, last, counts.total or #events)
+  end
+  local today = string.format("%d today", counts.today or 0)
   local sort = snapshot.sort or "Newest first"
+  local sort_w = measure(sort, TYPE.caption)
   return {
     placed("worklog-range", range, box.head.x, box.head.y, TYPE.caption, "muted", box.head.w),
+    placed("worklog-today", today, box.head.x + measure(range, TYPE.caption) + GAP.md, box.head.y,
+      TYPE.caption, "muted", measure(today, TYPE.caption)),
     -- The sort state is right-aligned: it is a property of the whole column, and
     -- it is not what the eye should land on first.
-    placed("worklog-sort", sort, box.head.x + box.head.w - measure(sort, TYPE.caption), box.head.y,
-      TYPE.caption, "muted", measure(sort, TYPE.caption)),
+    placed("worklog-sort", sort, box.head.x + box.head.w - sort_w, box.head.y,
+      TYPE.caption, "muted", sort_w),
   }
 end
 
 local function toolbar_labels(snapshot, box)
-  local counts = snapshot.counts or {}
   local legend = sources(snapshot)
-  local today = string.format("%d today", counts.today or 0)
   local title_w = measure_caps(title(snapshot), TYPE.title)
-  local today_w = measure(today, TYPE.caption)
-  return {
+  local labels = {
     placed("worklog-title", title(snapshot), box.x, box.y, TYPE.title, "text", title_w),
     placed("worklog-sources", legend, box.x + title_w + GAP.md, box.y + (TYPE.title - TYPE.caption),
       TYPE.caption, "muted", measure(legend, TYPE.caption)),
-    placed("worklog-today", today, box.x + box.w - today_w, box.y + (TYPE.title - TYPE.caption),
-      TYPE.caption, "muted", today_w),
   }
+  -- The search box is part of the page, so the view draws it: a host that puts an
+  -- input over the canvas shows its text through this, and a host that has no
+  -- keyboard still shows what it is filtering by.
+  local query = query_text()
+  local field_w = math.min(SEARCH_W, math.floor(box.w * 0.4))
+  local field_h = line_height(TYPE.caption) + GAP.xs
+  local field = { x = box.x + box.w - field_w, y = box.y + math.floor((box.h - field_h) / 2),
+    w = field_w, h = field_h }
+  labels[#labels + 1] = placed("worklog-search-value", query ~= "" and query or "Search",
+    field.x + GAP.sm, field.y + GAP.xs, TYPE.caption, query ~= "" and "text" or "muted",
+    field.w - GAP.sm * 2)
+  return labels, field
 end
 
 -- A locator is an id under the hood. `marbles://local/mycelium-6us5` is Marbles
@@ -594,6 +627,39 @@ local function locator_label(locator)
   return value
 end
 M.locator_label = locator_label
+
+-- What a query matches: the words a reader would search by — the sentence, who
+-- did it, the kind, the producer, and every locator the event carries. Case
+-- insensitive substring, because a search box that demands exact spelling is one
+-- nobody opens twice. The view decides this because it is a fact about the
+-- events; the host only owns the text and the caret.
+local function matches(event, needle)
+  local fields = { event.summary, event.actor, event.kind, event.source, event.subject, event.id }
+  for _, link in ipairs(event.links or {}) do
+    fields[#fields + 1] = link.locator
+    fields[#fields + 1] = link.rel
+  end
+  for _, value in ipairs(fields) do
+    if tostring(value or ""):lower():find(needle, 1, true) then return true end
+  end
+  return false
+end
+M.matches = matches
+
+-- A filtered snapshot is a new snapshot, not a mutated one: the caller keeps the
+-- whole log, and the page can ask for it again by dropping the query.
+local function with_query(snapshot, needle)
+  if needle == "" then return snapshot end
+  local kept = {}
+  for _, event in ipairs(snapshot.events or {}) do
+    if matches(event, needle) then kept[#kept + 1] = event end
+  end
+  local filtered = {}
+  for key, value in pairs(snapshot) do filtered[key] = value end
+  filtered.events = kept
+  filtered.matches = #kept
+  return filtered
+end
 
 -- The detail column is the row's footnote made readable: the whole summary, when
 -- it happened in wall-clock terms, who did it, and every locator on the event —
@@ -761,6 +827,7 @@ function M.render(snapshot)
   -- anything is planned.
   use_type()
   snapshot = apply_event(snapshot or {})
+  snapshot = with_query(snapshot, query_text():lower())
   local events = snapshot.events or {}
   local shown = plan_rows(snapshot)
   local first = window_start(snapshot, shown)
@@ -783,14 +850,22 @@ function M.render(snapshot)
       "muted", HAIRLINE, 0, Z_PANEL)
   end
 
-  for _, item in ipairs(toolbar_labels(snapshot, box.toolbar)) do
+  local toolbar, field = toolbar_labels(snapshot, box.toolbar)
+  rect("worklog-search", field.x, field.y, field.w, field.h, "surface", tone.panel, 5, Z_CHIP)
+  -- A wash alone disappears on a dark ground, and the host has no border: the
+  -- field is told apart by the same hairline that separates everything else
+  -- here.
+  rect("worklog-search-rule", field.x, field.y + field.h, field.w, 1, "muted", HAIRLINE, 0, Z_CHIP)
+  for _, item in ipairs(toolbar) do
     text(item.id, item.text, item.x, item.y, item.size, item.role)
   end
   for _, item in ipairs(head_labels(snapshot, box, first, shown)) do
     text(item.id, item.text, item.x, item.y, item.size, item.role)
   end
   if #events == 0 then
-    text("worklog-empty", "Nothing has arrived yet.", box.rows.x, box.rows.y, TYPE.body, "muted")
+    local message = query_text() == "" and "Nothing has arrived yet."
+      or string.format("Nothing matches “%s”.", clip(query_text(), 40))
+    text("worklog-empty", message, box.rows.x, box.rows.y, TYPE.body, "muted")
   end
 
   local hovered = hover_id()
@@ -823,6 +898,9 @@ function M.render(snapshot)
     drawn_rows = drawn_rows + 1
   end
   M.rows_drawn, M.rows_planned = drawn_rows, shown
+  -- What the page needs to clamp a scroll: how far it got, and how far there is.
+  -- The view owns the window, so it is the one that can say where it ends.
+  M.window = { first = first, shown = drawn_rows, total = #events }
 
   if box.detail then
     for _, item in ipairs(detail_labels(snapshot, box)) do
@@ -852,6 +930,15 @@ function M.render(snapshot)
       end
     end
   end
+
+  -- The search box is a control the host may put its own input over; the spec is
+  -- how it learns where. It is a hit rather than a press: nothing is being asked
+  -- of the host except where the field is.
+  hit {
+    id = "worklog-search", label = "field",
+    x = surface:nx(field.x), y = surface:ny(field.y),
+    width = surface:sw(field.w), height = surface:sh(field.h),
+  }
 
   for index = first, first + drawn_rows - 1 do
     local row = row_rect(box, index, first)

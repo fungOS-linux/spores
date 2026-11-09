@@ -8,14 +8,7 @@
 #
 # Checked by:
 #   tend api-check --root spores --baseline tools/api-baseline.txt
-spores/chrome
-spores/consent
-spores/contacts
-spores/crm
-spores/dfm-report
-spores/dragshift
-spores/gallery
-spores/media-probe
-spores/mush
-spores/search
-spores/surface-probe
+#
+# Empty: every Spore with a spore.toml now documents its UI. Keeping an empty
+# file is the point — the ratchet stays checked, and the next Spore added without
+# docs fails on its own path instead of being tolerated by a line nobody removed.

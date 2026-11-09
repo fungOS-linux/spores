@@ -20,16 +20,22 @@ for the event schema behind it.
 The render also publishes what it planned, because the fixture and the host read
 the same numbers the view decided: `M.row_height` (the pitch the page earned),
 `M.max_row_height` (the view's own cap on it), `M.rows_drawn` and
-`M.rows_planned` (equal unless the node budget stopped the draw), and
-`M.wide` (whether the detail column exists at this width). Pure helpers used by
-review aids: `M.chars_per_line(width, size)`, `M.summary_lines`,
-`M.locator_label(locator)`.
+`M.rows_planned` (equal unless the node budget stopped the draw), `M.window`
+(`first`, `shown`, `total` — what a host needs to clamp a scroll), and `M.wide`
+(whether the detail column exists at this width). Pure helpers used by review
+aids: `M.chars_per_line(width, size)`, `M.summary_lines`, `M.locator_label(locator)`,
+and `M.matches(event, needle)`.
 
 The host supplies `module.viewport`, `module.theme`, and an optional
 `module.event`, all read through `ui.viewport`, `ui.theme` and `ui.event`. It may
-also supply `module.scroll = { offset }` in pixels and `module.hover` as the id
-of the control under the pointer; both are host state, not view state, because a
-module is re-executed for every render and cannot remember either.
+also supply `module.scroll = { offset }` in pixels, `module.hover` as the id of
+the control under the pointer, and `module.query` as the search text. All three
+are host state, not view state, because a module is re-executed for every render
+and cannot remember any of them.
+
+The view decides what a query *matches* — summary, actor, kind, source, subject,
+id and every locator, case-insensitively — because that is a fact about the
+events. The host owns the text, the caret and the keyboard.
 
 ## Snapshot
 
@@ -41,6 +47,7 @@ See `examples/worklog_mock.lua` for a complete fixture. The view reads:
   limit: integer?,                -- rows the producer was willing to emit
   sort: string?,                  -- defaults to "Newest first"
   counts = { total: integer?, today: integer? }?,
+  matches: integer?,              -- set by the view when a query filtered this
   sources = { { id: string, label: string?, count: integer? } }?,
   selected_id: string?,
   events = {
@@ -61,6 +68,11 @@ never re-sorts: two opinions about order is how a timeline disagrees with
 itself. `at_text` is printed and `age` is derived from it, so the reader is
 never lied to about when something happened even though the row is ordered by
 when it arrived.
+
+A query narrows that list without touching it: the view copies the snapshot,
+keeps the matching events, and writes `matches` on the copy, so `counts.total`
+still says how big the log is and the header can say both. Dropping the query
+returns the whole list, because nothing was ever removed from it.
 
 ## Actions
 
@@ -104,6 +116,13 @@ Row ids are positional and documented: `event-<index>` for a row,
 `event-<index>-*` for the fields inside a row. A host that hit-tests or
 addresses a row uses `event-<index>`; the index is the position in the snapshot,
 which is why the producer's order is load-bearing.
+
+The search field is `worklog-search` (a hit target) with its text at
+`worklog-search-value`. A host that owns a keyboard puts its own input over the
+first and draws nothing itself: the caret is the only thing it adds. The rest of
+the chrome is `worklog-title`, `worklog-sources`, `worklog-range`,
+`worklog-today`, `worklog-sort`, and `event-hover-<index>` for the row under the
+pointer.
 
 ## Authority
 

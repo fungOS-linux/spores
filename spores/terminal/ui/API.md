@@ -1,64 +1,86 @@
-# Terminal Lua API
+# Terminal — Lua API
 
-`ui/terminal.lua` is the fallback/status projection for the terminal Spore. The
-interactive terminal is a host-rendered `soil:terminal` grid; this view lists
-Mycelium targets and shows the latest plain-text frame for debugging and
-non-Canvas surfaces.
+The terminal Spore has two views over one frame the host owns. The host runs the
+pty, the SSH client and the VT parser; neither view reads a socket, a process or
+a key.
+
+- `ui/grid.lua` — the terminal itself: one cell grid, painted.
+- `ui/terminal.lua` — the status/fallback projection: Mycelium targets and the
+  latest plain-text frame, for a surface that cannot draw a grid.
 
 ## Entrypoint
 
-`ui/terminal.lua` exports:
+Both export `M.render(snapshot)` and paint through `ui.surface`; neither returns
+a tree. `ui/grid.lua` also exports `M.cell(cols, rows, width, height)`, the cell
+arithmetic it drew with, and sets `M.meta` for the page that renders the scene.
 
-- `M.render(snapshot) -> { revision, ui, nodes }`
+`ui/snapshot.example.lua` is the fixture used by `tend check`.
 
-This view uses the older semantic-node shape, not the `canvas.layout` tree.
+```lua
+local grid = dofile("ui/grid.lua")
+grid.render(snapshot)      -- paints the grid; grid.meta describes the frame
+```
 
 ## Snapshot
 
+`ui/grid.lua`:
+
 ```lua
 {
-  targets = {
+  cols = integer, rows = integer,
+  title = string?,
+  cursor = { x = integer, y = integer, visible = boolean? }?,
+  scroll = { offset = integer, total = integer, len = integer }?,
+  lines = {
     {
-      id: string,
-      label: string?,
-      kind: string?,
-      health: "healthy" | string?,
-      shell: boolean?,
+      y = integer,
+      runs = { { text = string, fg = "#rrggbb"?, bg = "#rrggbb"?, flags = integer? } },
     },
-  }?,
-  terminal = {
-    title: string?,
-    text: string?,
-  }?,
+  },
 }
 ```
 
-If `terminal` is present, its text is split into one node per non-empty line.
+`flags` is a bit set: `1` bold, `2` italic, `4` underline, `8` faint, `16`
+inverse. A missing `fg`/`bg` means the terminal default, which is the theme's
+text and surface.
+
+`ui/terminal.lua`:
+
+```lua
+{
+  targets = { { id, label?, kind?, health?, shell? } }?,
+  terminal = { title?, text? }?,
+}
+```
 
 ## Actions
 
-None. Opening/closing a PTY session is host/Spore logic with
-`soil:mycelium.shell` and `soil:terminal` grants.
+None. Opening, resizing and closing a session are host operations under the
+`soil:mycelium.shell` and `soil:terminal` grants; keys reach the host as pty
+bytes, not as intents.
 
 ## Slots
 
 None.
 
-## Components/slots
+## Components
 
-None.
-
-## Stable ids
-
-`title`, `targets`, `empty`, `term.title`, `term.<n>`, `t<n>`, `t<n>.name`,
-`t<n>.meta`.
+None of its own; `ui/grid.lua` uses `ui.surface` primitives directly because a
+grid is the one layout that must not be negotiated.
 
 ## Theme/config
 
-This fallback view uses role tokens from the host theme. It has no app-specific
-profile keys.
+The theme supplies the surface, the default text ink and the cursor ink. Cell
+colours are literal: sixteen ANSI colours are not sixteen theme roles, and a
+terminal that ignores the program's colour is not the program's terminal.
+
+## Stable ids
+
+`terminal-bg`, `terminal-cursor`, `cell-<row>-<run>`, `cell-bg-<row>-<run>`,
+`cell-ul-<row>-<run>`, `cell-inv-<row>-<run>`. Row and run indexes are stable
+for a frame; a repaint renumbers nothing.
 
 ## Authority
 
-None in Lua. SSH, routes, host keys, credentials, PTY lifetime, and the cell grid
-belong to the host capabilities named in `spore.toml`.
+None. The view sees a grid the host already parsed and a directory the host
+already authorized.

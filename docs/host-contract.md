@@ -79,7 +79,11 @@ return M
 
 - `role` is a Coherence role (`text`, `muted`, `primary`, `success`, `warning`,
   `danger`), never RGB.
-- The UI returns a content tree. Canvas assigns coordinates and renders.
+- The view presents its tree. With `fungos.ui` that is `ui.present(tree)`, which
+  lays the tree out — host Taffy when the host offers one, the kit's own pass when
+  it does not — and paints primitives into the scene. No host mounts a tree it is
+  handed: a view that returns one instead of presenting it paints nothing, and the
+  snapshot still looks correct, which is why that mistake survives review.
 - Determinism: same snapshot in, same scene out. No clock, no randomness, no
   I/O. Canvas runs Lua only when it supplies input or a new snapshot.
 - `kind` is a Canvas primitive hint (`text`, `code`, `image`, `diagram`, `rule`,

@@ -1,5 +1,10 @@
 -- Contacts UI. Pure projection over a records-backed view; emits action intents only.
 -- Contacts are personal. Sharing is explicit and only projects first name + token.
+--
+-- The view builds a `fungos.ui` tree and hands it to `ui.present`, which lays it
+-- out (host Taffy when there is one, the kit's own pass when there is not) and
+-- paints it. Returning the tree instead would paint nothing: a host records
+-- primitives, it does not mount a tree.
 local ui = require("fungos.ui")
 local action = require("fungos.action")
 
@@ -18,7 +23,7 @@ local function selected_contact(view)
   return (view.contacts or {})[1]
 end
 
-local function rail(ctx, view)
+local function rail(view)
   local children = {
     ui.text("contacts-label", "CONTACTS", { size = 9, height = 16, ink = "muted" }),
   }
@@ -36,10 +41,10 @@ local function rail(ctx, view)
       size = 10, height = 24, ink = "muted",
     }))
   end
-  return ui.column("contacts-rail", { width = 240, flex_shrink = 0, gap = 2 }, children)
+  return ui.panel("contacts-rail", { width = 240, flex_shrink = 0, gap = 2, padding = 12 }, children)
 end
 
-local function detail(ctx, view)
+local function detail(view)
   local contact = view.contact or selected_contact(view) or {}
   local children = {
     ui.text("contacts-title", contact.name or "Contact", { size = 22, height = 30, ink = "primary" }),
@@ -73,11 +78,11 @@ local function detail(ctx, view)
   return ui.column("contacts-detail", { flex_grow = 1, gap = 3 }, children)
 end
 
-function M.render(ctx, view)
-  return ui.row("contacts-root", { flex_grow = 1, gap = 4 }, {
-    rail(ctx, view),
-    detail(ctx, view),
-  })
+function M.render(view)
+  M.hits = ui.present(ui.row("contacts-root", { flex_grow = 1, gap = 16, padding = 16 }, {
+    rail(view),
+    detail(view),
+  }))
 end
 
 return M

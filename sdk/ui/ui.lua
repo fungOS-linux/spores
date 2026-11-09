@@ -198,13 +198,23 @@ function ui.icon_button(name, props)
   return node("icon_button", props)
 end
 
--- A pressable-looking control. It draws a control; the host decides whether a
--- press reaches it. Until input is routed to Lua modules, this is an affordance,
--- not a behaviour.
+-- A pressable control. It draws a control; the host owns the hit region and
+-- the press. `local = true` is a view-only control: the host re-renders the
+-- module with an activation event but publishes nothing to another Spore.
 function ui.button(label, props)
   props = props or {}
   props.label = label
   return node("button", props)
+end
+
+-- A host-owned text field placeholder. The library draws the surface and the
+-- prompt; the host overlays its real input and reports the text back as an
+-- action. Keeping the hit region here means a page never has to guess where
+-- the composer is from column arithmetic.
+function ui.field(label, props)
+  props = props or {}
+  props.label = label
+  return node("field", props)
 end
 
 -- A keyboard hint. Same drawing as a button, quieter and monospaced in spirit.
@@ -300,6 +310,7 @@ local function control_prim(spec)
       body = body or {},
       enabled = spec.enabled ~= false,
       appearance = spec.appearance or "hit",
+      ["local"] = spec["local"] == true,
     },
     translation = spec.translation or { 0, 0, 0 },
     scale = spec.scale or { 1, 1, 1 },
@@ -385,6 +396,14 @@ local function fit_text_tail(value, size, S, width)
   return "…"
 end
 
+-- A control's pill is sized from its label, so the same estimate that makes a
+-- row reserve space would leave a button visibly left-weighted: 0.62 em is a
+-- safe wrapping bound, not the mixed-case advance of the host font. Buttons use
+-- the measured average instead; the text then has equal padding on both sides.
+local function label_width(value, size, S)
+  return ulen(value) * size * 0.52 * S.ux
+end
+
 -- A wrap budget comes from the column in *pixels*, not from a global constant:
 -- the same view on a wider surface fits more characters.
 local function budget(S, size, width)
@@ -460,10 +479,12 @@ local function intrinsic(n, S)
     -- The same formula `lay` uses, not a second opinion: two width estimates for
     -- one control is how a row ends up overlapping its neighbour.
     local size = n.small and theme.small or theme.body
-    -- `size * S.ux` is `wx(size)`: theme sizes are pixels, and a scene length
-    -- is a fraction, so the two forms are the same number. Kept spelled out
-    -- beside the per-character advance so the whole estimate reads in one unit.
-    return ulen(n.label) * size * 0.95 * S.ux + size * 0.52 * S.ux * 2
+    -- Theme sizes are pixels, so they are converted once, by `S.ux`: the
+    -- padding is the same `wx` a row reserves around the pill.
+    return label_width(n.label, size, S) + size * 0.52 * S.ux * 2
+  elseif n.kind == "field" then
+    -- A field fills its column; its parent gives it the width.
+    return 0
   elseif n.kind == "text" then
     return estimate_width(n.value, n.px or size_for(theme, n.style), S)
   elseif n.kind == "icon" then
@@ -500,6 +521,7 @@ local function hit_region(prims, spec)
     action = spec.action,
     body = spec.body,
     enabled = spec.enabled,
+    ["local"] = spec["local"] == true,
     translation = { spec.x or 0, spec.y or 0, 0 },
     scale = { w, h, 1 },
   }
@@ -610,6 +632,7 @@ local function lay_radial(n, S)
         action = n.action,
         body = slice.body or { id = slice.id, value = slice.id },
         enabled = available,
+        ["local"] = n["local"] == true,
         translation = {
           cx + math.cos(middle) * middle_radius - segment_length * 0.5,
           cy + math.sin(middle) * middle_radius + band * 0.5,
@@ -1452,10 +1475,38 @@ lay_node = function(n, S, width)
         action = n.action,
         body = n.body,
         enabled = n.enabled,
+        ["local"] = n["local"] == true,
         translation = { 0, 0, 0 }, scale = { wide, side, 1 },
       }
     end
     return { h = side, p = prims }
+
+  elseif kind == "field" then
+    local size = n.small and theme.small or theme.body
+    local height_px = n.h or math.max(36, math.ceil(size * 2.2 / 4) * 4)
+    local height = hy(S, height_px)
+    local pad = wx(S, size * 0.65)
+    local prims = {
+      rect_prim(ink(n.ink or "surface_sunken", "field.ink"), n.opacity or 0.9,
+        radius(n.radius or "sm", "field.radius"),
+        0, 0, width, height),
+      text_prim(n.label, size, S, "muted", pad, -hy(S, (height_px - size) * 0.5)),
+    }
+    if n.action and widget and widget.button then
+      prims[#prims + 1] = {
+        button = {
+          id = control_id(n),
+          label = n.label,
+          action = n.action,
+          body = n.body or {},
+          enabled = n.enabled ~= false,
+          appearance = "hit",
+          ["local"] = n["local"] == true,
+        },
+        translation = { 0, 0, 0 }, scale = { width, height, 1 },
+      }
+    end
+    return { h = height, p = prims }
 
   elseif kind == "button" then
     local size = n.small and theme.small or theme.body
@@ -1465,7 +1516,7 @@ lay_node = function(n, S, width)
     local vpad = hy(S, size * 0.45)
     local hpad = wx(S, size * 0.52)
     local height = text_h + vpad * 2
-    local label_w = estimate_width(n.label, size, S) + hpad * 2
+    local label_w = label_width(n.label, size, S) + hpad * 2
     local color = n.quiet and "surface" or "primary"
     local opacity = n.quiet and 0.55 or (n.selected and 1.0 or 0.9)
     local prims = {
@@ -1484,6 +1535,7 @@ lay_node = function(n, S, width)
         action = n.action,
         body = n.body,
         enabled = n.enabled,
+        ["local"] = n["local"] == true,
         translation = { 0, 0, 0 }, scale = { label_w, height, 1 },
       }
     end
@@ -1600,7 +1652,13 @@ lay_node = function(n, S, width)
         own[index] = intrinsic(child, S)
         used = used + own[index]
       end
-      cursor = n.align == "end" and (width - used - wx(S, 4)) or 0
+      if n.align == "end" then
+        cursor = width - used - wx(S, 4)
+      elseif n.align == "center" then
+        cursor = (width - used) * 0.5
+      else
+        cursor = 0
+      end
       for index, child in ipairs(n.children) do
         local remaining = width - cursor
         local part = lay(child, S, math.max(own[index], remaining))
@@ -1666,12 +1724,36 @@ local function snap(value) return math.max(BASE, math.floor(value / BASE) * BASE
 -- the view passes, else the authoring size. A Spore handed a surface directly
 -- (a document pane, a test) calls this instead of declaring host inputs it does
 -- not own. Both values come back on the 4px base, so they are legal heights.
+-- The box this render is fitted into: the host's window (`module.viewport`, or
+-- `module.inputs` on an older host), else the fallback the view passes, else the
+-- size it was authored at. A view that lays itself out in scene units alone
+-- cannot know when a 25px label is too wide for a rail, so the reading lives
+-- here and every view asks the same question.
+local function surface_size(width, height)
+  local m = rawget(_G, "module")
+  local vp = m and (m.viewport or (m.theme and m.theme.viewport))
+  local inputs = m and m.inputs
+  local function positive(value)
+    value = tonumber(value)
+    return value and value > 0 and value or nil
+  end
+  local w = positive(vp and vp.width) or positive(inputs and inputs.width)
+    or tonumber(width) or ui.viewport_width or 1200
+  local h = positive(vp and vp.height) or positive(inputs and inputs.height)
+    or tonumber(height) or ui.viewport_height or 1800
+  return snap(w), snap(h)
+end
+
 function ui.viewport(width, height)
-  local host = module and (module.viewport or module.inputs)
-  local w = (host and tonumber(host.width)) or tonumber(width) or ui.viewport_width or 1200
-  local h = (host and tonumber(host.height)) or tonumber(height) or ui.viewport_height or 1800
-  ui.viewport_width, ui.viewport_height = snap(w), snap(h)
+  ui.viewport_width, ui.viewport_height = surface_size(width, height)
   return ui.viewport_width, ui.viewport_height
+end
+
+-- The same box, without storing it. `context` asks this on every render, so a
+-- host that resizes between renders is followed without a view re-authoring
+-- anything.
+function ui.viewport_size(width, height)
+  return surface_size(width, height)
 end
 
 -- One pixel horizontally and one vertically, for the surface actually on
@@ -1679,13 +1761,11 @@ end
 -- surface, so horizontal and vertical density differ on every window that is
 -- not square, and a text size is a pixel count while a position is a fraction.
 --
--- The size comes from `ui.viewport()`, which resolves the host's window; absent
--- both, the layout assumes a portrait document surface and says so here rather
--- than silently shrinking with the window.
+-- The size comes from `ui.viewport_size()`, which resolves the host's window;
+-- absent one, the layout assumes a portrait document surface and says so here
+-- rather than silently shrinking with the window.
 local function context(theme)
-  local inputs = module and module.inputs
-  local w = math.max(ui.viewport_width or (inputs and inputs.width) or 1200, 1)
-  local h = math.max(ui.viewport_height or (inputs and inputs.height) or 1800, 1)
+  local w, h = ui.viewport_size()
   return {
     theme = theme,
     ux = 8 / w,
@@ -1716,16 +1796,25 @@ local function emit_controls(prims)
         fail("a button needs widget.button from the host", 3)
       end
       local spec = prim.button
-      widget.button({
+      -- A local control is a view event, not an action route. Canvas rejects
+      -- an action that is not declared in the module manifest, so omitting it
+      -- here is what keeps a fixture view operable without a controller.
+      local route = spec.action
+      if spec["local"] then route = nil end
+      local button = {
         id = spec.id,
         label = spec.label,
-        action = spec.action,
+        action = route,
         body = spec.body or {},
         x = prim.translation[1], y = prim.translation[2],
         width = prim.scale[1], height = prim.scale[2],
-        enabled = spec.enabled,
+        enabled = spec.enabled ~= false,
         appearance = spec.appearance,
-      })
+      }
+      -- Older hosts reject an unknown `local` field on every button, so only
+      -- send it when this control actually is one.
+      if spec["local"] then button["local"] = true end
+      widget.button(button)
     elseif prim.host then
       if not (canvas and canvas.host_resource) then
         fail("host_surface needs canvas.host_resource; this host is too old", 3)

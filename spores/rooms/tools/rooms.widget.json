@@ -1,0 +1,18 @@
+{
+  "schema_version": 2,
+  "id": "rooms",
+  "kind": "module",
+  "module": "spore-dev-rooms",
+  "inputs": {},
+  "theme": null,
+  "refresh_ms": null,
+  "chrome": "frameless",
+  "data": {
+    "state": "ready",
+    "source": null,
+    "observed_at": null,
+    "window": null,
+    "detail": null,
+    "provenance": "demo"
+  }
+}
