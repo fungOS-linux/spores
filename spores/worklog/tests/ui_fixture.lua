@@ -26,6 +26,13 @@ _G.module = {
 
 local drawn = { rects = {}, texts = {} }
 local checked = { width = 0, height = 0 }
+-- What each wrapped label was allowed to draw: the emit path must stay inside
+-- it, which is the invariant a wall depends on. A box sized for one line while
+-- the ink ran to eight is what put the detail column on top of itself.
+local budget = {}
+-- The view publishes the wrap budget; the fixture asks it rather than keeping a
+-- second guess at how many characters fit.
+local chars_per_line
 
 local function check_geometry(laid, width, height)
   checked.width, checked.height = width, height
@@ -49,13 +56,11 @@ local function check_geometry(laid, width, height)
   for id, node in pairs(nodes) do
     local rect, style = by_id[id], node.style
     if rect and style and style.wrap and node.kind == "text" then
-      local per_line = math.max(8, math.floor(rect.width / (style.size * 0.52)))
-      local lines = math.max(1, math.ceil(#tostring(node.text or "") / per_line))
       local line_height = style.line_height or (style.size + 4)
-      local needed = lines * line_height
-      assert(rect.height + 0.5 >= needed, string.format(
-        "%s reserves %.0f px for %d line(s) of %d px text, which needs %.0f",
-        id, rect.height, lines, style.size, needed))
+      budget[id] = {
+        per_line = chars_per_line and chars_per_line(rect.width, style.size) or 1,
+        lines = math.max(1, math.floor(rect.height / line_height)),
+      }
     end
   end
   -- And the column stacks: the field after the summary may not sit under it.
@@ -64,6 +69,14 @@ local function check_geometry(laid, width, height)
     assert(below.y >= summary.y + summary.height - 0.5,
       string.format("the detail column overlaps its own summary (summary ends %.1f, worklog-detail-when starts %.1f)",
         summary.y + summary.height, below.y))
+  end
+  -- The two columns sit side by side, not on top of each other: a flexible list
+  -- pane used to take the whole row and lay its text across the detail column.
+  local list_pane, detail_pane = by_id["worklog-list-pane"], by_id["worklog-detail-pane"]
+  if list_pane and detail_pane then
+    assert(detail_pane.x >= list_pane.x + list_pane.width,
+      string.format("the detail column starts inside the list column (list ends %.1f, detail starts %.1f)",
+        list_pane.x + list_pane.width, detail_pane.x))
   end
 end
 
@@ -80,13 +93,37 @@ _G.canvas = {
 }
 
 local worklog = assert(loadfile("ui/worklog.lua"))()
+chars_per_line = worklog.chars_per_line
 local snapshot = assert(loadfile("examples/worklog_mock.lua"))()
 
 local function render(snap)
   drawn = { rects = {}, texts = {} }
   assert(worklog.render(snap) == nil, "render draws through the host and returns nothing")
-  local lines = {}
-  for _, spec in ipairs(drawn.texts) do lines[#lines + 1] = tostring(spec.text) end
+  local lines, ids = {}, {}
+  for _, spec in ipairs(drawn.texts) do
+    lines[#lines + 1] = tostring(spec.text)
+    local x, y = spec.translation[1], spec.translation[2]
+    assert(x >= -4.5 and x <= 4.5 and y >= -4.5 and y <= 4.5,
+      "text drawn outside the surface: " .. tostring(spec.id))
+    assert(not ids[spec.id], "duplicate text id: " .. tostring(spec.id))
+    ids[spec.id] = true
+  end
+  for _, spec in ipairs(drawn.rects) do
+    assert(not ids[spec.id], "duplicate node id: " .. tostring(spec.id))
+    ids[spec.id] = true
+  end
+  -- Every wrapped line has to fit the box it was given: a line past the budget
+  -- is a line drawn over whatever the column stacked next.
+  for _, spec in ipairs(drawn.texts) do
+    local base, index = tostring(spec.id):match("^(.-)%-l(%d+)$")
+    local allowed = base and budget[base]
+    if allowed then
+      assert(tonumber(index) <= allowed.lines,
+        string.format("%s drew line %s of %d", base, index, allowed.lines))
+      assert(#tostring(spec.text) <= allowed.per_line,
+        string.format("%s line %s is %d chars, budget %d", base, index, #tostring(spec.text), allowed.per_line))
+    end
+  end
   return table.concat(lines, "\n")
 end
 
@@ -106,8 +143,10 @@ assert(copy:find(string.format("%d today", snapshot.counts.today), 1, true), "to
 assert(copy:find("Marbles 3", 1, true), "source counts are not drawn")
 
 -- Every event is a row, and the kind leads it in a fixed, upper-case word.
+-- Wrapped labels are split into lines, so compare the opening words rather than
+-- the whole string: the row summary is allowed to break.
 for index, event in ipairs(snapshot.events) do
-  assert(copy:find(event.summary, 1, true), "event " .. index .. " summary is not drawn")
+  assert(copy:find(event.summary:sub(1, 24), 1, true), "event " .. index .. " summary is not drawn")
 end
 assert(copy:find("MERGED", 1, true), "the kind is not drawn as a word")
 
@@ -115,8 +154,8 @@ assert(copy:find("MERGED", 1, true), "the kind is not drawn as a word")
 -- first event's row ids come before the second's.
 local first_row, second_row = nil, nil
 for index, spec in ipairs(drawn.texts) do
-  if spec.id == "event-1-summary" then first_row = index end
-  if spec.id == "event-2-summary" then second_row = index end
+  if tostring(spec.id):match("^event%-1%-summary") then first_row = first_row or index end
+  if tostring(spec.id):match("^event%-2%-summary") then second_row = second_row or index end
 end
 assert(first_row and second_row and first_row < second_row, "rows are not painted in snapshot order")
 
@@ -129,7 +168,7 @@ assert(copy:find(selected.subject, 1, true), "the selected event's locator is no
 for _, event in ipairs(snapshot.events) do event.selected = event == snapshot.events[3] end
 local other_copy = render(snapshot)
 assert(other_copy ~= copy, "selection did not change the view")
-assert(other_copy:find(snapshot.events[3].summary, 1, true), "newly selected summary is not drawn")
+assert(other_copy:find(snapshot.events[3].summary:sub(1, 24), 1, true), "newly selected summary is not drawn")
 for index, event in ipairs(snapshot.events) do event.selected = index == 1 end
 
 -- An empty log is a normal state, not a crash.
@@ -151,7 +190,21 @@ local wrapped_copy = render({
   sources = { { id = "marbles", label = "Marbles", count = 1 } },
   events = { long },
 })
-assert(wrapped_copy:find("superseded by scan recognition", 1, true), "the long summary is not drawn")
+assert(wrapped_copy:find("superseded", 1, true), "the long summary is not drawn")
+
+-- A wrapped label is one node per line, so the host cannot draw a line the
+-- layout never reserved. The pane is 268 px wide at 16 px type: 32 characters.
+local summary_lines = 0
+for _, spec in ipairs(drawn.texts) do
+  local index = tostring(spec.id):match("^worklog%-detail%-summary%-l(%d+)$")
+  if index then
+    summary_lines = math.max(summary_lines, tonumber(index))
+    assert(#tostring(spec.text) <= chars_per_line(268, 16),
+      "a detail summary line is wider than its pane: " .. tostring(spec.text))
+  end
+end
+assert(summary_lines >= 2, "the long summary was not wrapped into lines")
+assert(summary_lines <= 8, "the detail summary drew more lines than the column reserved: " .. summary_lines)
 
 -- The size the wall actually hands this surface. The view cannot ask for it, so
 -- it has to survive it: rows and the detail column are both computed from H.

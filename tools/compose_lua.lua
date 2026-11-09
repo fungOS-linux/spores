@@ -217,9 +217,28 @@ function compose.install(options)
   file:write(source)
   file:close()
 
+  -- A control the host must route is a grant the manifest has to declare: an
+  -- unlisted `widget.button` action is rejected at render time, which is how a
+  -- surface that composed fine ends up as an error card on the wall. The caller
+  -- names its intents; the composer writes them down.
+  local actions = {}
+  for _, action in ipairs(options.actions or {}) do
+    assert(type(action.id) == "string" and type(action.destination) == "string"
+      and type(action.kind) == "string",
+      "compose: each action needs id, destination and kind")
+    -- The host validates these as `identifier`/`contract`: lower case, digits and
+    -- hyphens for the id, a dotted lower-case route for the destination.
+    assert(action.id:match("^[a-z][a-z0-9%-]*$"),
+      "compose: action id must be lower case letters, digits and hyphens: " .. action.id)
+    actions[#actions + 1] = string.format(
+      '{"id":"%s","destination":"%s","kind":"%s"}',
+      action.id, action.destination, action.kind)
+  end
+
   local manifest = table.concat({
     '{"schema_version":1,"id":"' .. options.name .. '","title":"' .. (options.title or options.name) .. '",',
     '"inputs":[],"resources":[],',
+    '"actions":[' .. table.concat(actions, ",") .. '],',
     '"capabilities":{"write_scene":true,"read_inputs":[],"read_theme":true}}',
   })
   local manifest_path = options.out_dir .. "/" .. options.name .. ".json"

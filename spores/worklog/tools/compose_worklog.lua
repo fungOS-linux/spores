@@ -26,4 +26,10 @@ compose.install {
   snapshot = arg[2] or "examples/worklog_mock.lua",
   ui_lib = spore .. "/../unibus/ui/lib/ui.lua",
   app_id = "dev.fungos.worklog",
+  -- The one control this view emits. The host refuses a button whose action is
+  -- not declared here, so the grant and the `press` call have to name the same
+  -- string; `dev.fungos.worklog` is the Spore the intent is addressed to.
+  actions = {
+    { id = "worklog-open-locator", destination = "dev.fungos.worklog", kind = "intent" },
+  },
 }

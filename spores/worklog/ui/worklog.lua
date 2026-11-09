@@ -19,7 +19,13 @@ M.version = "0.1.0"
 -- passes `module.inputs` overrides it; the real fix is for the host to always
 -- pass it, which is a Canvas question, not a view one.
 local W, H = 1200, 900
+-- Explicit draw layers. Canvas sorts scene nodes by z and breaks ties by
+-- insertion order, so "I appended it later" is how a chip ends up under the
+-- panel it sits on. Every primitive names its layer instead.
 local Z = 0
+local Z_PANEL = Z + 0.05
+local Z_CHIP = Z + 0.10
+local Z_TEXT = Z + 0.20
 
 local function use_viewport()
   -- The host says how big the surface is; the view must not assume. `inputs` is
@@ -41,20 +47,20 @@ local function sw(px) return 8 * px / W end
 local function sh(px) return 8 * px / H end
 local function ts(px) return px / ((base() or 16) * 1.25) end
 
--- Canvas rejects ink roles it does not know rather than falling back to body
--- text. The theme documents `surface` and `background`; Canvas accepts neither,
--- so both are spelled with `muted`, which it does accept. Fixing this properly
--- means a host palette with one name per role, not another alias here.
-local INK = { surface = "muted", background = "muted" }
+-- Canvas resolves every semantic role the theme publishes: text, muted,
+-- primary, surface, background, success, warning, danger, info. This table used
+-- to alias `surface` and `background` to `muted` on the belief that Canvas
+-- accepted neither, which painted the window and every panel the same flat
+-- grey and left body text sitting on its own background colour.
 local function ink(name)
-  return INK[name] or name
+  return name
 end
 
-local function rect(id, x, y, w, h, role, opacity, radius)
+local function rect(id, x, y, w, h, role, opacity, radius, layer)
   canvas.rect {
     id = id, ink = ink(role or "surface"), opacity = opacity or 1.0,
     radius = radius or 8,
-    translation = { nx(x), ny(y), Z },
+    translation = { nx(x), ny(y), layer or Z },
     scale = { sw(math.max(1, w)), sh(math.max(1, h)), 1 },
   }
 end
@@ -62,9 +68,37 @@ end
 local function text(id, value, x, y, px, role, z)
   canvas.text {
     id = id, text = tostring(value or ""), ink = ink(role or "text"),
-    translation = { nx(x), ny(y), z or (Z + 0.1) },
+    translation = { nx(x), ny(y), z or Z_TEXT },
     scale = { ts(px), ts(px), 1 },
   }
+end
+
+-- One drawn line is one node. A `canvas.text` carries no width, so the host
+-- neither wraps nor clips it: a label the view *thinks* is two wrapped lines
+-- arrives as one long line and paints across whatever sits beside it. Breaking
+-- the string here makes the line count the layout reserved and the line count
+-- the host draws the same number.
+local function wrap_text(value, per_line)
+  local lines, line = {}, ""
+  for token in tostring(value or ""):gmatch("%S+") do
+    local word = token
+    local candidate = (line == "") and word or (line .. " " .. word)
+    if #candidate <= per_line then
+      line = candidate
+    else
+      if line ~= "" then lines[#lines + 1] = line end
+      -- A single word wider than the column still has to break, or one long
+      -- locator runs out of the pane it was placed in.
+      while #word > per_line do
+        lines[#lines + 1] = word:sub(1, per_line)
+        word = word:sub(per_line + 1)
+      end
+      line = word
+    end
+  end
+  if line ~= "" then lines[#lines + 1] = line end
+  if #lines == 0 then lines[1] = "" end
+  return lines
 end
 
 local function clip(value, limit)
@@ -154,18 +188,19 @@ local TYPE = { micro = 9, caption = 10, body = 12, title = 16 }
 local GAP = { xs = 4, sm = 8, md = 16 }
 
 -- Characters a line holds at this size. The host measures text; a view that
--- cannot ask must estimate. A short estimate only wraps early — an absent one
--- is what reserved 44 px for a paragraph and laid the rest of the column on top
--- of it.
-local function chars_per_line(width, size)
-  return math.max(8, math.floor(width / (size * 0.52)))
-end
+-- cannot ask must estimate, and the estimate has to be the one the host will
+-- draw with. Canvas renders a 12 px label at roughly 9.6 px per character
+-- (about 0.8 × its nominal size), so an estimate of 0.52 packed ~40 % more
+-- text into every line than fitted and the overflow ran into the next column.
+-- When the host publishes text metrics this constant goes away.
+local GLYPH_W = 0.8
 
-local function wrapped_height(value, width, size, max_lines)
-  local lines = math.ceil(#tostring(value or "") / chars_per_line(width, size))
-  lines = math.max(1, math.min(max_lines, lines))
-  return lines * (size + 4) -- the same line height `label` declares
+local function chars_per_line(width, size)
+  return math.max(8, math.floor(width / (size * GLYPH_W)))
 end
+-- The wrap budget is the view's own arithmetic, so it is the view's to publish:
+-- the fixture asserts lines against this number rather than a second guess.
+M.chars_per_line = chars_per_line
 
 -- Rows have a fixed height, so the count a pane can hold is arithmetic, not a
 -- constant. Drawing every event in a 40-event snapshot put a third of them past
@@ -254,16 +289,14 @@ local function detail(snapshot)
     return { id = "worklog-detail", kind = "container", layout = {}, children = {
       label("worklog-detail-empty", "Select an event", 12, {}) } }
   end
-  local detail_summary = clip(event.summary or "",
-    SUMMARY_LINES * chars_per_line(PANE_W - GAP.md * 2, TYPE.title))
+  local detail_summary = clip(event.summary or "", 400)
   local children = {
     label("worklog-detail-label", "EVENT", TYPE.micro, { height = 14 }),
     -- A wrapped label needs the height its lines actually take. The layout gives
     -- a node exactly what it asks for, so asking for one line of a paragraph
     -- does not clip it: the ink continues over whatever was laid out next.
     label("worklog-detail-summary", detail_summary, TYPE.title,
-      { height = wrapped_height(detail_summary, PANE_W - GAP.md * 2, TYPE.title, SUMMARY_LINES),
-        wrap = true }),
+      { height = SUMMARY_LINES * (TYPE.title + 4), wrap = true }),
     label("worklog-detail-when", (event.at_text or "") .. "  ·  " .. (event.age or ""), TYPE.micro, { height = 14 }),
     label("worklog-detail-who", (event.actor or "") .. "  ·  " .. (event.source or ""), TYPE.micro, { height = 14 }),
     label("worklog-detail-kind", kind_word(event.kind), TYPE.micro, { height = 14 }),
@@ -308,10 +341,17 @@ local function tree(snapshot)
     },
   }
   if wide then
+    -- The list gets what the detail column leaves, named explicitly. Left to
+    -- `flex_grow` the kit hands the flexible child the whole row and then also
+    -- places the fixed one, so rows were laid out ~350 px wider than the column
+    -- they are drawn in: their wrapped lines ran straight through the detail
+    -- pane, which is the overlap that looked like a Z-order bug.
+    local main_w = W - GAP.md * 2
+    local list_w = math.max(240, main_w - GAP.md - PANE_W)
     root.children[#root.children + 1] = {
-      id = "worklog-main", kind = "container", layout = { flex_grow = 1, direction = "row", gap = 16 },
+      id = "worklog-main", kind = "container", layout = { flex_grow = 1, direction = "row", gap = GAP.md },
       children = {
-        { id = "worklog-list-pane", kind = "container", layout = { flex_grow = 1, flex_shrink = 1, direction = "column", padding = { top = GAP.sm, right = GAP.sm, bottom = GAP.sm, left = GAP.sm } }, children = { list(snapshot, visible_count(snapshot), show_source) } },
+        { id = "worklog-list-pane", kind = "container", layout = { width = list_w, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = GAP.sm, right = GAP.sm, bottom = GAP.sm, left = GAP.sm } }, children = { list(snapshot, visible_count(snapshot), show_source) } },
         { id = "worklog-detail-pane", kind = "container", layout = { width = PANE_W, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = GAP.sm, right = GAP.md, bottom = GAP.sm, left = GAP.md } }, children = { detail(snapshot) } },
       },
     }
@@ -350,21 +390,21 @@ function M.render(snapshot)
 
   rect("worklog-bg", 0, 0, W, H, "background", 1.0, 0)
   local list_pane = find(laid, "worklog-list-pane")
-  if list_pane then rect("worklog-list-bg", list_pane.rect.x, list_pane.rect.y, list_pane.rect.width, list_pane.rect.height, "surface", 0.22, 10) end
+  if list_pane then rect("worklog-list-bg", list_pane.rect.x, list_pane.rect.y, list_pane.rect.width, list_pane.rect.height, "surface", 0.22, 10, Z_PANEL) end
   local detail_pane = find(laid, "worklog-detail-pane")
-  if detail_pane then rect("worklog-detail-bg", detail_pane.rect.x, detail_pane.rect.y, detail_pane.rect.width, detail_pane.rect.height, "surface", 0.22, 10) end
+  if detail_pane then rect("worklog-detail-bg", detail_pane.rect.x, detail_pane.rect.y, detail_pane.rect.width, detail_pane.rect.height, "surface", 0.22, 10, Z_PANEL) end
 
   for index = 1, shown do
     local row = find(laid, "event-" .. index)
     if row then
-      rect("event-bg-" .. index, row.rect.x, row.rect.y, row.rect.width, row.rect.height, "surface", 0.10, 6)
-      rect("event-rule-" .. index, row.rect.x + 10, row.rect.y + row.rect.height - 1, row.rect.width - 20, 1, "muted", 0.05, 0)
+      rect("event-bg-" .. index, row.rect.x, row.rect.y, row.rect.width, row.rect.height, "surface", 0.10, 6, Z_PANEL)
+      rect("event-rule-" .. index, row.rect.x + 10, row.rect.y + row.rect.height - 1, row.rect.width - 20, 1, "muted", 0.05, 0, Z_PANEL)
     end
   end
   local _, selected_index = selected_event(snapshot)
   local selected = find(laid, "event-" .. tostring(selected_index))
   if selected then
-    rect("event-selected", selected.rect.x, selected.rect.y, selected.rect.width, selected.rect.height, "primary", 0.14, 7)
+    rect("event-selected", selected.rect.x, selected.rect.y, selected.rect.width, selected.rect.height, "primary", 0.14, 7, Z_PANEL)
   end
 
   -- Locators are drawn as chips behind their label, so a link reads as a thing
@@ -375,7 +415,7 @@ function M.render(snapshot)
     local node = find(laid, "worklog-detail-link-" .. index)
     if node then
       rect("worklog-link-chip-" .. index, node.rect.x - 4, node.rect.y - 2,
-        node.rect.width + 8, node.rect.height + 4, "surface", 0.4, 5)
+        node.rect.width + 8, node.rect.height + 4, "surface", 0.4, 5, Z_CHIP)
       pressed[#pressed + 1] = {
         id = "worklog-link-" .. index,
         label = link.locator,
@@ -398,7 +438,27 @@ function M.render(snapshot)
         or node.id:find("%-detail%-empty") then ink_role = "muted" end
       if node.id:find("%-kind$") then ink_role = "primary" end
       if node.id == "worklog-detail-summary" then ink_role = "primary" end
-      text(node.id, node.text, node.rect.x, node.rect.y, node.style.size, ink_role)
+      local size = node.style.size
+      local line_height = node.style.line_height or (size + 4)
+      if node.style.wrap then
+        local per_line = chars_per_line(node.rect.width, size)
+        local lines = wrap_text(node.text, per_line)
+        -- The box reserved N lines; draw at most N, because a longer string is
+        -- the one case where wrapping alone still overruns the reservation.
+        local fits = math.max(1, math.floor(node.rect.height / line_height))
+        if #lines > fits then
+          local kept = {}
+          for index = 1, fits - 1 do kept[index] = lines[index] end
+          kept[fits] = clip(lines[fits], per_line)
+          lines = kept
+        end
+        for index, line in ipairs(lines) do
+          text(node.id .. "-l" .. index, line, node.rect.x,
+            node.rect.y + (index - 1) * line_height, size, ink_role)
+        end
+      else
+        text(node.id, node.text, node.rect.x, node.rect.y, size, ink_role)
+      end
     end
   end
 
@@ -418,7 +478,7 @@ function M.render(snapshot)
     if on_surface(spec.rect) then
       press {
         id = spec.id, label = spec.label,
-        action = "worklog.open_locator",
+        action = "worklog-open-locator",
         body = { locator = spec.locator, rel = spec.rel },
         x = nx(spec.rect.x), y = ny(spec.rect.y),
         width = sw(spec.rect.width), height = sh(spec.rect.height),
