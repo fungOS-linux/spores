@@ -13,7 +13,12 @@ local M = {}
 M.name = "worklog"
 M.version = "0.1.0"
 
-local W, H = 1086, 1569
+-- The surface size a host does not tell us. This matches `tend`'s default so the
+-- hot loop lays out exactly what ships — a view that assumes a tall document
+-- while the window is landscape draws rows below the bottom edge. A host that
+-- passes `module.inputs` overrides it; the real fix is for the host to always
+-- pass it, which is a Canvas question, not a view one.
+local W, H = 1200, 900
 local Z = 0
 
 local function use_viewport()
