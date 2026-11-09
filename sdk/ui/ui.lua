@@ -148,7 +148,8 @@ function ui.stack(props) return node("stack", props or {}) end
 -- `diameter` is in pixels. `inner` is the fraction of the radius that is hole
 -- (0.46 is a ring; 0 is a pie). `selected` is a 1-based index. `segments` trades
 -- nodes for smoothness; every slice costs `segments + 1` nodes plus one hit
--- region, and Canvas bounds a scene at 1024.
+-- region. A scene defaults to 8192 nodes and refuses past 65536, so a radial
+-- menu is nowhere near the ceiling and a dense grid is comfortable.
 function ui.radial(slices, props)
   props = props or {}
   props.slices = slices or {}
@@ -323,14 +324,17 @@ local function intrinsic(n, S)
     -- The same formula `lay` uses, not a second opinion: two width estimates for
     -- one control is how a row ends up overlapping its neighbour.
     local size = n.small and theme.small or theme.body
-    return ulen(n.label) * size * 0.95 * S.ux + wx(S, size * 0.52) * 2
+    -- Theme sizes are scene units, so padding is `size * S.ux`, not `wx(size)`:
+    -- the second form converts a unit value as if it were pixels and collapsed
+    -- to zero, which is how a row of buttons ended up stacked on one spot.
+    return ulen(n.label) * size * 0.95 * S.ux + size * 0.52 * S.ux * 2
   elseif n.kind == "text" then
     return estimate_width(n.value, n.px or size_for(theme, n.style), S)
   elseif n.kind == "icon" then
-    return wx(S, n.size and theme[n.size] or theme.body)
+    return (n.size and theme[n.size] or theme.body) * S.ux
   elseif n.kind == "icon_button" then
     local size = n.size and theme[n.size] or theme.body
-    return wx(S, size * 1.9)
+    return size * 1.9 * S.ux
   end
   return 0
 end
@@ -348,7 +352,11 @@ local function lay_text(n, S, width)
   local name = style(n.style)
   local size = n.px or S.theme[STYLE[name]]
   local lines = text_lines(n, S, width)
-  local advance = hy(S, size * ui.leading)
+  -- Theme sizes are scene units (a fraction of the 8-unit square), so the
+  -- advance is too: `hy` converts pixels, and feeding it a unit value made a
+  -- body line advance 8 px while its glyphs were 14 px, so stacked text
+  -- overlapped by a third of a line.
+  local advance = size * ui.leading
   local color = n.ink or (name == "title" and "primary" or "text")
   local prims = {}
   for index, line in ipairs(lines) do
@@ -512,7 +520,7 @@ lay_node = function(n, S, width)
 
   elseif kind == "icon" then
     local size = n.size and theme[n.size] or theme.body
-    return { h = hy(S, size * ui.leading),
+    return { h = size * ui.leading,
              p = { text_prim(n.glyph, size, S, n.ink or "muted", 0, 0) } }
 
   elseif kind == "icon_button" then
@@ -628,7 +636,7 @@ lay_node = function(n, S, width)
     } }
 
   elseif kind == "bullets" then
-    local advance = hy(S, theme.body * ui.leading)
+    local advance = theme.body * ui.leading
     local indent = wx(S, 26)
     local prims, height = {}, 0
     for _, item in ipairs(n.items) do
@@ -641,7 +649,7 @@ lay_node = function(n, S, width)
     return { h = height, p = prims }
 
   elseif kind == "quote" then
-    local advance = hy(S, theme.body * ui.leading)
+    local advance = theme.body * ui.leading
     local indent = wx(S, 14)
     local lines = wrap(n.value, n.chars or budget(S, theme.body, width - indent))
     local height = #lines * advance

@@ -117,4 +117,31 @@ function M.render(ctx)
   return root
 end
 
+-- A tree is geometry without a painter, and `fungos.ui` has no node painter:
+-- ui.paint_text and ui.paint_rules exist, the boxes are the view's job. Without
+-- this the tray lays out correctly and draws nothing at all, which is what the
+-- last screenshot showed.
+function M.draw(surface, ctx)
+  -- `render` takes a ctx ({ snapshot, viewport }), not a bare snapshot: passing
+  -- the snapshot directly leaves ctx.snapshot nil, so every section renders its
+  -- empty state and the columns size themselves off the default viewport.
+  ctx = ctx or {}
+  ctx.viewport = ctx.viewport or { width = surface.width, height = surface.height }
+  local laid = ui.layout(M.render(ctx), surface.width, surface.height)
+
+  for _, id in ipairs({ "notify-actions", "notify-now", "notify-held", "notify-history" }) do
+    local node = ui.find(laid, id)
+    if node then
+      surface:rect(id .. "-bg", node.rect.x, node.rect.y, node.rect.width, node.rect.height,
+        "surface", 0.32, 10)
+    end
+  end
+
+  ui.paint_rules(surface, laid, "muted", 0.08)
+  ui.paint_text(surface, laid, function(node)
+    if node.ink then return node.ink end
+    return "text"
+  end)
+end
+
 return M
