@@ -1020,6 +1020,13 @@ pub fn snapshot_lua(events: &[Event], limit: usize, now: i64, include_noise: boo
 }
 
 fn title_case(source: &str) -> String {
+    // Producers whose own name is not title case. A source that spells itself
+    // "GitHub" says so once, here, rather than in every view that shows it.
+    match source {
+        "github" => return "GitHub".to_string(),
+        "unibus" => return "Unibus".to_string(),
+        _ => {}
+    }
     let mut characters = source.chars();
     match characters.next() {
         Some(first) => first.to_uppercase().collect::<String>() + characters.as_str(),

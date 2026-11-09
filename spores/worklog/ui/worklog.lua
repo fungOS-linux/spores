@@ -298,7 +298,10 @@ local function use_type()
   -- row shorter than that is a one-line row whatever the page would prefer.
   TALL_ROW_H = math.floor(TYPE.micro * 1.3 + TYPE.body * 1.35) + GAP.sm
   MIN_ROW_H = math.max(44, math.floor(TYPE.body * 2.4))
-  MAX_ROW_H = math.max(132, math.floor(TYPE.body * 6))
+  -- A page with four events in it must not inflate each row to fill the height:
+  -- past about four lines of body text a row stops reading as a row and starts
+  -- reading as a card. A short log ends where it ends and the count says so.
+  MAX_ROW_H = math.max(96, math.floor(TYPE.body * 4.2))
   -- The toolbar, the list header and the pane padding, which is everything above
   -- the first row.
   CHROME_PX = math.floor(TYPE.title * 1.6) + math.floor(TYPE.caption * 2) + GAP.md * 2 + GAP.sm
@@ -631,11 +634,16 @@ local function tree(snapshot)
     -- pane, which is the overlap that looked like a Z-order bug.
     local main_w = W - GAP.md * 2
     local list_w = math.max(240, main_w - GAP.md - PANE_W)
+    -- The panes are given the height the page leaves instead of asking for it.
+    -- Left to themselves they take their content's height, so a four-row log
+    -- ended its panel two thirds of the way down the window and the wall showed
+    -- a card that stopped in mid air.
+    local main_h = math.max(120, H - GAP.md * 2 - math.floor(TYPE.title * 1.5))
     root.children[#root.children + 1] = {
       id = "worklog-main", kind = "container", layout = { flex_grow = 1, direction = "row", gap = GAP.md },
       children = {
-        { id = "worklog-list-pane", kind = "container", layout = { width = list_w, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = GAP.sm, right = GAP.sm, bottom = GAP.sm, left = GAP.sm } }, children = { list(snapshot, shown, show_source, first) } },
-        { id = "worklog-detail-pane", kind = "container", layout = { width = PANE_W, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = GAP.sm, right = GAP.md, bottom = GAP.sm, left = GAP.md } }, children = { detail(snapshot) } },
+        { id = "worklog-list-pane", kind = "container", layout = { width = list_w, height = main_h, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = GAP.sm, right = GAP.sm, bottom = GAP.sm, left = GAP.sm } }, children = { list(snapshot, shown, show_source, first) } },
+        { id = "worklog-detail-pane", kind = "container", layout = { width = PANE_W, height = main_h, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = GAP.sm, right = GAP.md, bottom = GAP.sm, left = GAP.md } }, children = { detail(snapshot) } },
       },
     }
   else
