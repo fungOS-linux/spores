@@ -22,7 +22,10 @@ snapshot (from the Spore, wasm)     actions (intents, back to the Spore)
                                                     canvas.present / host renderer
 ```
 
-- **Lua describes.** A view returns a tree: no coordinates, no colours.
+- **Lua describes.** A view builds a tree and presents it (`ui.present`): no
+  coordinates, no colours. The layout belongs to the library — host Taffy when
+  there is one, the kit's own pass when there is not — so the same view draws the
+  same geometry on Canvas, in `tend`, and in a scene recorder.
 - **The library measures.** `ui.column/row/card/text/code/...` compute flow from
   theme tokens and call the existing primitives. Adopting a declarative API cost
   no host change.

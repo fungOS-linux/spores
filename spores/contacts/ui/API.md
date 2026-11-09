@@ -5,12 +5,17 @@ sharing is explicit and projects only a first name and a token.
 
 ## Entrypoint
 
-`ui/editor.lua` exports `M.render(ctx, view)`, which returns a `fungos.ui` tree.
+`ui/editor.lua` exports `M.render(snapshot)`, which builds a `fungos.ui` tree and
+hands it to `ui.present`. That call lays the tree out — through the host when it
+offers a layout service, through the kit's own pass when it does not — and paints
+it into the scene the host records. `M.hits` holds the press targets the frame
+produced.
+
 `ui/view.example.lua` is the fixture used by `tend check`.
 
 ```lua
 local view = dofile("ui/editor.lua")
-local tree = view.render(ctx, snapshot)
+view.render(snapshot)      -- paints; M.hits lists the pressable rows
 ```
 
 ## Snapshot

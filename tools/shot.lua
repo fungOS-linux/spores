@@ -4,9 +4,14 @@
 --                     [--query=<text>] [--scroll=<px>] [--hover=<id>]
 --
 -- A preview tool, not a host: it provides the same `canvas` ABI Canvas does,
--- resolves `require` for the SDK, and nothing else. The flags are the host state
--- a view is allowed to read — a query, a scroll offset, the control under the
--- pointer — so the picture a page shows can be asked for from a shell.
+-- resolves `require` for the SDK, and nothing else. A view paints itself through
+-- `ui.present`, which owns the layout — so this tool records primitives and never
+-- lays anything out. A view that hands back a tree instead of presenting it
+-- records nothing at all, which is why that case warns rather than passing.
+--
+-- The flags are the host state a view is allowed to read — a query, a scroll
+-- offset, the control under the pointer — so the picture a page shows can be
+-- asked for from a shell.
 local positional, flags = {}, {}
 for index = 1, #arg do
   local key, value = arg[index]:match("^%-%-([%w_]+)=(.*)$")
@@ -15,7 +20,7 @@ end
 
 local view_path, snapshot_path, theme_path, out_path =
   positional[1], positional[2], positional[3], positional[4]
-local width, height = tonumber(positional[5]) or 1200, tonumber(positional[6]) or 44
+local width, height = tonumber(positional[5]) or 1200, tonumber(positional[6]) or 900
 
 assert(view_path and snapshot_path and theme_path and out_path,
   "usage: lua tools/shot.lua <view.lua> <snapshot.lua> <theme.lua> <out.json> [w] [h]"
@@ -64,14 +69,17 @@ if flags.query then _G.module.query = flags.query end
 if flags.scroll then _G.module.scroll = { offset = tonumber(flags.scroll) or 0 } end
 if flags.hover then _G.module.hover = flags.hover end
 
--- The SDK is a build-time import in a package; here it is a checkout.
+-- The SDK is a build-time import in a package; here it is a checkout. A view
+-- may require more than `fungos.ui` (`fungos.action`, `fungos.chart`, ...), so
+-- the whole `lua/` tree is on the path, not just one module.
 local sdk = os.getenv("FUNGOS_SDK") or (os.getenv("HOME") .. "/src/fungos-sdk")
-package.preload["fungos.ui"] = function()
-  return dofile(sdk .. "/lua/fungos/ui.lua")
-end
+package.path = sdk .. "/lua/?.lua;" .. sdk .. "/lua/?/init.lua;" .. package.path
 
 local view = assert(loadfile(view_path))()
 local snapshot = assert(loadfile(snapshot_path))()
+-- One argument, like every host: `tend`, `chrome-host` and Canvas all call
+-- `render(snapshot)`. A view that also wants the host context reads it from the
+-- `module` global, which is what the kit's own accessors do.
 view.render(snapshot)
 
 -- A theme maps semantic ink to colour. Resolving it here is what keeps a view
@@ -144,5 +152,12 @@ local file = assert(io.open(out_path, "wb"))
 file:write('{"kind":"scene","schema":1,"nodes":[', table.concat(parts, ","),
   '],"hits":[', table.concat(hit_parts, ","), '],"meta":', meta, "}")
 file:close()
+if #prims == 0 then
+  -- Not an error: an empty snapshot legitimately draws an empty scene. But it is
+  -- also what a view that returns a tree instead of presenting it looks like, and
+  -- that failure used to be silent.
+  io.stderr:write("shot: the view painted no primitives; a returned tree is not a painted scene\n")
+end
+
 print(string.format("%s: %d primitives, %d themed -> %s",
   theme.name or "theme", #prims, themed, out_path))

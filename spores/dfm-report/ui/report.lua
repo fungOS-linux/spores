@@ -1,6 +1,11 @@
 -- DFM report UI. The host supplies the report snapshot; this view is a pure
 -- projection and emits action intents only. The 3D view is a separate native
 -- surface (`soil-dfm-viz`), opened by intent, never drawn here.
+--
+-- The view builds a `fungos.ui` tree and hands it to `ui.present`, which lays it
+-- out (host Taffy when there is one, the kit's own pass when there is not) and
+-- paints it. Returning the tree instead would paint nothing: a host records
+-- primitives, it does not mount a tree.
 local ui = require("fungos.ui")
 local action = require("fungos.action")
 
@@ -39,7 +44,7 @@ local function counts(snapshot)
   })
 end
 
-local function header(ctx, snapshot)
+local function header(snapshot)
   return ui.column("dfm-header", { height = 62, gap = 2, padding = { left = 16, right = 16, top = 10 } }, {
     ui.text("dfm-title", snapshot.part or "part", { size = 15 }),
     ui.text("dfm-subtitle", (snapshot.process or "process") .. " · " ..
@@ -48,7 +53,7 @@ local function header(ctx, snapshot)
   })
 end
 
-local function finding_row(ctx, finding, index, selected)
+local function finding_row(finding, index, selected)
   local pinned = finding.anchor ~= nil
   return ui.list_row("dfm-finding-" .. index, {
     height = 54,
@@ -74,19 +79,19 @@ local function finding_row(ctx, finding, index, selected)
   })
 end
 
-local function rail(ctx, snapshot)
+local function rail(snapshot)
   local selected = select(2, selected_finding(snapshot))
   local children = { ui.section_label("dfm-rail-label", "FINDINGS", { ink = "muted" }) }
   for index, finding in ipairs(snapshot.findings or {}) do
-    ui.push(children, finding_row(ctx, finding, index, index == selected))
+    ui.push(children, finding_row(finding, index, index == selected))
   end
   if #(snapshot.findings or {}) == 0 then
     ui.push(children, ui.empty_state("dfm-empty", "No findings", "This report came back clean.", {}))
   end
-  return ui.sidebar("dfm-rail", { width = 300 }, children)
+  return ui.filled(ui.sidebar("dfm-rail", { width = 300 }, children), { radius = 0, opacity = 0.22 })
 end
 
-local function detail(ctx, snapshot)
+local function detail(snapshot)
   local finding = selected_finding(snapshot)
   if not finding then
     return ui.pane("dfm-detail", {}, {
@@ -150,18 +155,19 @@ local function detail(ctx, snapshot)
     },
   }, { height = 42 }))
 
-  return ui.pane("dfm-detail", { padding = { left = 18, right = 18, top = 14, bottom = 12 } }, body)
+  return ui.filled(ui.pane("dfm-detail", { padding = { left = 18, right = 18, top = 14, bottom = 12 } }, body),
+    { opacity = 0.18 })
 end
 
-function M.render(ctx)
-  local snapshot = ctx and ctx.snapshot or {}
-  return ui.workspace("dfm", { flex_grow = 1 }, {
-    header(ctx, snapshot),
+function M.render(snapshot)
+  snapshot = snapshot or {}
+  M.hits = ui.present(ui.workspace("dfm", { flex_grow = 1 }, {
+    header(snapshot),
     ui.row("dfm-body", { flex_grow = 1 }, {
-      rail(ctx, snapshot),
-      detail(ctx, snapshot),
+      rail(snapshot),
+      detail(snapshot),
     }),
-  })
+  }))
 end
 
 return M

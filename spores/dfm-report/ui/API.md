@@ -5,16 +5,21 @@ native surface (`soil-dfm-viz`), opened by intent and never drawn here.
 
 ## Entrypoint
 
-`ui/report.lua` exports `M.render(ctx)`, which reads `ctx.snapshot` and returns a
-`fungos.ui` tree. A caller with no context gets an empty report, not an error.
+`ui/report.lua` exports `M.render(snapshot)`, which builds a `fungos.ui` tree and
+hands it to `ui.present`. That call lays the tree out — through the host when it
+offers a layout service, through the kit's own pass when it does not — and paints
+it into the scene the host records. `M.hits` holds the press targets the frame
+produced. A caller with no snapshot gets an empty report, not an error.
+
+`ui/snapshot.example.lua` is the fixture used by `tend check`.
 
 ## Snapshot
 
 ```lua
 {
-  summary = { part, process, findings, blockers?, warnings? }?,
-  part = { id, name, material? }?,
-  process = { id, name, kind? }?,
+  summary = { blockers?, warnings?, notes? }?,
+  part = string?,     -- the part name, shown as the title
+  process = string?,  -- the process name, shown under the title
   findings = { { rule, severity, text, anchor? } }?,
   selected = integer?,   -- index into findings
 }
