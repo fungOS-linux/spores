@@ -33,9 +33,9 @@ mentions (later)─┘    (this doc)
   "source": "marbles",
   "kind": "closed",
   "actor": "marbles",
-  "subject": "marbles://fpl/spores/spores-42",
+  "subject": "marbles://fpl/spores-42",
   "summary": "closed spores/spores-42",
-  "links": [{ "rel": "subject", "locator": "marbles://fpl/spores/spores-42" }],
+  "links": [{ "rel": "subject", "locator": "marbles://fpl/spores-42" }],
   "payload": { "company": "fpl", "project": "spores", "issue_id": "spores-42" }
 }
 ```
@@ -74,7 +74,7 @@ collision.
 
 | Scheme | Example |
 | --- | --- |
-| `marbles://` | `marbles://fpl/spores/spores-42` |
+| `marbles://` | `marbles://fpl/spores-42` |
 | `github:` | `github:fungOS-linux/spores#41` |
 | `delta://` | `delta://thread/<id>` |
 | `vfs:` | `vfs:notes/x.md` |
