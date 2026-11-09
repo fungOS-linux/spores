@@ -60,6 +60,7 @@ spores/terminal-host       native terminal host
 spores/crm                 CRM Spore over namespaced records
 spores/contacts            personal contacts + explicit CRM projections
 spores/notify              notification tray and ringer
+spores/rooms               audio/video rooms with a Holodeck twin
 spores/consent             system consent popup
 spores/dfm-report          DFM report renderer
 spores/mush                sandboxed VFS shell
