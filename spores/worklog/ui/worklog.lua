@@ -129,30 +129,52 @@ local function kind_word(kind)
   return string.upper(tostring(kind or "?"))
 end
 
-local function event_row(event, index)
+-- Rows have a fixed height, so the count a pane can hold is arithmetic, not a
+-- constant. Drawing every event in a 40-event snapshot put a third of them past
+-- the bottom edge of the surface (2,309 px of ink on a 1,569 px surface): they
+-- were painted, invisible, and counted in "1–40 of 40".
+local ROW_H = 76
+local CHROME = 132
+
+local function visible_count(snapshot)
+  local total = #(snapshot.events or {})
+  -- An empty log shows zero rows, not the max(1, …) floor: there is no first
+  -- event to draw.
+  if total == 0 then return 0 end
+  local fits = math.floor((H - CHROME) / ROW_H)
+  return math.max(1, math.min(total, fits))
+end
+
+local function event_row(event, index, show_source)
+  local head = {
+    label("event-" .. index .. "-kind", kind_word(event.kind), 9, { width = 82 }),
+  }
+  -- One source means the column is the same word on every row: it costs a
+  -- column and tells the reader nothing.
+  if show_source then
+    head[#head + 1] = label("event-" .. index .. "-source", event.source or "", 9, { width = 64 })
+  end
+  head[#head + 1] = label("event-" .. index .. "-actor", event.actor or "", 9, { flex_grow = 1 })
+  head[#head + 1] = label("event-" .. index .. "-age", event.age or "", 9, { width = 40 })
+
   return {
     id = "event-" .. index, kind = "container",
-    layout = { height = 56, direction = "column", gap = 2, padding = { top = 7, right = 12, bottom = 7, left = 12 } },
+    layout = { height = ROW_H, direction = "column", gap = 2, padding = { top = 6, right = 12, bottom = 6, left = 12 } },
     children = {
-      {
-        id = "event-" .. index .. "-head", kind = "container", layout = { direction = "row", height = 14 },
-        children = {
-          label("event-" .. index .. "-kind", kind_word(event.kind), 9, { width = 82 }),
-          label("event-" .. index .. "-source", event.source or "", 9, { width = 64 }),
-          label("event-" .. index .. "-actor", event.actor or "", 9, { flex_grow = 1 }),
-          label("event-" .. index .. "-age", event.age or "", 9, { width = 40 }),
-        },
-      },
-      label("event-" .. index .. "-summary", clip(event.summary, 76), 12, { height = 17 }),
-      label("event-" .. index .. "-subject", clip(event.subject, 56), 9, { height = 12 }),
+      { id = "event-" .. index .. "-head", kind = "container", layout = { direction = "row", height = 13 }, children = head },
+      -- Two wrapped lines instead of one clipped one: Marbles' detail is often
+      -- the whole point of the row, and `…` at 76 characters threw it away.
+      label("event-" .. index .. "-summary", clip(event.summary, 160), 12, { height = 32, wrap = true }),
+      label("event-" .. index .. "-subject", clip(event.subject, 56), 9, { height = 11 }),
     },
   }
 end
 
-local function list(snapshot)
+local function list(snapshot, shown, show_source)
   local events = snapshot.events or {}
   local counts = snapshot.counts or {}
-  local range = (#events == 0) and "0 of 0" or string.format("1–%d of %d", #events, counts.total or #events)
+  local range = (#events == 0) and "0 of 0"
+    or string.format("1–%d of %d", shown, counts.total or #events)
   local children = {
     {
       id = "worklog-head", kind = "container", layout = { direction = "row", height = 20 },
@@ -165,8 +187,8 @@ local function list(snapshot)
   if #events == 0 then
     children[#children + 1] = label("worklog-empty", "Nothing has arrived yet.", 12, { height = 24 })
   end
-  for index, event in ipairs(events) do
-    children[#children + 1] = event_row(event, index)
+  for index = 1, shown do
+    children[#children + 1] = event_row(events[index], index, show_source)
   end
   return { id = "worklog-list", kind = "container", layout = { flex_grow = 1, direction = "column", gap = 0 }, children = children }
 end
@@ -208,6 +230,7 @@ end
 local function tree(snapshot)
   local counts = snapshot.counts or {}
   local wide = W >= 620
+  local show_source = #(snapshot.sources or {}) > 1
   local root = {
     id = "worklog-root", kind = "container",
     layout = { width = W, height = H, direction = "column", gap = 8, padding = { top = 12, right = 22, bottom = 18, left = 22 } },
@@ -226,12 +249,12 @@ local function tree(snapshot)
     root.children[#root.children + 1] = {
       id = "worklog-main", kind = "container", layout = { flex_grow = 1, direction = "row", gap = 16 },
       children = {
-        { id = "worklog-list-pane", kind = "container", layout = { flex_grow = 1, flex_shrink = 1, direction = "column", padding = { top = 8, right = 10, bottom = 8, left = 10 } }, children = { list(snapshot) } },
+        { id = "worklog-list-pane", kind = "container", layout = { flex_grow = 1, flex_shrink = 1, direction = "column", padding = { top = 8, right = 10, bottom = 8, left = 10 } }, children = { list(snapshot, visible_count(snapshot), show_source) } },
         { id = "worklog-detail-pane", kind = "container", layout = { width = 300, flex_grow = 0, flex_shrink = 0, direction = "column", padding = { top = 10, right = 14, bottom = 10, left = 14 } }, children = { detail(snapshot) } },
       },
     }
   else
-    root.children[#root.children + 1] = { id = "worklog-main", kind = "container", layout = { flex_grow = 1 }, children = { list(snapshot) } }
+    root.children[#root.children + 1] = { id = "worklog-main", kind = "container", layout = { flex_grow = 1 }, children = { list(snapshot, visible_count(snapshot), show_source) } }
   end
   return root
 end
@@ -259,6 +282,7 @@ function M.render(snapshot)
   use_viewport()
   snapshot = apply_event(snapshot or {})
   local events = snapshot.events or {}
+  local shown = visible_count(snapshot)
   local wide = W >= 620
   local laid = layout(tree(snapshot), W, H)
 
@@ -268,7 +292,7 @@ function M.render(snapshot)
   local detail_pane = find(laid, "worklog-detail-pane")
   if detail_pane then rect("worklog-detail-bg", detail_pane.rect.x, detail_pane.rect.y, detail_pane.rect.width, detail_pane.rect.height, "surface", 0.22, 10) end
 
-  for index = 1, #events do
+  for index = 1, shown do
     local row = find(laid, "event-" .. index)
     if row then
       rect("event-bg-" .. index, row.rect.x, row.rect.y, row.rect.width, row.rect.height, "surface", 0.10, 6)
@@ -316,7 +340,7 @@ function M.render(snapshot)
     end
   end
 
-  for index = 1, #events do
+  for index = 1, shown do
     local row = find(laid, "event-" .. index)
     if row then
       hit {

@@ -307,18 +307,30 @@ pub fn from_marbles(body: &[u8]) -> Result<Event, String> {
     }
 
     let kind = marbles_kind(&envelope.event)?;
+    // Marbles prefixes every issue id with its project (`mycelium-6us5`), so
+    // carrying the project in the locator as well printed it twice:
+    // `marbles://local/mycelium/mycelium-6us5`. The id is unique within a store;
+    // the project travels in the payload and in the row text.
     let subject = Locator::parse(&format!(
-        "marbles://{}/{}/{}",
-        envelope.company, envelope.project, envelope.issue_id
+        "marbles://{}/{}",
+        envelope.company, envelope.issue_id
     ))?;
 
-    let base = format!(
-        "{} {}/{}",
-        envelope.event, envelope.project, envelope.issue_id
-    );
-    let summary = match envelope.detail.as_deref() {
-        Some(detail) if !detail.trim().is_empty() => format!("{base} — {detail}"),
-        _ => base,
+    // The row already shows the kind in its head and the locator beneath it, so
+    // repeating `closed mycelium/mycelium-6us5` in the summary printed the same
+    // issue id twice per row. The detail is the part that carries information;
+    // when there is none, the identity is all the row has.
+    //
+    // Marbles writes its detail with a leading `|` separator, which read as
+    // `— | ack: …` once it landed in a sentence.
+    let detail = envelope
+        .detail
+        .as_deref()
+        .map(|detail| detail.trim().trim_start_matches('|').trim())
+        .filter(|detail| !detail.is_empty());
+    let summary = match detail {
+        Some(detail) => detail.to_string(),
+        None => format!("{} {}", envelope.event, envelope.issue_id),
     };
     let actor = match envelope.actor.as_deref() {
         Some(actor) if !actor.trim().is_empty() => actor.to_string(),
