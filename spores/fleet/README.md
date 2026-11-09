@@ -114,7 +114,11 @@ degrading them to `Group` — see
 
 The fixture is **251 primitives**, under the stock Canvas cap of 256. That
 number is an assertion in `tests/ui_fixture.lua`: a view that grows one more
-panel has to give something up, not discover the limit on the wall.
+panel has to give something up, not discover the limit on the wall. It is a
+fixture, not a guarantee: each live peer adds a label and a halo, and each peer
+adds a dot and an edge, so a fleet past roughly twenty-five live peers needs
+the frontier Canvas's 1024-node ceiling (or fewer labels). The live capture on
+the day this landed sat at 248.
 
 ## Refresh the fixture and the screenshot
 
