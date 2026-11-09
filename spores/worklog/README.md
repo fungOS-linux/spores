@@ -58,7 +58,11 @@ Read it back:
 lua tools/preview_worklog.lua                  # plain text, committed fixture
 lua tools/preview_worklog.lua /tmp/worklog.lua # plain text, the real log
 
-lua tools/compose_worklog.lua "$MODULES" /tmp/worklog.lua
+# One composer for every Spore view: tend, with the Taffy layout service so the
+# geometry is the geometry Canvas will produce, not a fake row layout.
+lua <sdk>/tools/tend.lua watch ui/worklog.lua /tmp/worklog.lua \
+  --surface worklog --name spore-dev-worklog \
+  --layout <soil>/target/debug/soil-layout --width 1086 --height 1569
 ```
 
 `$MODULES` is the Canvas runtime modules directory

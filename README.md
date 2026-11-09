@@ -79,7 +79,7 @@ spores/unibus       the inbox Spore (id `dev.fungos.inbox`)
 spores/worklog      the worklog Spore (id `dev.fungos.worklog`) + receiver
                     src/   fungos.worklog/event@1: normalize, order, store
                     ui/    the timeline view Canvas renders
-                    tools/compose_worklog.lua  compose it into a module
+                    (composed by tend, like every other Lua view)
 docs/               host/spore contract, records/sync, AI inbox spec
 ```
 
