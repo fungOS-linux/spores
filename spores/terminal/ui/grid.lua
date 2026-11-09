@@ -128,7 +128,9 @@ function M.render(frame)
     rows = rows,
     cell_width = cw,
     cell_height = ch,
-    title = frame.title or "terminal",
+    -- Empty means the shell set no title (OSC 0); the page keeps its own name
+    -- rather than replacing it with a blank one.
+    title = type(frame.title) == "string" and frame.title or "",
     scroll = frame.scroll and tonumber(frame.scroll.offset) or 0,
   }
 

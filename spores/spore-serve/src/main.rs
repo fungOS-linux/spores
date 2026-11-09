@@ -45,6 +45,7 @@ struct Config {
     width: u32,
     height: u32,
     proxy: Option<String>,
+    title: String,
 }
 
 enum SnapshotSource {
@@ -66,6 +67,7 @@ fn run() -> Result<(), String> {
     let mut height = 900;
     let mut proxy = None;
     let mut bind = "127.0.0.1:8793".to_string();
+    let mut title: Option<String> = None;
 
     let mut index = 0;
     while index < args.len() {
@@ -89,6 +91,7 @@ fn run() -> Result<(), String> {
             "--height" => height = value()?.parse().map_err(|_| "bad --height")?,
             "--proxy" => proxy = Some(value()?),
             "--bind" => bind = value()?,
+            "--title" => title = Some(value()?),
             "--help" | "-h" => {
                 println!(
                     "spore-serve --root <spore> [--view ui/x.lua] \
@@ -104,7 +107,8 @@ fn run() -> Result<(), String> {
     }
 
     let root = root.ok_or("--root <spore dir> is required")?;
-    let view = view.unwrap_or_else(|| PathBuf::from("ui/view.lua"));
+    let view_file = view.clone().unwrap_or_else(|| PathBuf::from("ui/view.lua"));
+    let view = view_file.clone();
     let theme = theme.unwrap_or_else(|| root.join("../../spores/themes/graphite.lua"));
     let renderer =
         renderer.unwrap_or_else(|| root.join("../../tools/shot.lua"));
@@ -125,6 +129,10 @@ fn run() -> Result<(), String> {
         width,
         height,
         proxy,
+        title: title.unwrap_or_else(|| {
+            let stem = view_file.file_stem().map(|stem| stem.to_string_lossy().to_string());
+            stem.unwrap_or_else(|| "spore".to_string())
+        }),
     });
 
     let listener = TcpListener::bind(&bind).map_err(|error| format!("bind {bind}: {error}"))?;
@@ -159,7 +167,10 @@ fn handle(mut stream: TcpStream, config: &Config) -> Result<(), String> {
 
     let path = request.target.split('?').next().unwrap_or("/");
     match (request.method.as_str(), path) {
-        ("GET", "/") => respond(&mut stream, "200 OK", "text/html; charset=utf-8", INDEX_HTML.as_bytes()),
+        ("GET", "/") => {
+            let page = INDEX_HTML.replace("__TITLE__", &config.title);
+            respond(&mut stream, "200 OK", "text/html; charset=utf-8", page.as_bytes())
+        }
         ("GET", "/health") => respond(&mut stream, "200 OK", "text/plain; charset=utf-8", b"ok\n"),
         ("GET", "/scene.json") => {
             // A page asks for the surface it is drawing on: a terminal sized for

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>spore</title>
+<title>__TITLE__</title>
 <style>
   :root { color-scheme: dark; }
   html, body { height: 100%; margin: 0; background: #0b0e11; overflow: hidden; }
@@ -15,6 +15,28 @@
     line-height: 1;
     letter-spacing: 0;
   }
+  #menu {
+    position: fixed; top: 8px; right: 8px; z-index: 20;
+    font: 11px ui-monospace, monospace; color: #8395a2; background: #141b21;
+    border: 1px solid #1c252d; border-radius: 6px; padding: 4px 8px; cursor: pointer;
+    opacity: .25; transition: opacity .2s;
+  }
+  #menu:hover, body:hover #menu { opacity: 1; }
+  #picker {
+    position: fixed; inset: 0; z-index: 30; display: none;
+    background: rgba(11,14,17,.92); padding: 24px 28px; overflow: auto;
+    font: 12px ui-monospace, monospace; color: #dce5ea;
+  }
+  #picker.open { display: block; }
+  #picker h2 { font-size: 11px; letter-spacing: .12em; color: #8395a2; margin: 18px 0 8px; text-transform: uppercase; }
+  #picker button {
+    display: block; width: 100%; max-width: 520px; text-align: left;
+    background: #141b21; color: #dce5ea; border: 1px solid #1c252d; border-radius: 6px;
+    padding: 7px 10px; margin: 0 0 4px; font: inherit; cursor: pointer;
+  }
+  #picker button:hover { border-color: #7dd3a8; }
+  #picker .live { color: #7dd3a8; }
+  #picker .meta { color: #5b6b78; margin-left: 8px; }
   #hint {
     position: fixed; right: 10px; bottom: 8px; z-index: 10;
     font: 11px ui-monospace, monospace; color: #5b6b78; opacity: .0;
@@ -26,6 +48,8 @@
 </head>
 <body>
 <div id="screen"></div>
+<button id="menu" type="button">sessions</button>
+<div id="picker"></div>
 <div id="hint"><b>click</b> to type · <b>esc</b> clears · resize the window to reflow</div>
 <script>
 (() => {
@@ -136,7 +160,68 @@
     return text;
   }
 
+  const picker = document.getElementById('picker');
+  const menu = document.getElementById('menu');
+  let pickerOpen = false;
+
+  async function openPicker() {
+    pickerOpen = true;
+    picker.classList.add('open');
+    picker.replaceChildren(Object.assign(document.createElement('h2'), { textContent: 'loading…' }));
+    try {
+      const [sessions, targets] = await Promise.all([
+        fetch('/sessions' + qs()).then((r) => r.json()),
+        fetch('/targets' + qs()).then((r) => r.json()),
+      ]);
+      const parts = [];
+      const heading = (text) => parts.push(Object.assign(document.createElement('h2'), { textContent: text }));
+      heading('sessions');
+      for (const item of sessions.sessions || []) {
+        const button = document.createElement('button');
+        button.innerHTML = `<span class="live">${item.exited ? '·' : '●'}</span> ${item.label || item.target}` +
+          `<span class="meta">session ${item.id}</span>`;
+        button.onclick = () => { location.search = '?session=' + item.id; };
+        parts.push(button);
+      }
+      if (!(sessions.sessions || []).length) {
+        parts.push(Object.assign(document.createElement('div'), { textContent: 'none open', className: 'meta' }));
+      }
+      heading('targets');
+      for (const item of targets.targets || []) {
+        const button = document.createElement('button');
+        button.innerHTML = `${item.label || item.name}<span class="meta">${item.kind || 'target'} · ${item.detail || ''}</span>`;
+        button.onclick = async () => {
+          const response = await fetch('/sessions' + qs(), {
+            method: 'POST',
+            body: JSON.stringify({ target: item.name }),
+          });
+          if (response.ok) {
+            const opened = await response.json();
+            location.search = '?session=' + opened.id;
+          }
+        };
+        parts.push(button);
+      }
+      picker.replaceChildren(...parts);
+    } catch (error) {
+      picker.replaceChildren(Object.assign(document.createElement('h2'), { textContent: 'could not list sessions' }));
+    }
+  }
+
+  menu.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (pickerOpen) { pickerOpen = false; picker.classList.remove('open'); }
+    else openPicker();
+  });
+  picker.addEventListener('click', (event) => {
+    if (event.target === picker) { pickerOpen = false; picker.classList.remove('open'); }
+  });
+
   window.addEventListener('keydown', (event) => {
+    if (pickerOpen) {
+      if (event.key === 'Escape') { pickerOpen = false; picker.classList.remove('open'); }
+      return;
+    }
     const text = encode(event);
     if (!text) return;
     event.preventDefault();
