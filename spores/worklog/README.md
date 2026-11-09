@@ -98,23 +98,22 @@ lua tools/preview_worklog.lua /tmp/worklog.lua # plain text, the real log
 
 # A picture without a compositor: the same primitives Canvas is handed, drawn to
 # SVG at the size the wall gives this surface. Geometry, density and colour roles
-# are real; only the font metrics are approximated (0.8 em per character, which is
-# what the wrap budget already assumes).
+# are real; the type sizes come from the theme, so the picture is at the size
+# Canvas draws. Only the font face is approximated.
 lua tools/render_worklog.lua /tmp/worklog.lua /tmp/worklog.svg
 rsvg-convert -w 1182 /tmp/worklog.svg -o /tmp/worklog.png
 
 lua tools/compose_worklog.lua "$MODULES" /tmp/worklog.lua
 
-# Iterate without shipping: tend re-composes on save and reloads the surface,
-# with the real Taffy host Canvas uses.
+# Iterate without shipping: tend re-composes on save and reloads the surface.
 lua <sdk>/tools/tend.lua watch ui/worklog.lua /tmp/worklog.lua \
-  --surface worklog --name spore-dev-worklog \
-  --layout <soil>/target/debug/soil-layout
+  --surface worklog --name spore-dev-worklog
 
 # Do not ship what `tend` composes for this view. Its module resolves
 # `require("fungos.ui")` during preflight but not when Canvas loads it, and the
 # surface dies with "attempt to index a nil value (global 'ui')". This composer
-# inlines the library as the view's `ui` upvalue, which has no such step.
+# hands the view a `require` whose one entry is the SDK library, which has no
+# such step.
 ```
 
 `$MODULES` is the Canvas runtime modules directory
@@ -124,6 +123,32 @@ or fails at compose time with the size, not at install time with a blank window.
 
 Placing the surface is a separate step and a layout decision — a third pane
 alongside the inbox and contacts is a product call, not an installer default.
+
+## In a browser
+
+`worklog-serve` is the same view, in a browser window. It is not a second
+renderer: the page draws the scene document that `tools/shot.lua` produces by
+running `ui/worklog.lua`, so the browser and the wall cannot disagree about what
+the log looks like. The renderer runs once per snapshot change and per window
+size, not per request.
+
+```sh
+cargo build -p spore-worklog --bin worklog-serve
+./target/debug/worklog-serve \
+  --sdk "$FUNGOS_SDK" \
+  --snapshot /tmp/worklog.lua    # or examples/worklog_mock.lua
+```
+
+The desktop gateway routes `worklog.myc` to it:
+
+```json
+{ "name": "worklog", "hosts": ["worklog.myc"],
+  "upstream": "http://127.0.0.1:8795", "priority": 10 }
+```
+
+in `~/.mycelium/gateway/routes.json`; `*.myc` already resolves to loopback through
+`/etc/resolver/myc`, so the route is the whole of the DNS story. The host answers
+`GET /` (the page) and `GET /scene.json?w=&h=` (the scene at that window size).
 
 ## Tests
 
