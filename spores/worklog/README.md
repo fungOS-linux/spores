@@ -58,11 +58,18 @@ Read it back:
 lua tools/preview_worklog.lua                  # plain text, committed fixture
 lua tools/preview_worklog.lua /tmp/worklog.lua # plain text, the real log
 
-# One composer for every Spore view: tend, with the Taffy layout service so the
-# geometry is the geometry Canvas will produce, not a fake row layout.
+lua tools/compose_worklog.lua "$MODULES" /tmp/worklog.lua
+
+# Iterate without shipping: tend re-composes on save and reloads the surface,
+# with the real Taffy host Canvas uses.
 lua <sdk>/tools/tend.lua watch ui/worklog.lua /tmp/worklog.lua \
   --surface worklog --name spore-dev-worklog \
-  --layout <soil>/target/debug/soil-layout --width 1086 --height 1569
+  --layout <soil>/target/debug/soil-layout
+
+# Do not ship what `tend` composes for this view. Its module resolves
+# `require("fungos.ui")` during preflight but not when Canvas loads it, and the
+# surface dies with "attempt to index a nil value (global 'ui')". This composer
+# inlines the library as the view's `ui` upvalue, which has no such step.
 ```
 
 `$MODULES` is the Canvas runtime modules directory
