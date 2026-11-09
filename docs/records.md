@@ -1,7 +1,8 @@
 # Records: storage and sync for Soil apps
 
 Status: draft contract [`soil:records@0.1.0`](https://github.com/fungOS-linux/soil/blob/main/wit/soil-records.wit)
-plus the first consumer, [`spores/unibus`](../spores/unibus).
+plus the first consumer, the `dev.fungos.inbox` Spore in
+[`spores/unibus`](../spores/unibus).
 
 ## Why records
 

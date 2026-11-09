@@ -22,8 +22,13 @@ fn lua() -> Option<String> {
 #[test]
 fn ui_uses_no_ambient_authority() {
     let source = ui_source();
-    for forbidden in ["os.", "io.", "require", "package", "dofile", "loadfile", "load(", "debug."] {
-        assert!(!source.contains(forbidden), "ui/launcher.lua may not use {forbidden}");
+    for forbidden in [
+        "os.", "io.", "require", "package", "dofile", "loadfile", "load(", "debug.",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "ui/launcher.lua may not use {forbidden}"
+        );
     }
 }
 
@@ -34,7 +39,16 @@ fn the_search_renders_a_fixture() {
         return;
     };
     let dir = spore_dir();
-    let output = Command::new(lua).arg("tests/ui_fixture.lua").current_dir(&dir).output().expect("run lua");
-    assert!(output.status.success(), "ui fixture failed:\n{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    let output = Command::new(lua)
+        .arg("tests/ui_fixture.lua")
+        .current_dir(&dir)
+        .output()
+        .expect("run lua");
+    assert!(
+        output.status.success(),
+        "ui fixture failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(String::from_utf8_lossy(&output.stdout).contains("ui: ok"));
 }

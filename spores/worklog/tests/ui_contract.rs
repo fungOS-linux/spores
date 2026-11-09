@@ -1,0 +1,74 @@
+//! The Lua worklog UI is a shipped artifact with its own parse/render gate.
+
+use std::path::PathBuf;
+use std::process::Command;
+
+fn spore_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn lua() -> Option<String> {
+    for binary in ["lua", "lua5.4", "lua5.3", "luajit"] {
+        if Command::new(binary).arg("-v").output().is_ok() {
+            return Some(binary.to_owned());
+        }
+    }
+    None
+}
+
+#[test]
+fn ui_uses_no_ambient_authority() {
+    let source =
+        std::fs::read_to_string(spore_dir().join("ui/worklog.lua")).expect("ui/worklog.lua");
+    for forbidden in [
+        "os.",
+        "io.",
+        "require(",
+        "package.",
+        "dofile(",
+        "loadfile(",
+        "load(",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "ui/worklog.lua may not use {forbidden}: Canvas gives it no ambient authority"
+        );
+    }
+}
+
+#[test]
+fn ui_names_roles_not_colours() {
+    let source =
+        std::fs::read_to_string(spore_dir().join("ui/worklog.lua")).expect("ui/worklog.lua");
+    // docs/design-tokens.md: a view names roles, a theme supplies values. A hex
+    // literal in a view is a token gap being papered over.
+    //
+    // `#` alone is Lua's length operator, so this looks for the shape of a
+    // colour (`#` followed by six hex digits) rather than for the character.
+    for (index, _) in source.match_indices('#') {
+        let candidate: String = source[index + 1..].chars().take(6).collect();
+        if candidate.len() == 6 && candidate.chars().all(|digit| digit.is_ascii_hexdigit()) {
+            panic!("ui/worklog.lua contains a literal colour: #{candidate}");
+        }
+    }
+}
+
+#[test]
+fn ui_renders_the_mock_snapshot() {
+    let Some(lua) = lua() else {
+        eprintln!("skipping: no Lua interpreter on PATH");
+        return;
+    };
+    let output = Command::new(lua)
+        .arg("tests/ui_fixture.lua")
+        .current_dir(spore_dir())
+        .output()
+        .expect("run lua");
+    assert!(
+        output.status.success(),
+        "ui fixture failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("ui: ok"));
+}

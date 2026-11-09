@@ -1,12 +1,19 @@
-# Initial soil:unibus Spore. See docs/records.md and docs/ai-inbox-spec.md.
+# The read-only inbox Spore. See docs/records.md and docs/ai-inbox-spec.md.
+#
+# Named for what it is, not for the bus it reads. The `soil:unibus.*` grants
+# below make this a *client* of Unibus; a Spore called `unibus` would read as
+# owning the bus, and the next app that also reads mail would have nowhere
+# honest to live. Composing and sending are a separate Spore with a separate
+# grant set (`dev.fungos.mail`), so "is this allowed to send?" is answered by
+# the manifest and never by auditing the view.
 schema = 1
 
 [spore]
-id = "dev.fungos.unibus"
-name = "unibus"
+id = "dev.fungos.inbox"
+name = "inbox"
 version = "0.1.0"
 license = "MIT"
-summary = "Mail/chat metadata cached as soil:records, fed by soil:unibus"
+summary = "Read-only inbox over soil:unibus mail/chat metadata, cached as soil:records"
 homepage = "https://github.com/fungOS-linux/spores"
 
 [engine]

@@ -35,6 +35,18 @@ local INK = {
   background = true, surface = true, surface_raised = true, surface_sunken = true,
   border = true, divider = true, text = true, muted = true,
   primary = true, accent = true, success = true, warning = true, danger = true,
+  info = true,
+}
+-- Canvas's Lua scene ABI has a smaller semantic palette than the UI vocabulary.
+-- Keep the richer token names for component authors, but normalize them before
+-- they reach canvas.rect/canvas.text. Otherwise a tree that previews correctly
+-- in the native test harness is rejected by the compositor.
+local INK_ALIAS = {
+  accent = "info",
+  surface_raised = "surface",
+  surface_sunken = "background",
+  border = "muted",
+  divider = "muted",
 }
 
 ui.tokens = {
@@ -97,7 +109,7 @@ local function ink(value, field)
     table.sort(names)
     fail(("%s: %q is not an ink role (%s)"):format(field, value, table.concat(names, "/")), 3)
   end
-  return value
+  return INK_ALIAS[value] or value
 end
 
 -- Rule 2: text uses a named style.
@@ -216,9 +228,65 @@ end
 
 function ui.quote(value) return node("quote", { value = value }) end
 
+-- Dashboard primitives. These are ordinary tree nodes: the one-pass layout
+-- owns their geometry, the token vocabulary owns their colour and spacing, and
+-- ui.render emits the same canvas.rect/text primitives as every other node.
+--
+-- `stat`: label, value, unit, decimals, delta, delta_ink, status, action.
+-- `gauge`: title, value, min, max, unit, decimals, segments, thresholds, status.
+-- `table`: title, subtitle, status, columns, rows, row_h, row_action, row_key.
+-- `chart`: title, subtitle, status, series, x/y bounds, threshold, selection,
+--          columns, decimate, max_points, caps, legend_gap, legend_action,
+--          plot_action.
+--          All action fields are optional and use host-owned hit regions; the
+--          view never receives a callback.
+function ui.stat(props) return node("stat", props or {}) end
+function ui.gauge(props) return node("gauge", props or {}) end
+function ui.table(props) return node("table", props or {}) end
+function ui.chart(series, props)
+  props = props or {}
+  props.series = series or props.series or {}
+  return node("chart", props)
+end
+
+-- A host-owned surface placed in the Lua layout. `resource` names a manifest
+-- grant; the host resolves it to a scene, texture, or device surface. The view
+-- never sees a texture handle or pixels, and the library never draws over it.
+function ui.host_surface(resource, props)
+  if type(resource) ~= "string" or resource == "" then
+    fail("ui.host_surface needs a non-empty resource alias", 2)
+  end
+  props = props or {}
+  props.resource = resource
+  return node("host_surface", props)
+end
+
 -- An interaction intent. The Spore receives it; the view never runs it.
 function ui.action(name, payload)
   return { action = name, payload = payload }
+end
+
+-- The host speaks a narrower language than this kit's nodes: `action` is a
+-- *name*, the payload rides in `body`, and appearance is the host's vocabulary,
+-- not ours. `ui.action` carries both halves in one table, so a control prim
+-- unwraps it here rather than at each of the four sites that draw one.
+local function control_prim(spec)
+  local action, body = spec.action, spec.body
+  if type(action) == "table" then
+    action, body = action.action, action.payload or body
+  end
+  return {
+    button = {
+      id = spec.id,
+      label = spec.label,
+      action = action,
+      body = body or {},
+      enabled = spec.enabled ~= false,
+      appearance = spec.appearance or "hit",
+    },
+    translation = spec.translation or { 0, 0, 0 },
+    scale = spec.scale or { 1, 1, 1 },
+  }
 end
 
 -- ---- text ---------------------------------------------------------------
@@ -348,6 +416,27 @@ local function control_id(n)
   return (action:gsub("[^%w%-_]", "-")):sub(1, 48)
 end
 
+-- A hit region is scene data, not a second renderer. Composite dashboard nodes
+-- use the same host-owned control path as `button`: draw the card, then put an
+-- invisible control over it so a Spore receives an action instead of a click
+-- callback. Keep this optional so headless previews and non-Canvas hosts still
+-- render the same tree.
+local function hit_region(prims, spec)
+  if not (spec and spec.action and widget and widget.button) then return end
+  local w = tonumber(spec.w) or 0
+  local h = tonumber(spec.h) or 0
+  if w <= 0 or h <= 0 then return end
+  prims[#prims + 1] = control_prim {
+    id = spec.id,
+    label = spec.label,
+    action = spec.action,
+    body = spec.body,
+    enabled = spec.enabled,
+    translation = { spec.x or 0, spec.y or 0, 0 },
+    scale = { w, h, 1 },
+  }
+end
+
 local function lay_text(n, S, width)
   local name = style(n.style)
   local size = n.px or S.theme[STYLE[name]]
@@ -446,15 +535,12 @@ local function lay_radial(n, S)
     )
 
     if n.action and widget and widget.button then
-      prims[#prims + 1] = {
-        button = {
-          id = slice.id,
-          label = label,
-          action = n.action,
-          body = slice.body or { id = slice.id, value = slice.id },
-          enabled = available,
-          appearance = "invisible",
-        },
+      prims[#prims + 1] = control_prim {
+        id = slice.id,
+        label = label,
+        action = n.action,
+        body = slice.body or { id = slice.id, value = slice.id },
+        enabled = available,
         translation = {
           cx + math.cos(middle) * middle_radius - segment_length * 0.5,
           cy + math.sin(middle) * middle_radius + band * 0.5,
@@ -465,6 +551,461 @@ local function lay_radial(n, S)
     end
   end
 
+  return { h = height, p = prims }
+end
+
+-- ---- dashboard nodes ----------------------------------------------------
+
+local function status_ink(value, fallback)
+  local name = tostring(value or ""):lower()
+  if name == "ok" or name == "healthy" or name == "live" or name == "ready"
+    or name == "success" or name == "active" then
+    return ink("success", "status.ink")
+  elseif name == "warn" or name == "warning" or name == "degraded"
+    or name == "pending" or name == "lagging" then
+    return ink("warning", "status.ink")
+  elseif name == "error" or name == "critical" or name == "crit" or name == "down"
+    or name == "failed" or name == "failing" then
+    return ink("danger", "status.ink")
+  end
+  return ink(fallback or "muted", "status.ink")
+end
+
+local function threshold_ink(value, steps, base)
+  local name = base or "success"
+  for _, step in ipairs(steps or {}) do
+    if value >= (tonumber(step.value) or 0) then name = step.ink or name end
+  end
+  return ink(name, "threshold.ink")
+end
+
+local function value_format(value, decimals, unit)
+  local out
+  if type(value) == "number" then
+    out = string.format("%." .. tostring(math.max(0, math.floor(decimals or 0))) .. "f", value)
+  else
+    out = tostring(value or "")
+  end
+  if unit and unit ~= "" then out = out .. tostring(unit) end
+  return out
+end
+
+local function point_xy(point)
+  if type(point) ~= "table" then return nil end
+  local x, y = point.x or point[1], point.y or point[2]
+  x, y = tonumber(x), tonumber(y)
+  if x == nil or y == nil then return nil end
+  return x, y
+end
+
+local function sample_points(points, count)
+  local out = {}
+  if #(points or {}) == 0 then return out end
+  for index = 1, count do
+    local at = 1
+    if count > 1 and #points > 1 then
+      at = 1 + math.floor((index - 1) * (#points - 1) / (count - 1) + 0.5)
+    end
+    local x, y = point_xy(points[at])
+    if x ~= nil then out[#out + 1] = { x = x, y = y } end
+  end
+  return out
+end
+
+--- Largest-Triangle-Three-Buckets downsampling for dense series.
+--
+-- The chart keeps the endpoints and the visually dominant point in each bucket,
+-- so a downsampled incident still shows its spike instead of losing it between
+-- uniform samples. The returned points are the caller's own point objects.
+--
+-- @derives-from github:fungOS-linux/fungos-sdk@c104db3 -- LTTB ported from lua/fungos/chart.lua
+function ui.lttb(points, threshold)
+  points = points or {}
+  local count = #points
+  threshold = math.floor(tonumber(threshold) or count)
+  if count < 3 or threshold < 3 or threshold >= count then return points end
+  local data = {}
+  for index, point in ipairs(points) do
+    local x, y = point_xy(point)
+    if x == nil then return points end
+    data[index] = { x = x, y = y, source = point }
+  end
+  local sampled = { data[1] }
+  local every = (count - 2) / (threshold - 2)
+  local anchor = 1
+  for bucket = 1, threshold - 2 do
+    local range_start = math.floor((bucket - 1) * every) + 2
+    local range_end = math.min(math.floor(bucket * every) + 2, count - 1)
+    local avg_start = math.floor(bucket * every) + 2
+    local avg_end = math.min(math.floor((bucket + 1) * every) + 2, count)
+    local avg_x, avg_y, avg_n = 0, 0, 0
+    for index = avg_start, avg_end do
+      avg_x = avg_x + data[index].x
+      avg_y = avg_y + data[index].y
+      avg_n = avg_n + 1
+    end
+    if avg_n > 0 then avg_x, avg_y = avg_x / avg_n, avg_y / avg_n end
+    local ax, ay = data[anchor].x, data[anchor].y
+    local best_area, best_index = -1, range_start
+    for index = range_start, range_end do
+      local area = math.abs((ax - avg_x) * (data[index].y - ay)
+        - (ax - data[index].x) * (avg_y - ay)) * 0.5
+      if area > best_area then best_area, best_index = area, index end
+    end
+    sampled[#sampled + 1] = data[best_index]
+    anchor = best_index
+  end
+  sampled[#sampled + 1] = data[count]
+  local out = {}
+  for index, point in ipairs(sampled) do out[index] = point.source end
+  return out
+end
+
+--- Keep the newest `count` points without mutating the snapshot. Streaming is
+-- a Spore concern; this is the pure windowing helper a live view calls first.
+function ui.chart_window(points, count)
+  points = points or {}
+  count = math.max(1, math.floor(tonumber(count) or 240))
+  local out = {}
+  for index = math.max(1, #points - count + 1), #points do
+    out[#out + 1] = points[index]
+  end
+  return out
+end
+
+local function lay_stat(n, S, width)
+  local theme = S.theme
+  local height = hy(S, n.h or 136)
+  local pad = wx(S, space(n.pad or "md", "stat.pad"))
+  local prims = {
+    rect_prim(n.ink or "surface", 0.9, radius(n.radius or "md", "stat.radius"),
+      -wx(S, 4), 0, width + wx(S, 8), height),
+  }
+  local label = tostring(n.label or "Metric")
+  prims[#prims + 1] = text_prim(label, theme.small, S, "muted", pad, -hy(S, 12))
+  if n.status and tostring(n.status) ~= "" then
+    local status = tostring(n.status)
+    local status_w = estimate_width(status, theme.micro, S)
+    prims[#prims + 1] = text_prim(status, theme.micro, S,
+      status_ink(n.status, n.status_ink), width - pad - status_w, -hy(S, 12))
+  end
+  local value = value_format(n.value, n.decimals)
+  prims[#prims + 1] = text_prim(value, theme.title, S,
+    ink(n.value_ink or "text", "stat.value_ink"), pad, -hy(S, 30))
+  if n.unit and tostring(n.unit) ~= "" then
+    prims[#prims + 1] = text_prim(tostring(n.unit), theme.micro, S, "muted",
+      pad, -height + hy(S, 38))
+  end
+  if n.delta and tostring(n.delta) ~= "" then
+    local delta_ink = n.delta_ink or ((tonumber(n.delta) or 0) >= 0 and "success" or "danger")
+    prims[#prims + 1] = text_prim(tostring(n.delta), theme.micro, S,
+      ink(delta_ink, "stat.delta_ink"), pad, -height + hy(S, 18))
+  end
+  hit_region(prims, {
+    id = control_id(n), action = n.action, body = n.body, label = label,
+    x = -wx(S, 4), y = 0, w = width + wx(S, 8), h = height,
+    enabled = n.enabled,
+  })
+  return { h = height, p = prims }
+end
+
+local function lay_gauge(n, S, width)
+  local theme = S.theme
+  local height = hy(S, n.h or 184)
+  local pad = wx(S, space(n.pad or "md", "gauge.pad"))
+  local value = tonumber(n.value) or 0
+  local lo = tonumber(n.min) or 0
+  local hi = tonumber(n.max) or 100
+  if hi == lo then hi = lo + 1 end
+  local prims = {
+    rect_prim(n.ink or "surface", 0.9, radius(n.radius or "md", "gauge.radius"),
+      -wx(S, 4), 0, width + wx(S, 8), height),
+  }
+  if n.title and tostring(n.title) ~= "" then
+    prims[#prims + 1] = text_prim(tostring(n.title), theme.small, S, "text", pad, -hy(S, 12))
+  end
+  if n.status and tostring(n.status) ~= "" then
+    local status = tostring(n.status)
+    local status_w = estimate_width(status, theme.micro, S)
+    prims[#prims + 1] = text_prim(status, theme.micro, S,
+      status_ink(n.status, n.status_ink), width - pad - status_w, -hy(S, 12))
+  end
+  local track_y = -height + hy(S, 30)
+  local track_x = pad
+  local track_w = width - pad * 2
+  local track_h = hy(S, 10)
+  local track_ink = threshold_ink(value, n.thresholds)
+  prims[#prims + 1] = text_prim(value_format(value, n.decimals, n.unit), theme.large, S,
+    track_ink, pad, -hy(S, 34))
+  prims[#prims + 1] = rect_prim(ink("surface_sunken", "gauge.track.ink"), 0.9, radius("sm", "gauge.track"),
+    track_x, track_y, track_w, track_h)
+  local segments = math.max(2, math.floor(tonumber(n.segments) or 12))
+  local seg_w = track_w / segments
+  for index = 1, segments do
+    local mid = lo + (hi - lo) * (index - 0.5) / segments
+    if mid <= value then
+      prims[#prims + 1] = rect_prim(threshold_ink(mid, n.thresholds), 0.92,
+        radius("sm", "gauge.segment"), track_x + (index - 1) * seg_w,
+        track_y, math.max(wx(S, 1), seg_w - wx(S, 1)), track_h)
+    end
+  end
+  prims[#prims + 1] = text_prim(value_format(lo, n.decimals, n.unit), theme.micro, S,
+    "muted", track_x, track_y - hy(S, 14))
+  local max_text = value_format(hi, n.decimals, n.unit)
+  prims[#prims + 1] = text_prim(max_text, theme.micro, S, "muted",
+    track_x + track_w - estimate_width(max_text, theme.micro, S), track_y - hy(S, 14))
+  hit_region(prims, {
+    id = control_id(n), action = n.action, body = n.body,
+    label = n.title and tostring(n.title) or "gauge",
+    x = -wx(S, 4), y = 0, w = width + wx(S, 8), h = height,
+    enabled = n.enabled,
+  })
+  return { h = height, p = prims }
+end
+
+local function lay_table(n, S, width)
+  local theme = S.theme
+  local pad = wx(S, space(n.pad or "md", "table.pad"))
+  local gap = wx(S, space(n.gap or "sm", "table.gap"))
+  local rows = n.rows or {}
+  local columns = n.columns or {}
+  if #columns == 0 then
+    return { h = hy(S, n.h or 80), p = {
+      rect_prim(n.ink or "surface", 0.9, radius(n.radius or "md", "table.radius"),
+        -wx(S, 4), 0, width + wx(S, 8), hy(S, n.h or 80)),
+    } }
+  end
+  local row_px = space(n.row_h or 24, "table.row_h")
+  local header = hy(S, 20)
+  local heading = (n.title and hy(S, theme.small * 1.5) or 0)
+    + (n.subtitle and hy(S, theme.micro * 1.5) or 0)
+  local computed = hy(S, 16) * 2 + heading + header + #rows * hy(S, row_px) + hy(S, 10)
+  local height = n.h and hy(S, n.h) or computed
+  local prims = {
+    rect_prim(n.ink or "surface", 0.9, radius(n.radius or "md", "table.radius"),
+      -wx(S, 4), 0, width + wx(S, 8), height),
+  }
+  local y = -hy(S, 16)
+  local header_y = y
+  if n.title and tostring(n.title) ~= "" then
+    prims[#prims + 1] = text_prim(tostring(n.title), theme.small, S, "text", pad, y)
+    y = y - hy(S, theme.small * 1.5)
+  end
+  if n.subtitle and tostring(n.subtitle) ~= "" then
+    prims[#prims + 1] = text_prim(tostring(n.subtitle), theme.micro, S, "muted", pad, y)
+    y = y - hy(S, theme.micro * 1.5)
+  end
+  if n.status and tostring(n.status) ~= "" then
+    local status = tostring(n.status)
+    prims[#prims + 1] = text_prim(status, theme.micro, S,
+      status_ink(n.status, n.status_ink),
+      width - pad - estimate_width(status, theme.micro, S), header_y)
+  end
+  local total = 0
+  for _, column in ipairs(columns) do total = total + (tonumber(column.width) or 1) end
+  local usable = width - pad * 2 - gap * (#columns - 1)
+  local xs, widths = {}, {}
+  local cursor = pad
+  for index, column in ipairs(columns) do
+    xs[index] = cursor
+    widths[index] = usable * (tonumber(column.width) or 1) / total
+    cursor = cursor + widths[index] + gap
+  end
+  for index, column in ipairs(columns) do
+    prims[#prims + 1] = text_prim(tostring(column.label or column.key or ""),
+      theme.micro, S, "muted", xs[index], y)
+  end
+  y = y - header
+  prims[#prims + 1] = rect_prim(ink("divider", "table.divider.ink"), 0.35, 0,
+    pad, y, width - pad * 2, hy(S, 1))
+  y = y - hy(S, 6)
+  local available = math.max(0, math.floor((height + y + hy(S, 14)) / hy(S, row_px)))
+  for row_index = 1, math.min(#rows, available) do
+    local row = rows[row_index]
+    if row_index % 2 == 0 then
+      prims[#prims + 1] = rect_prim(ink("surface_raised", "table.row.ink"), 0.28, radius("sm", "table.row"),
+        pad - wx(S, 4), y, width - pad * 2 + wx(S, 8), hy(S, row_px))
+    end
+    for index, column in ipairs(columns) do
+      local value = row[column.key]
+      if column.kind == "status" then
+        local status = tostring(value or "")
+        if status ~= "" then
+          prims[#prims + 1] = rect_prim(status_ink(status, column.status_ink), 1,
+            radius("pill", "table.status"), xs[index], y + hy(S, 5), wx(S, 6), hy(S, 6))
+          prims[#prims + 1] = text_prim(status, theme.micro, S,
+            status_ink(status, column.status_ink), xs[index] + wx(S, 10), y)
+        end
+      else
+        local text = tostring(value or "")
+        if text ~= "" then
+          local x = xs[index]
+          if column.align == "right" then
+            x = x + widths[index] - estimate_width(text, theme.micro, S) - wx(S, 8)
+          end
+          prims[#prims + 1] = text_prim(text, theme.micro, S,
+            ink(column.ink or "text", "table.ink"), x, y)
+        end
+      end
+    end
+    if n.row_action then
+      local key = n.row_key and row[n.row_key] or row_index
+      local row_id = (n.id or "table") .. "-row-" .. row_index
+      if key ~= nil then
+        row_id = row_id .. "-" .. (tostring(key):gsub("[^%w%-_]", "-"):sub(1, 48))
+      end
+      hit_region(prims, {
+        id = row_id, action = n.row_action, body = row,
+        label = tostring(key or row_index), x = pad - wx(S, 4), y = y,
+        w = width - pad * 2 + wx(S, 8), h = hy(S, row_px),
+        enabled = row.enabled,
+      })
+    end
+    y = y - hy(S, row_px)
+  end
+  return { h = height, p = prims }
+end
+
+local function lay_chart(n, S, width)
+  local theme = S.theme
+  local height = hy(S, n.h or 420)
+  local pad = wx(S, space(n.pad or "md", "chart.pad"))
+  local prims = {
+    rect_prim(n.ink or "surface", 0.9, radius(n.radius or "md", "chart.radius"),
+      -wx(S, 4), 0, width + wx(S, 8), height),
+  }
+  local y = -hy(S, 12)
+  local header_y = y
+  if n.title and tostring(n.title) ~= "" then
+    prims[#prims + 1] = text_prim(tostring(n.title), theme.small, S, "text", pad, y)
+    y = y - hy(S, theme.small * 1.5)
+  end
+  if n.subtitle and tostring(n.subtitle) ~= "" then
+    prims[#prims + 1] = text_prim(tostring(n.subtitle), theme.micro, S, "muted", pad, y)
+    y = y - hy(S, theme.micro * 1.5)
+  end
+  if n.status and tostring(n.status) ~= "" then
+    local status = tostring(n.status)
+    prims[#prims + 1] = text_prim(status, theme.micro, S,
+      status_ink(n.status, n.status_ink),
+      width - pad - estimate_width(status, theme.micro, S), header_y)
+  end
+  local left = pad + wx(S, 30)
+  local right = width - pad
+  local bottom = -height + hy(S, 52)
+  local top = y - hy(S, 4)
+  local plot_w = math.max(wx(S, 16), right - left)
+  local plot_h = math.max(hy(S, 16), top - bottom)
+  prims[#prims + 1] = rect_prim(ink("surface_sunken", "chart.plot.ink"), 0.8, radius("sm", "chart.plot"),
+    left, top, plot_w, plot_h)
+  local series = n.series or {}
+  local x_min, x_max = tonumber(n.x_min), tonumber(n.x_max)
+  local y_min, y_max = tonumber(n.y_min), tonumber(n.y_max)
+  for _, item in ipairs(series) do
+    for _, point in ipairs(item.points or {}) do
+      local px, py = point_xy(point)
+      if px ~= nil then
+        x_min = x_min and math.min(x_min, px) or px
+        x_max = x_max and math.max(x_max, px) or px
+        y_min = y_min and math.min(y_min, py) or py
+        y_max = y_max and math.max(y_max, py) or py
+      end
+    end
+  end
+  x_min, x_max = x_min or 0, x_max or 1
+  y_min, y_max = y_min or 0, y_max or 1
+  if x_min == x_max then x_max = x_min + 1 end
+  if y_min == y_max then y_max = y_min + 1 end
+  local function sx(value) return left + (value - x_min) / (x_max - x_min) * plot_w end
+  local function sy(value) return bottom + (value - y_min) / (y_max - y_min) * plot_h end
+  for index = 0, 3 do
+    local gy = top - plot_h * index / 3
+    prims[#prims + 1] = rect_prim("muted", 0.08, 0, left, gy, plot_w, hy(S, 1))
+  end
+  for index = 0, 2 do
+    local value = y_min + (y_max - y_min) * index / 2
+    local text = value_format(value, n.y_decimals, n.unit)
+    prims[#prims + 1] = text_prim(text, theme.micro, S, "muted",
+      left - estimate_width(text, theme.micro, S) - wx(S, 6), sy(value) - hy(S, 4))
+  end
+  for index = 0, 2 do
+    local value = x_min + (x_max - x_min) * index / 2
+    -- The bottom-left x tick and the bottom y tick share a corner. The y tick
+    -- carries the scale and the x tick carries nothing extra at x_min, so keep
+    -- the former and drop the latter instead of drawing two labels on top.
+    if not (index == 0 and x_min == 0) then
+      local text = value_format(value, n.x_decimals)
+      prims[#prims + 1] = text_prim(text, theme.micro, S, "muted",
+        sx(value) - estimate_width(text, theme.micro, S) / 2, bottom - hy(S, 14))
+    end
+  end
+  if n.selection then
+    local from = math.max(x_min, math.min(x_max, tonumber(n.selection.x0) or x_min))
+    local to = math.max(x_min, math.min(x_max, tonumber(n.selection.x1) or x_max))
+    if from > to then from, to = to, from end
+    prims[#prims + 1] = rect_prim("primary", 0.12, 0, sx(from), top,
+      math.max(wx(S, 1), sx(to) - sx(from)), plot_h)
+  end
+  if n.threshold then
+    local value = tonumber(n.threshold.value)
+    if value ~= nil then
+      local ty = sy(math.max(y_min, math.min(y_max, value)))
+      local threshold_ink_name = ink(n.threshold.ink or "warning", "chart.threshold.ink")
+      prims[#prims + 1] = rect_prim(threshold_ink_name, 0.7, 0,
+        left, ty, plot_w, hy(S, 1))
+      if n.threshold.label and tostring(n.threshold.label) ~= "" then
+        local text = tostring(n.threshold.label)
+        prims[#prims + 1] = text_prim(text, theme.micro, S, threshold_ink_name,
+          right - estimate_width(text, theme.micro, S), ty - hy(S, 10))
+      end
+    end
+  end
+  local columns = math.max(2, math.floor(tonumber(n.columns) or 12))
+  local target = columns
+  if n.max_points then
+    target = math.min(target, math.max(3, math.floor(tonumber(n.max_points) or target)))
+  end
+  local col_w = plot_w / columns
+  for series_index, item in ipairs(series) do
+    local ink_name = ink(item.ink or "primary", "chart.series.ink")
+    local points = item.points or {}
+    if n.decimate ~= false and item.decimate ~= false and #points > target then
+      points = ui.lttb(points, target)
+    end
+    for column, point in ipairs(sample_points(points, columns)) do
+      local value = math.max(y_min, math.min(y_max, point.y))
+      local py = sy(value)
+      local bar_h = math.max(hy(S, 1), py - bottom)
+      prims[#prims + 1] = rect_prim(ink_name, tonumber(item.opacity) or 0.26, 0,
+        left + (column - 1) * col_w, py, math.max(wx(S, 1), col_w - wx(S, 1)), bar_h)
+      if n.caps ~= false and item.caps ~= false then
+        prims[#prims + 1] = rect_prim(ink_name, 1, radius("sm", "chart.cap"),
+          left + (column - 1) * col_w, py, math.max(wx(S, 1), col_w - wx(S, 1)), hy(S, 2))
+      end
+    end
+  end
+  hit_region(prims, {
+    id = (n.id or "chart") .. "-plot", action = n.plot_action,
+    body = { x_min = x_min, x_max = x_max, selection = n.selection },
+    label = n.title and tostring(n.title) or "chart",
+    x = left, y = top, w = plot_w, h = plot_h, enabled = n.enabled,
+  })
+  local legend_x = pad
+  for index, item in ipairs(series) do
+    local label = tostring(item.label or ("series " .. index))
+    local ink_name = ink(item.ink or "primary", "chart.legend.ink")
+    prims[#prims + 1] = text_prim(label, theme.micro, S, ink_name, legend_x, bottom - hy(S, 34))
+    local legend_w = estimate_width(label, theme.micro, S)
+    hit_region(prims, {
+      id = (n.id or "chart") .. "-legend-" .. index,
+      action = n.legend_action,
+      body = { series = item.id or index, label = label, ink = item.ink },
+      label = label, x = legend_x, y = bottom - hy(S, 34),
+      w = legend_w + wx(S, 8), h = hy(S, theme.micro * 1.8),
+      enabled = item.enabled,
+    })
+    legend_x = legend_x + legend_w + wx(S, n.legend_gap or 22)
+  end
   return { h = height, p = prims }
 end
 
@@ -482,7 +1023,7 @@ lay = function(n, S, width)
       -- A rect's scale is a length; a text's scale is a font multiplier, so its
       -- drawn height has to be recovered from the size it asked for.
       local extent
-      if prim.opacity ~= nil or prim.button then
+      if prim.opacity ~= nil or prim.button or prim.host then
         extent = prim.scale[2]
       else
         extent = hy(S, prim.scale[1] * prim.scale[1] * S.theme.body * S.depth)
@@ -518,6 +1059,14 @@ lay_node = function(n, S, width)
     return { h = h, p = { rect_prim(n.ink or "surface", n.opacity or 0.6,
                            radius(n.radius, "fill.radius"), 0, 0, n.w and wx(S, n.w) or width, h) } }
 
+  elseif kind == "host_surface" then
+    local h = n.h and hy(S, n.h) or hy(S, n.default_h or 240)
+    local id = n.id or ("host-" .. tostring(n.resource))
+    return { h = h, p = { {
+      host = { id = id, resource = n.resource },
+      translation = { 0, 0, 0 }, scale = { width, h, 1 },
+    } } }
+
   elseif kind == "icon" then
     local size = n.size and theme[n.size] or theme.body
     return { h = size * ui.leading,
@@ -535,15 +1084,12 @@ lay_node = function(n, S, width)
                 wx(S, size * 0.45), -hy(S, size * 0.42)),
     }
     if n.action and widget and widget.button then
-      prims[#prims + 1] = {
-        button = {
-          id = control_id(n),
-          label = n.glyph,
-          action = n.action,
-          body = n.body,
-          enabled = n.enabled ~= false,
-          appearance = "invisible",
-        },
+      prims[#prims + 1] = control_prim {
+        id = control_id(n),
+        label = n.glyph,
+        action = n.action,
+        body = n.body,
+        enabled = n.enabled,
         translation = { 0, 0, 0 }, scale = { wide, side, 1 },
       }
     end
@@ -570,15 +1116,12 @@ lay_node = function(n, S, width)
     -- draws nothing for an invisible control, so the view keeps its own look
     -- while Canvas still owns the hit area and the press.
     if n.action and widget and widget.button then
-      prims[#prims + 1] = {
-        button = {
-          id = control_id(n),
-          label = n.label,
-          action = n.action,
-          body = n.body,
-          enabled = n.enabled ~= false,
-          appearance = "invisible",
-        },
+      prims[#prims + 1] = control_prim {
+        id = control_id(n),
+        label = n.label,
+        action = n.action,
+        body = n.body,
+        enabled = n.enabled,
         translation = { 0, 0, 0 }, scale = { label_w, height, 1 },
       }
     end
@@ -658,6 +1201,18 @@ lay_node = function(n, S, width)
       prims[#prims + 1] = text_prim(line, theme.body, S, "muted", indent, -(index - 1) * advance)
     end
     return { h = height, p = prims }
+
+  elseif kind == "stat" then
+    return lay_stat(n, S, width)
+
+  elseif kind == "gauge" then
+    return lay_gauge(n, S, width)
+
+  elseif kind == "table" then
+    return lay_table(n, S, width)
+
+  elseif kind == "chart" then
+    return lay_chart(n, S, width)
 
   elseif kind == "row" then
     -- Rows place aligned pairs, or weighted columns when `widths` is given.
@@ -761,7 +1316,7 @@ local function context(theme)
   }
 end
 
-function ui.render(tree, theme)
+local function layout_prims(tree, theme)
   local S = context(theme)
   local body = lay(tree, S, 8.0)
   local prims = place(body.p, -4.0, 4.0)
@@ -770,13 +1325,17 @@ function ui.render(tree, theme)
     ink = "background", opacity = 1, radius = 0,
     translation = { -4, 4, -1 }, scale = { 8, 8, 1 },
   })
+  return prims
+end
 
-  -- Controls first: the host owns their pixels, so there is nothing to draw
-  -- under them, and their hit region has to be registered either way.
-  local index = 0
+-- Controls first: the host owns their pixels, so there is nothing to draw
+-- under them, and their hit region has to be registered either way.
+local function emit_controls(prims)
   for _, prim in ipairs(prims) do
-    index = index + 1
     if prim.button then
+      if not (widget and widget.button) then
+        fail("a button needs widget.button from the host", 3)
+      end
       local spec = prim.button
       widget.button({
         id = spec.id,
@@ -788,14 +1347,27 @@ function ui.render(tree, theme)
         enabled = spec.enabled,
         appearance = spec.appearance,
       })
+    elseif prim.host then
+      if not (canvas and canvas.host_resource) then
+        fail("host_surface needs canvas.host_resource; this host is too old", 3)
+      end
+      local spec = prim.host
+      canvas.host_resource({
+        id = spec.id,
+        resource = spec.resource,
+        translation = prim.translation,
+        scale = prim.scale,
+      })
     end
   end
+end
 
-  -- Rects next (behind), then text.
+local function emit_canvas(prims)
+  local index = 0
   for _, prim in ipairs(prims) do
     index = index + 1
     local id = prim.id or string.format("e%d", index)
-    if prim.button then
+    if prim.button or prim.host then
       -- already registered above
     elseif prim.opacity ~= nil then
       canvas.rect({ id = id, ink = prim.ink, opacity = prim.opacity, radius = prim.radius,
@@ -806,6 +1378,105 @@ function ui.render(tree, theme)
                     translation = prim.translation, scale = prim.scale })
     end
   end
+end
+
+-- Canvas stores rotations as quaternions; soil-scene stores Euler XYZ. The
+-- view vocabulary only has a Z rotation, so a non-Z quaternion is a bug in the
+-- caller rather than something to guess at.
+local function euler(rotation)
+  if rotation == nil then return { 0, 0, 0 } end
+  if type(rotation) ~= "table" or #rotation ~= 4 then
+    fail("rotation must be a quaternion {x,y,z,w}", 3)
+  end
+  local x, y, z, w = rotation[1], rotation[2], rotation[3], rotation[4]
+  local length = math.sqrt(x * x + y * y + z * z + w * w)
+  if length == 0 or length ~= length then
+    fail("rotation quaternion is not finite", 3)
+  end
+  x, y, z, w = x / length, y / length, z / length, w / length
+  if math.abs(x) > 1e-6 or math.abs(y) > 1e-6 then
+    fail("soil documents carry Z rotation only", 3)
+  end
+  return { 0, 0, 2 * math.atan2(z, w) }
+end
+
+-- The Lua peer of soil_scene::Present. A node is flat: the one-pass layout has
+-- already placed every primitive in the surface's 8-unit space, so there is no
+-- second layout tree for a host to interpret. Buttons and host surfaces are
+-- host-owned controls, not scene content; they remain in emit_controls.
+local function document_from(prims)
+  local nodes = {}
+  local index = 0
+  for _, prim in ipairs(prims) do
+    index = index + 1
+    if not prim.button and not prim.host then
+      local node = {
+        id = prim.id or string.format("e%d", index),
+        transform = {
+          translation = prim.translation,
+          rotation = euler(prim.rotation),
+          scale = prim.scale,
+        },
+      }
+      if prim.opacity ~= nil then
+        node.type = "rect"
+        node.ink = prim.ink
+        node.opacity = prim.opacity
+        node.radius = prim.radius or 0
+      elseif prim.text ~= nil then
+        node.type = "text"
+        node.text = prim.text
+        node.ink = prim.ink
+        node.opacity = 1
+      else
+        fail("unknown UI primitive in soil document", 3)
+      end
+      nodes[#nodes + 1] = node
+    end
+  end
+  return { kind = "scene", schema = 1, nodes = nodes }
+end
+
+-- Legacy Canvas primitive path. Kept as the compatibility backend and as the
+-- fallback for hosts that do not grant the soil document capability yet.
+function ui.render(tree, theme)
+  local prims = layout_prims(tree, theme)
+  emit_controls(prims)
+  emit_canvas(prims)
+end
+
+-- The pure document. Same `soil_scene::Present` shape the Rust SDK sends:
+-- {"kind":"scene","schema":1,"nodes":[...]}. No host calls, so a test or a
+-- non-Canvas host can inspect or forward it.
+function ui.document(tree, theme)
+  return document_from(layout_prims(tree, theme))
+end
+
+-- Present a document this library did not build. This is the Lua peer of
+-- `soil_sdk_canvas::Surface::present`.
+function ui.present_document(document)
+  local present = canvas and canvas.present
+  if present == nil and soil and soil.canvas then
+    present = soil.canvas.present
+  end
+  if not present then
+    fail("this host has no soil document capability (canvas.present)", 2)
+  end
+  return present(document)
+end
+
+-- Present through the granted host capability. `canvas.present` is Canvas's
+-- `soil:canvas` binding; a Soil Lua host can provide the same function under
+-- `soil.canvas.present`. If neither exists, use the legacy primitive path so a
+-- view keeps rendering on an older Canvas instead of going blank.
+function ui.present(tree, theme)
+  local prims = layout_prims(tree, theme)
+  emit_controls(prims)
+  local document = document_from(prims)
+  if (canvas and canvas.present) or (soil and soil.canvas and soil.canvas.present) then
+    return ui.present_document(document)
+  end
+  emit_canvas(prims)
 end
 
 return ui

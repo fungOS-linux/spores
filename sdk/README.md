@@ -10,16 +10,33 @@ module it ships, and `spore.lock` covers the result.
 ## Why it is a package
 
 Every Spore used to carry its own `ui/lib/ui.lua`. Two agents editing two copies is
-how one shell ends up with three definitions of "small gap". One versioned package
-means a fix lands everywhere, and a Spore that wants a different answer has to say
-so with a version, not with a divergent copy.
+how one shell ends up with three definitions of "small gap". This is the versioned
+package new views compose; `markdown` and `unibus` still carry older copies as
+migration debt, and should not be used as the source of truth for new work.
 
 ## What lives here
 
 - `ui.lua` — the library: `column`, `row`, `card`, `stack`, `radial`, `text`,
   `rule`, `code`, `diagram`, `bullets`, `quote`, `bar`, `fill`, `button`, `kbd`,
-  `icon`, `icon_button`, plus the layout pass (`lay`) and the token helpers.
+  `icon`, `icon_button`, plus the dashboard nodes `stat`, `gauge`, `table`, and
+  `chart`, and `host_surface` for a host-owned GPU/scene layer. The layout pass
+  (`lay`) and token helpers stay in the same file.
+- `ui.lttb(points, threshold)` and `ui.chart_window(points, count)` — dense-series
+  decimation and streaming window helpers. `ui.chart` uses LTTB automatically
+  before it emits marks; set `decimate = false` to keep uniform sampling.
 - `package.toml` — name, version, entry.
+
+Dashboard nodes are ordinary tree nodes. They consume the same ink, space, radius,
+and style tokens as the rest of the library; they do not add a second colour or
+layout vocabulary. `stat`, `gauge`, `table` rows, chart legends, and the chart plot
+can register host-owned hit regions with `action`, `row_action`, `legend_action`,
+and `plot_action`. Actions are optional, so a headless preview or a non-Canvas host
+still renders the same tree.
+
+`spores/gallery` is the fixture-driven catalog and screenshot for these nodes,
+including the five-panel ChartGPU fixture. `ui.host_surface` is the Lua-side
+placement point for a native GPU lease; the host must grant the resource and
+provide `canvas.host_resource`.
 
 ## Rules the library enforces
 
@@ -34,6 +51,10 @@ so with a version, not with a divergent copy.
 
 - `tokens.lua`: `elevation`, `stroke`, `glass`, `density`, `motion`, so chrome and
   apps share one visual system.
-- `components.lua`: `pill`, `tile`, `list-row`, `gauge`, `section`, `glass-panel`.
+- `components.lua`: `pill`, `tile`, `list-row`, `section`, `glass-panel`.
+- A host-layout adapter. The one-pass Lua layout is intentionally independent of
+  Canvas's `canvas.layout` (the taffy/`soil-layout` path) so the same tree can be
+  previewed and tested without a compositor. A Spore that wants measured flex
+  layout can use `canvas.layout` directly, as `unibus` does.
 - Chrome regions migrated onto this library (`control-center` first) so the shell
   and the apps stop looking like two products.
