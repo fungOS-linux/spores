@@ -92,6 +92,7 @@ storage boundary is already the real one.
 
 ```text
 spores/chrome              shell regions: top bar, dock, launcher, switcher, control center, window
+spores/store               Spore Store front end: browse, listings, reviews, classified updates
 spores/spore-browser       installed-Spore browser, launched through soil:spore
 spores/spore-browser-host  wasmtime host for the browser Spore
 spores/dragshift           convert and edit a dropped file from a radial menu
@@ -119,6 +120,9 @@ spores/markdown     the Markdown reader/editor Spore
                     src/   semantics and editor state
                     ui/    the Lua UI Canvas renders
                     spore.toml  manifest, grants, launch surfaces
+spores/store        the storefront Spore (id `dev.fungos.store`)
+                    ui/    browse, listing and updates views
+                    docs/  the manual `man store` prints
 spores/unibus       the inbox Spore (id `dev.fungos.inbox`)
                     src/   record keys/schemas for mail + chat metadata
                     spore.toml  records/unibus grants, read-only
