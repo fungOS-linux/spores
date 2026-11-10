@@ -152,6 +152,17 @@ Native Canvas already draws through it; the browser compiles the same host to
 wasm with the `webgl`/`wgpu` renderer and draws the same view. The browser is a
 fourth backend beside mac, linux and tv, not a separate product.
 
+The first slice is live in `canvas-web`: the same iced application builds
+for `wasm32-unknown-unknown` with the `webgl`/wgpu renderer and draws the home
+Spore's scene document. There is no screenshot bridge in that path. A pointer
+layer hit-tests the document's host-owned control rectangles; pressing one
+emits a typed `canvas-intent` to the page, it does not open anything itself.
+The scene fixture is generated from `spores/home/ui/home.lua` by
+`spores/home/tools/dump_scene.lua`, so the browser is drawing the Spore's own
+layout, not a hand-built approximation. Replacing that fixture with a document
+produced by a Luau-in-wasm runtime is the next slice; the renderer does not
+change.
+
 That rules out three things that were considered and rejected:
 
 - **No DOM renderer.** Mapping scene nodes to elements would have made the web
@@ -160,10 +171,11 @@ That rules out three things that were considered and rejected:
 - **No scene over the wire.** `ui.present` hands a document to a host; a browser
   host is that host. Serialising the document to a second renderer adds a
   protocol where there was a function call.
-- **No PNG mirror.** `canvas-web` currently polls `/v1/frame` every 125 ms and
-  paints a display capture. That is a screenshot viewer: nothing in it is
-  clickable, scalable or attributable to a surface, and `screenshot` ignores
-  `surface_id` (every surface returns the same image).
+- **No PNG mirror.** The old `canvas-web` polled `/v1/frame` every 125 ms and
+  painted a display capture. It is gone, along with `direct.rs` and the
+  `canvas-web-host` bridge: nothing in that path was clickable, scalable or
+  attributable to a surface, and `screenshot` ignored `surface_id` (every
+  surface returned the same image).
 
 ### Lua in the browser
 
@@ -209,7 +221,7 @@ actually has the surface.
 
 | Repo | Change |
 |---|---|
-| `canvas` | drop `direct.rs`'s frame mirror; iced app target for wasm; serve assets and modules |
+| `canvas` | **done:** `direct.rs`/frame mirror deleted; iced app target for wasm renders the home scene; remaining: serve assets and modules from a node |
 | `canvas-native` | isolate the Lua host behind a runtime trait so the wasm build can use the Luau-to-wasm VM |
 | `luau` build | compile Luau for wasm (`wasi-sdk`), ship it as a wasm module the host instantiates |
 | `soil` | a node surface server (grow `soil-home`'s binary or add `soil-surface`) |
