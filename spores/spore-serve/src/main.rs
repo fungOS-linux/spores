@@ -19,13 +19,17 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const INDEX_HTML: &str = include_str!("page.html");
+
+/// How long a channel with no viewers keeps its last frame. Switching back to a
+/// session you were just in should cost a socket, not a render.
+const IDLE_LIMIT: Duration = Duration::from_secs(120);
 
 fn main() -> ExitCode {
     match run() {
@@ -268,6 +272,13 @@ fn snapshot(config: &Config, query: &str) -> Result<String, String> {
 }
 
 /// Render one snapshot through the Spore's view.
+///
+/// The snapshot goes in on stdin and the scene comes back on stdout. It used to
+/// go through two files in `std::env::temp_dir()`, which is the wrong place on a
+/// machine where `TMPDIR` is a scratch directory someone else deletes: a frame
+/// would fail mid-render with "cannot open .../spore-serve-snapshot-*.lua" and
+/// the page would sit on its last scene. Pipes cannot be swept out from under a
+/// process, and they save four syscalls a frame.
 fn render(
     config: &Config,
     snapshot: &str,
@@ -275,41 +286,42 @@ fn render(
     height: u32,
     sidebar: u32,
 ) -> Result<String, String> {
-    let stamp = format!("{}-{}", std::process::id(), now_ms());
-    let dir = std::env::temp_dir();
-    let snapshot_path = dir.join(format!("spore-serve-snapshot-{stamp}.lua"));
-    std::fs::write(&snapshot_path, snapshot)
-        .map_err(|error| format!("write {}: {error}", snapshot_path.display()))?;
-
-    let out = dir.join(format!("spore-serve-scene-{stamp}.json"));
-    let result = Command::new(&config.lua)
+    let mut child = Command::new(&config.lua)
         .env("FUNGOS_SDK", &config.sdk)
         .arg(&config.renderer)
         .arg(&config.view)
-        .arg(&snapshot_path)
+        .arg("-")
         .arg(&config.theme)
-        .arg(&out)
+        .arg("-")
         .arg(width.to_string())
         .arg(height.to_string())
         // Host state the view is allowed to read. A scroll offset is an input to
         // the picture, not a repaint of it: the same snapshot at two offsets is
         // two scenes, which is why it is part of the channel key too.
         .arg(format!("--sidebar={sidebar}"))
-        .output()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| format!("run {}: {error}", config.lua))?;
 
-    let _ = std::fs::remove_file(&snapshot_path);
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(snapshot.as_bytes())
+            .map_err(|error| format!("send snapshot: {error}"))?;
+    }
+    let result = child
+        .wait_with_output()
+        .map_err(|error| format!("run {}: {error}", config.lua))?;
+
     if !result.status.success() {
-        let _ = std::fs::remove_file(&out);
         return Err(format!(
             "render failed: {}",
             String::from_utf8_lossy(&result.stderr).trim()
         ));
     }
-    let body = std::fs::read_to_string(&out)
-        .map_err(|error| format!("read {}: {error}", out.display()))?;
-    let _ = std::fs::remove_file(&out);
-    Ok(body)
+    String::from_utf8(result.stdout)
+        .map_err(|error| format!("scene is not utf-8: {error}"))
 }
 
 fn scene(
@@ -343,9 +355,18 @@ struct Hub {
 struct Channel {
     generation: Mutex<u64>,
     scene: Mutex<String>,
+    /// The producer snapshot `scene` was rendered from. A viewer that comes
+    /// back to this channel after everyone left gets the frame immediately and
+    /// does not pay for a render that would produce the same bytes.
+    snapshot: Mutex<String>,
     wake: Condvar,
     subscribers: AtomicUsize,
     stopped: AtomicBool,
+    /// When the last subscriber left. A channel with nobody watching is kept
+    /// for a while instead of dropped: switching back to a session you were
+    /// just in is the common case, and a cold channel means a full render
+    /// before the first pixel.
+    idle: Mutex<Option<Instant>>,
 }
 
 impl Hub {
@@ -355,28 +376,55 @@ impl Hub {
 
     fn subscribe(&self, key: String) -> Arc<Channel> {
         let mut channels = self.channels.lock().unwrap();
+        channels.retain(|_, channel| {
+            if channel.subscribers.load(Ordering::Acquire) > 0 {
+                return true;
+            }
+            match *channel.idle.lock().unwrap() {
+                Some(at) => at.elapsed() < IDLE_LIMIT,
+                None => true,
+            }
+        });
         if let Some(channel) = channels.get(&key) {
             channel.subscribers.fetch_add(1, Ordering::AcqRel);
+            channel.stopped.store(false, Ordering::Release);
+            *channel.idle.lock().unwrap() = None;
             return Arc::clone(channel);
         }
         let channel = Arc::new(Channel {
             generation: Mutex::new(0),
             scene: Mutex::new(String::new()),
+            snapshot: Mutex::new(String::new()),
             wake: Condvar::new(),
             subscribers: AtomicUsize::new(1),
             stopped: AtomicBool::new(false),
+            idle: Mutex::new(None),
         });
         channels.insert(key, Arc::clone(&channel));
         channel
     }
 
-    fn unsubscribe(&self, key: &str, channel: &Arc<Channel>) {
+    fn unsubscribe(&self, _key: &str, channel: &Arc<Channel>) {
         let left = channel.subscribers.fetch_sub(1, Ordering::AcqRel).saturating_sub(1);
         if left == 0 {
             channel.stopped.store(true, Ordering::Release);
             channel.wake.notify_all();
+            // Kept, not removed: the scene stays warm for a switch back. The
+            // next `subscribe` sweeps it if nobody came.
+            *channel.idle.lock().unwrap() = Some(Instant::now());
             if let Ok(mut channels) = self.channels.lock() {
-                channels.remove(key);
+                channels.retain(|_, other| {
+                    if Arc::ptr_eq(other, channel) {
+                        return true;
+                    }
+                    if other.subscribers.load(Ordering::Acquire) > 0 {
+                        return true;
+                    }
+                    match *other.idle.lock().unwrap() {
+                        Some(at) => at.elapsed() < IDLE_LIMIT,
+                        None => true,
+                    }
+                });
             }
         }
     }
@@ -390,8 +438,9 @@ fn pump(
     height: u32,
     sidebar: u32,
     query: String,
+    last: Option<String>,
 ) {
-    let mut last: Option<String> = None;
+    let mut last = last;
     while !channel.stopped.load(Ordering::Acquire) {
         if let Ok(current) = snapshot(&config, &query)
             && last.as_deref() != Some(current.as_str())
@@ -400,6 +449,12 @@ fn pump(
                 Ok(body) => {
                     if let Ok(mut scene) = channel.scene.lock() {
                         *scene = body;
+                    }
+                    // Remember what the frame was drawn from, so a viewer that
+                    // comes back to an unchanged session is served the frame it
+                    // already had instead of paying for an identical render.
+                    if let Ok(mut kept) = channel.snapshot.lock() {
+                        *kept = current.clone();
                     }
                     if let Ok(mut generation) = channel.generation.lock() {
                         *generation += 1;
@@ -436,12 +491,31 @@ fn events(
     stream.flush().map_err(|error| error.to_string())?;
 
     let channel = config.hub.subscribe(key.clone());
-    let mut seen = 0u64;
+
+    // A channel that kept its last frame paints before the producer is asked
+    // anything. Switching back to a session you were just in is a socket and a
+    // copy, not a render.
+    let (cached_scene, cached_snapshot, generation) = {
+        let scene = channel.scene.lock().map(|scene| scene.clone()).unwrap_or_default();
+        let snapshot = channel.snapshot.lock().map(|snapshot| snapshot.clone()).unwrap_or_default();
+        let generation = *channel.generation.lock().map_err(|error| error.to_string())?;
+        (scene, snapshot, generation)
+    };
+    let mut seen = generation;
+    if !cached_scene.is_empty() {
+        let message = format!("data: {cached_scene}\n\n");
+        if stream.write_all(message.as_bytes()).is_err() || stream.flush().is_err() {
+            config.hub.unsubscribe(&key, &channel);
+            return Ok(());
+        }
+    }
+
     if channel.subscribers.load(Ordering::Acquire) == 1 {
         let config = Arc::clone(config);
         let pump_channel = Arc::clone(&channel);
         let query = passthrough.clone();
-        std::thread::spawn(move || pump(config, pump_channel, width, height, sidebar, query));
+        let last = if cached_snapshot.is_empty() { None } else { Some(cached_snapshot) };
+        std::thread::spawn(move || pump(config, pump_channel, width, height, sidebar, query, last));
     }
 
     loop {
@@ -649,13 +723,6 @@ fn query_number(target: &str, name: &str) -> Option<u32> {
         }
     }
     None
-}
-
-fn now_ms() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0)
 }
 
 #[allow(dead_code)]

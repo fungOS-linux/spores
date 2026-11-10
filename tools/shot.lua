@@ -119,7 +119,16 @@ package.preload["fungos.ui"] = function()
 end
 
 local view = assert(loadfile(view_path))()
-local snapshot = assert(loadfile(snapshot_path))()
+-- `-` is stdin: a host that already has the snapshot in memory should not have
+-- to write it to a file to hand it over, and a file in a temp directory can be
+-- swept away between the write and the read.
+local snapshot
+if snapshot_path == "-" then
+  local source = io.read("*a")
+  snapshot = assert(load(source, "@stdin"))()
+else
+  snapshot = assert(loadfile(snapshot_path))()
+end
 -- One argument, like every host: `tend`, `chrome-host` and Canvas all call
 -- `render(snapshot)`. A view that also wants the host context reads it from the
 -- `module` global, which is what the kit's own accessors do.
@@ -294,9 +303,18 @@ local function meta_value(value)
 end
 local meta = meta_value(meta_table)
 
-local file = assert(io.open(out_path, "wb"))
-file:write('{"kind":"scene","schema":1,"nodes":[', table.concat(parts, ","),
-  '],"hits":[', table.concat(hit_parts, ","), '],"meta":', meta, "}")
-file:close()
-print(string.format("%s: %d primitives, %d themed, %d hit(s) -> %s",
-  theme.name or "theme", #prims, themed, #hits, out_path))
+if out_path == "-" then
+  io.write('{"kind":"scene","schema":1,"nodes":[', table.concat(parts, ","),
+    '],"hits":[', table.concat(hit_parts, ","), '],"meta":', meta, "}")
+  io.stdout:flush()
+  -- stdout is the document; the human-readable summary has to go elsewhere.
+  io.stderr:write(string.format("%s: %d primitives, %d themed, %d hit(s) -> stdout\n",
+    theme.name or "theme", #prims, themed, #hits))
+else
+  local file = assert(io.open(out_path, "wb"))
+  file:write('{"kind":"scene","schema":1,"nodes":[', table.concat(parts, ","),
+    '],"hits":[', table.concat(hit_parts, ","), '],"meta":', meta, "}")
+  file:close()
+  print(string.format("%s: %d primitives, %d themed, %d hit(s) -> %s",
+    theme.name or "theme", #prims, themed, #hits, out_path))
+end
