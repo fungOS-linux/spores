@@ -123,6 +123,15 @@
   const qs = (extra) => {
     const p = new URLSearchParams(extra || {});
     if (session) p.set('session', session);
+    if (sidebarOffset > 0) p.set('sidebar', String(sidebarOffset));
+    const text = p.toString();
+    return text ? '?' + text : '';
+  };
+  // Producer requests carry the session and nothing else: `sidebar` is a render
+  // input, and the PTY has no sidebar to scroll.
+  const producerQs = (extra) => {
+    const p = new URLSearchParams(extra || {});
+    if (session) p.set('session', session);
     const text = p.toString();
     return text ? '?' + text : '';
   };
@@ -137,6 +146,9 @@
   let meta = {};
   let sentSize = '';
   let rendering = false;
+  // How far the device list is scrolled. The view draws the list, so this is a
+  // render input, not a DOM position: the page has no rows to move.
+  let sidebarOffset = 0;
 
   // The scene is the Canvas space: x runs -4..4 left to right, y runs 4..-4 top
   // to bottom. Inverting them is not the same operation, and using the x rule for
@@ -170,7 +182,6 @@
       } else if (node.type === 'text') {
         const el = document.createElement('span');
         el.className = 'n t';
-        el.textContent = node.text || '';
         el.style.left = left + 'px';
         el.style.top = top + 'px';
         // The node's scale is the view's request in the surface's own units:
@@ -179,6 +190,19 @@
         const scale = (node.transform && node.transform.scale && node.transform.scale[0]) || 1;
         el.style.fontSize = (scale * (meta.base || 16) * 1.25) + 'px';
         if (node.rgb) el.style.color = `rgb(${node.rgb[0]},${node.rgb[1]},${node.rgb[2]})`;
+        // A line is one node with styled runs, not one node per colour change:
+        // the runs are inline spans, so the line stays a single box and a
+        // terminal row costs one node instead of one per run.
+        if (Array.isArray(node.runs) && node.runs.length) {
+          for (const run of node.runs) {
+            const piece = document.createElement('span');
+            piece.textContent = run.text || '';
+            if (run.rgb) piece.style.color = `rgb(${run.rgb[0]},${run.rgb[1]},${run.rgb[2]})`;
+            el.appendChild(piece);
+          }
+        } else {
+          el.textContent = node.text || '';
+        }
         frag.appendChild(el);
       }
     }
@@ -188,6 +212,10 @@
   function apply(scene) {
     meta = scene.meta || meta;
     if (meta.title) document.title = meta.title;
+    // Adopt the offset the view actually used: the view clamps against the rows
+    // that fit, and the page has to scroll the list it is looking at, not the
+    // one it asked for.
+    if (meta.sidebar && typeof meta.sidebar.offset === 'number') sidebarOffset = meta.sidebar.offset;
     notice.classList.remove('show');
     draw(scene);
     empty.classList.toggle('show', !(scene.nodes || []).some((node) => node.type === 'text'));
@@ -242,7 +270,7 @@
   }
 
   function post(path, body) {
-    return fetch(path + qs(), { method: 'POST', body }).catch(() => {});
+    return fetch(path + producerQs(), { method: 'POST', body }).catch(() => {});
   }
 
   function resize() {
@@ -299,8 +327,8 @@
     picker.replaceChildren(Object.assign(document.createElement('h2'), { textContent: 'loading…' }));
     try {
       const [sessions, targets] = await Promise.all([
-        fetch('/sessions' + qs()).then((r) => r.json()),
-        fetch('/targets' + qs()).then((r) => r.json()),
+        fetch('/sessions' + producerQs()).then((r) => r.json()),
+        fetch('/targets' + producerQs()).then((r) => r.json()),
       ]);
       const parts = [];
 
@@ -338,7 +366,7 @@
               () => { location.search = '?session=' + item.id; }),
             button('×', async (event) => {
               event.stopPropagation();
-              await fetch('/sessions/' + item.id + qs(), { method: 'DELETE' }).catch(() => {});
+              await fetch('/sessions/' + item.id + producerQs(), { method: 'DELETE' }).catch(() => {});
               row.remove();
             }, 'close'),
           );
@@ -353,7 +381,7 @@
             body.append(button(
               `${item.label || item.name}<span class="meta">${item.detail || kind}</span>`,
               async () => {
-                const response = await fetch('/sessions' + qs(), {
+                const response = await fetch('/sessions' + producerQs(), {
                   method: 'POST',
                   body: JSON.stringify({ target: item.name }),
                 });
@@ -399,11 +427,30 @@
   });
 
   // The producer owns the scrollback; the page only says how far the wheel moved.
+  // A wheel over the device list scrolls that list instead: the pointer is the
+  // only thing that says which of the two panels the user means.
   window.addEventListener('wheel', (event) => {
     event.preventDefault();
     const delta = event.deltaMode === 1 ? event.deltaY : event.deltaY / 24;
-    post('/scroll', JSON.stringify({ delta: Math.trunc(delta) }));
+    const step = Math.trunc(delta);
+    if (!step) return;
+    if (meta.sidebar && event.clientX <= meta.sidebar.width) {
+      scrollSidebar(step);
+      return;
+    }
+    post('/scroll', JSON.stringify({ delta: step }));
   }, { passive: false });
+
+  function scrollSidebar(step) {
+    const sidebar = meta.sidebar || {};
+    const total = sidebar.total || 0;
+    const visible = sidebar.visible || 0;
+    const offset = typeof sidebar.offset === 'number' ? sidebar.offset : sidebarOffset;
+    const next = Math.min(Math.max(0, total - visible), Math.max(0, offset + step));
+    if (next === offset) return;
+    sidebarOffset = next;
+    connect();
+  }
 
   // A paste is text typed quickly: same path as a keystroke, so the shell decides
   // what to do with it (including bracketed paste, which it sets up itself).
@@ -433,7 +480,7 @@
       switchTo(item.id);
       return;
     }
-    const response = await fetch('/sessions' + qs(), {
+    const response = await fetch('/sessions' + producerQs(), {
       method: 'POST',
       body: JSON.stringify({ target: item.name }),
     }).catch(() => null);

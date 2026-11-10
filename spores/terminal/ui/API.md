@@ -74,11 +74,25 @@ The theme supplies the surface, the default text ink and the cursor ink. Cell
 colours are literal: sixteen ANSI colours are not sixteen theme roles, and a
 terminal that ignores the program's colour is not the program's terminal.
 
+## Host state
+
+The view reads one piece of host state: `module.sidebar.offset`, how far the
+device list is scrolled. It is the same shape as `module.scroll` and a
+different list — the terminal's scrollback belongs to the producer, the device
+list belongs to this view — so the two never move each other.
+
+The view answers with `meta.sidebar = { width, items, offset, total, visible }`.
+`items` is where each row landed (a click is a lookup, not a second copy of the
+layout), `offset` is the offset actually used after clamping, and `total` and
+`visible` are what a host needs to know how much is left to scroll. A host that
+knows neither still gets a list that starts at the top.
+
 ## Stable ids
 
-`terminal-bg`, `terminal-cursor`, `cell-<row>-<run>`, `cell-bg-<row>-<run>`,
-`cell-ul-<row>-<run>`, `cell-inv-<row>-<run>`. Row and run indexes are stable
-for a frame; a repaint renumbers nothing.
+`terminal-bg`, `terminal-cursor`, `row-<row>` (one node carrying the row's
+styled runs), `cell-bg-<row>-<run>`, `cell-ul-<row>-<run>`,
+`cell-inv-<row>-<run>`. Row and run indexes are stable for a frame; a repaint
+renumbers nothing.
 
 ## Authority
 

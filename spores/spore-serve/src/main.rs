@@ -202,14 +202,18 @@ fn handle(mut stream: TcpStream, config: &Arc<Config>) -> Result<(), String> {
             // Everything but the surface size belongs to the producer: a session
             // id, a path, a query. `{query}` in `--snapshot-cmd` is how the
             // command sees it, so one host serves every session the producer has.
-            let passthrough = query_without(&request.target, &["w", "h"]);
+            let passthrough = query_without(&request.target, &["w", "h", "sidebar"]);
+            // The sidebar offset is the page's scroll position. It belongs to the
+            // renderer, not to the producer: the PTY has no sidebar.
+            let sidebar = query_number(&request.target, "sidebar").unwrap_or(0);
             // The page's own viewport is the one number a blank screen hides.
-            eprintln!("scene {width}x{height} {passthrough}");
+            eprintln!("scene {width}x{height} sidebar={sidebar} {passthrough}");
             match scene(
                 config,
                 width.clamp(200, 4000),
                 height.clamp(200, 4000),
                 &passthrough,
+                sidebar,
             ) {
                 Ok(body) => respond(
                     &mut stream,
@@ -264,7 +268,13 @@ fn snapshot(config: &Config, query: &str) -> Result<String, String> {
 }
 
 /// Render one snapshot through the Spore's view.
-fn render(config: &Config, snapshot: &str, width: u32, height: u32) -> Result<String, String> {
+fn render(
+    config: &Config,
+    snapshot: &str,
+    width: u32,
+    height: u32,
+    sidebar: u32,
+) -> Result<String, String> {
     let stamp = format!("{}-{}", std::process::id(), now_ms());
     let dir = std::env::temp_dir();
     let snapshot_path = dir.join(format!("spore-serve-snapshot-{stamp}.lua"));
@@ -281,6 +291,10 @@ fn render(config: &Config, snapshot: &str, width: u32, height: u32) -> Result<St
         .arg(&out)
         .arg(width.to_string())
         .arg(height.to_string())
+        // Host state the view is allowed to read. A scroll offset is an input to
+        // the picture, not a repaint of it: the same snapshot at two offsets is
+        // two scenes, which is why it is part of the channel key too.
+        .arg(format!("--sidebar={sidebar}"))
         .output()
         .map_err(|error| format!("run {}: {error}", config.lua))?;
 
@@ -298,9 +312,15 @@ fn render(config: &Config, snapshot: &str, width: u32, height: u32) -> Result<St
     Ok(body)
 }
 
-fn scene(config: &Config, width: u32, height: u32, query: &str) -> Result<String, String> {
+fn scene(
+    config: &Config,
+    width: u32,
+    height: u32,
+    query: &str,
+    sidebar: u32,
+) -> Result<String, String> {
     let snapshot = snapshot(config, query)?;
-    render(config, &snapshot, width, height)
+    render(config, &snapshot, width, height, sidebar)
 }
 
 /// Push a new scene whenever the producer's snapshot changes.
@@ -363,13 +383,20 @@ impl Hub {
 }
 
 /// The loop that owns this channel's renders.
-fn pump(config: Arc<Config>, channel: Arc<Channel>, width: u32, height: u32, query: String) {
+fn pump(
+    config: Arc<Config>,
+    channel: Arc<Channel>,
+    width: u32,
+    height: u32,
+    sidebar: u32,
+    query: String,
+) {
     let mut last: Option<String> = None;
     while !channel.stopped.load(Ordering::Acquire) {
         if let Ok(current) = snapshot(&config, &query)
             && last.as_deref() != Some(current.as_str())
         {
-            match render(&config, &current, width, height) {
+            match render(&config, &current, width, height, sidebar) {
                 Ok(body) => {
                     if let Ok(mut scene) = channel.scene.lock() {
                         *scene = body;
@@ -394,8 +421,12 @@ fn events(
 ) -> Result<(), String> {
     let width = query_number(target, "w").unwrap_or(config.width).clamp(200, 4000);
     let height = query_number(target, "h").unwrap_or(config.height).clamp(200, 4000);
-    let passthrough = query_without(target, &["w", "h"]);
-    let key = format!("{}|{width}x{height}|{passthrough}", config.view.display());
+    let passthrough = query_without(target, &["w", "h", "sidebar"]);
+    let sidebar = query_number(target, "sidebar").unwrap_or(0);
+    let key = format!(
+        "{}|{width}x{height}|{sidebar}|{passthrough}",
+        config.view.display()
+    );
 
     stream
         .write_all(
@@ -410,7 +441,7 @@ fn events(
         let config = Arc::clone(config);
         let pump_channel = Arc::clone(&channel);
         let query = passthrough.clone();
-        std::thread::spawn(move || pump(config, pump_channel, width, height, query));
+        std::thread::spawn(move || pump(config, pump_channel, width, height, sidebar, query));
     }
 
     loop {

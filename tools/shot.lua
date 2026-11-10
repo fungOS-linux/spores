@@ -1,7 +1,7 @@
 -- Render a Spore view to a scene document without a compositor.
 --
 --   lua tools/shot.lua <view.lua> <snapshot.lua> <theme.lua> <out.json> [w] [h]
---                     [--query=<text>] [--scroll=<px>] [--hover=<id>]
+--                     [--query=<text>] [--scroll=<px>] [--sidebar=<n>] [--hover=<id>]
 --
 -- A preview tool, not a host: it provides the same `canvas` ABI Canvas does,
 -- resolves `require` for the SDK, and nothing else. A view paints itself through
@@ -24,7 +24,7 @@ local width, height = tonumber(positional[5]) or 1200, tonumber(positional[6]) o
 
 assert(view_path and snapshot_path and theme_path and out_path,
   "usage: lua tools/shot.lua <view.lua> <snapshot.lua> <theme.lua> <out.json> [w] [h]"
-  .. " [--query=<text>] [--scroll=<px>] [--hover=<id>]")
+  .. " [--query=<text>] [--scroll=<px>] [--sidebar=<n>] [--hover=<id>]")
 
 local theme = dofile(theme_path)
 local inks = theme.inks or {}
@@ -64,6 +64,9 @@ _G.canvas = {
     local scale = s.scale[1] or 1
     prims[#prims + 1] = { type = "text", id = s.id, ink = s.ink, text = s.text,
       translation = s.translation, scale = s.scale, rgb = s.rgb,
+      -- A text node may carry styled runs. They travel with the node so a line
+      -- is one node, not one node per colour change.
+      runs = s.runs,
       px = scale * scale * (TYPE.body or 16) * 1.25 }
   end,
 }
@@ -87,6 +90,10 @@ _G.module = {
 }
 if flags.query then _G.module.query = flags.query end
 if flags.scroll then _G.module.scroll = { offset = tonumber(flags.scroll) or 0 } end
+-- A panel's own scroll offset. Same shape as `scroll`: the host says how far,
+-- the view decides what moves. The terminal's scrollback and its device list
+-- are two different lists, so they are two different offsets.
+if flags.sidebar then _G.module.sidebar = { offset = tonumber(flags.sidebar) or 0 } end
 if flags.hover then _G.module.hover = flags.hover end
 
 -- The SDK is a build-time import in a package; here it is a checkout. Two
@@ -168,6 +175,23 @@ local function node_json(node)
   end
   if node.text then
     fields[#fields + 1] = quote("text") .. ":" .. quote(node.text)
+  end
+  if node.runs then
+    -- Each run resolves its own ink, because a terminal row names its own
+    -- colours and the line's first colour is not the line's colour.
+    local runs = {}
+    for _, run in ipairs(node.runs) do
+      local run_fields = { quote("text") .. ":" .. quote(run.text) }
+      if run.ink then
+        run_fields[#run_fields + 1] = quote("ink") .. ":" .. quote(run.ink)
+      end
+      local rgb = run.rgb or hex(inks[run.ink or ""])
+      if rgb then
+        run_fields[#run_fields + 1] = string.format('%s:[%d,%d,%d]', quote("rgb"), rgb[1], rgb[2], rgb[3])
+      end
+      runs[#runs + 1] = "{" .. table.concat(run_fields, ",") .. "}"
+    end
+    fields[#fields + 1] = quote("runs") .. ":[" .. table.concat(runs, ",") .. "]"
   end
   if node.px then
     fields[#fields + 1] = string.format('%s:%.5f', quote("px"), node.px)
