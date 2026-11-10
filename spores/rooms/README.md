@@ -2,8 +2,25 @@
 
 Shared audio/video rooms, rendered for Canvas. Each room also has a Holodeck
 twin: the same `space` id, the same members and the same media, with a VR
-presenter instead of this flat one. This Spore owns composition, not room
-state, media or transport.
+presenter instead of this flat one.
+
+The Spore owns room state, membership and admission, in `soil:records` under
+the `rooms` namespace:
+
+```text
+fungos.room/room@1       id, name, space, gated
+fungos.room/member@1     room, id, name, mic
+fungos.room/message@1    room, seq, from, name, text
+fungos.room/admission@1  room, session, name, status  (waiting/allowed/denied)
+```
+
+A room code is the room name. An open room is joined by its link; a closed
+room needs an admission record before `join` will accept the session. The
+module never signs a media token: that is a host capability over `soil:creds`,
+so no credential enters Wasm.
+
+Media and transport stay host-owned. This Spore owns composition and policy,
+not audio, video or network.
 
 ## What it renders
 

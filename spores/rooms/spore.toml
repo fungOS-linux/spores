@@ -1,6 +1,9 @@
-# Rooms: shared audio/video spaces with a Holodeck twin. This is the Canvas
-# presenter. It owns composition, not room state, media or transport; the
-# module and grants land with `soil:room`.
+# Rooms: shared audio/video spaces with a Holodeck twin.
+#
+# Rooms, membership, admission and the conversation live in this module, in
+# records. Canvas renders the Lua view; the host maps the `rooms` namespace to
+# a book and enforces the grant. Media and LiveKit credentials stay host-side:
+# a Spore asks for a scoped token, it never signs one.
 schema = 1
 
 [spore]
@@ -14,7 +17,10 @@ homepage = "https://github.com/fungOS-linux/spores"
 [engine]
 soil = ">=0.1"
 target = "wasm32-wasip2"
-abi = { canvas = "1.0.0" }
+abi = { canvas = "1.0.0", records = "0.1.0" }
+
+[module]
+path = "module.wasm"
 
 [ui]
 entry = "ui/rooms.lua"
@@ -27,16 +33,11 @@ surfaces = ["canvas", "web"]
 
 [grants]
 "soil:canvas" = "present the room directory, buses and the selected room"
+"soil:records" = "own rooms, membership, messages and admission in the rooms namespace"
 
-# When the module lands, the room grants are added with reasons. They are named
-# here so a reviewer sees the intended boundary, not merely its current absence.
-# "soil:room" = "list and join rooms, read presence, buses and room events"
-# "soil:room.media" = "publish and hear room audio through the host"
-# "soil:surface-import" = "place shared screens in the room view"
-# "soil:records" = "read the room conversation thread"
-
-# Capture is host-owned. The room adapter uses soil:mic, soil:camera and
-# soil:screencast internally; this Spore receives state and surface aliases.
+# Media is host-owned. The room adapter uses soil:mic, soil:camera and
+# soil:screencast internally; this Spore receives state and surface aliases,
+# and asks soil:creds for a room-scoped media token.
 
 [denied]
 transport = ["socket", "quic", "iroh"]
