@@ -16,11 +16,11 @@
 //! scroll, sessions, events — to the process that owns the state. The renderer
 //! is stateless: it holds a socket and a view, and nothing else.
 
+use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -140,7 +140,7 @@ fn run() -> Result<(), String> {
         (None, Some(command), _) => SnapshotSource::Command(command),
         (None, None, Some(path)) => SnapshotSource::File(path),
         (None, None, None) => {
-            return Err("one of --snapshot, --snapshot-cmd or --snapshot-url is required".into())
+            return Err("one of --snapshot, --snapshot-cmd or --snapshot-url is required".into());
         }
     };
 
@@ -221,7 +221,9 @@ fn handle(mut stream: TcpStream, config: &Arc<Config>) -> Result<(), String> {
         // gets. Rendering the session under the pointer means the click finds a
         // channel whose frame is already in memory instead of starting one.
         ("GET", "/warm") => {
-            let width = query_number(&request.target, "w").unwrap_or(config.width).clamp(200, 4000);
+            let width = query_number(&request.target, "w")
+                .unwrap_or(config.width)
+                .clamp(200, 4000);
             let height = query_number(&request.target, "h")
                 .unwrap_or(config.height)
                 .clamp(200, 4000);
@@ -232,7 +234,12 @@ fn handle(mut stream: TcpStream, config: &Arc<Config>) -> Result<(), String> {
             start_pump(config, &channel, width, height, sidebar, passthrough);
             warm(&channel);
             config.hub.unsubscribe(&key, &channel);
-            respond(&mut stream, "204 No Content", "text/plain; charset=utf-8", b"")
+            respond(
+                &mut stream,
+                "204 No Content",
+                "text/plain; charset=utf-8",
+                b"",
+            )
         }
         ("GET", "/scene.json") => {
             // A page asks for the surface it is drawing on: a terminal sized for
@@ -573,8 +580,7 @@ fn render_once(
             String::from_utf8_lossy(&result.stderr).trim()
         ));
     }
-    String::from_utf8(result.stdout)
-        .map_err(|error| format!("scene is not utf-8: {error}"))
+    String::from_utf8(result.stdout).map_err(|error| format!("scene is not utf-8: {error}"))
 }
 
 fn scene(
@@ -624,7 +630,9 @@ struct Channel {
 
 impl Hub {
     fn new() -> Self {
-        Self { channels: Mutex::new(HashMap::new()) }
+        Self {
+            channels: Mutex::new(HashMap::new()),
+        }
     }
 
     fn subscribe(&self, key: String) -> Arc<Channel> {
@@ -658,7 +666,10 @@ impl Hub {
     }
 
     fn unsubscribe(&self, _key: &str, channel: &Arc<Channel>) {
-        let left = channel.subscribers.fetch_sub(1, Ordering::AcqRel).saturating_sub(1);
+        let left = channel
+            .subscribers
+            .fetch_sub(1, Ordering::AcqRel)
+            .saturating_sub(1);
         if left == 0 {
             channel.stopped.store(true, Ordering::Release);
             channel.wake.notify_all();
@@ -684,14 +695,11 @@ impl Hub {
 }
 
 /// What a scene depends on, and therefore what one render can be shared by.
-fn channel_key(
-    config: &Config,
-    width: u32,
-    height: u32,
-    sidebar: u32,
-    query: &str,
-) -> String {
-    format!("{}|{width}x{height}|{sidebar}|{query}", config.view.display())
+fn channel_key(config: &Config, width: u32, height: u32, sidebar: u32, query: &str) -> String {
+    format!(
+        "{}|{width}x{height}|{sidebar}|{query}",
+        config.view.display()
+    )
 }
 
 /// Start the render loop for a channel that has no pump yet.
@@ -706,8 +714,16 @@ fn start_pump(
     if channel.subscribers.load(Ordering::Acquire) != 1 {
         return;
     }
-    let cached = channel.snapshot.lock().map(|snapshot| snapshot.clone()).unwrap_or_default();
-    let last = if cached.is_empty() { None } else { Some(cached) };
+    let cached = channel
+        .snapshot
+        .lock()
+        .map(|snapshot| snapshot.clone())
+        .unwrap_or_default();
+    let last = if cached.is_empty() {
+        None
+    } else {
+        Some(cached)
+    };
     let config = Arc::clone(config);
     let pump_channel = Arc::clone(channel);
     std::thread::spawn(move || pump(config, pump_channel, width, height, sidebar, query, last));
@@ -718,7 +734,11 @@ fn start_pump(
 fn warm(channel: &Arc<Channel>) {
     let deadline = Instant::now() + Duration::from_millis(500);
     while Instant::now() < deadline {
-        let ready = channel.scene.lock().map(|scene| !scene.is_empty()).unwrap_or(false);
+        let ready = channel
+            .scene
+            .lock()
+            .map(|scene| !scene.is_empty())
+            .unwrap_or(false);
         if ready {
             return;
         }
@@ -765,13 +785,13 @@ fn pump(
     }
 }
 
-fn events(
-    stream: &mut TcpStream,
-    config: &Arc<Config>,
-    target: &str,
-) -> Result<(), String> {
-    let width = query_number(target, "w").unwrap_or(config.width).clamp(200, 4000);
-    let height = query_number(target, "h").unwrap_or(config.height).clamp(200, 4000);
+fn events(stream: &mut TcpStream, config: &Arc<Config>, target: &str) -> Result<(), String> {
+    let width = query_number(target, "w")
+        .unwrap_or(config.width)
+        .clamp(200, 4000);
+    let height = query_number(target, "h")
+        .unwrap_or(config.height)
+        .clamp(200, 4000);
     let passthrough = query_without(target, &["w", "h", "sidebar"]);
     let sidebar = query_number(target, "sidebar").unwrap_or(0);
     let key = channel_key(config, width, height, sidebar, &passthrough);
@@ -789,8 +809,15 @@ fn events(
     // anything. Switching back to a session you were just in is a socket and a
     // copy, not a render.
     let (cached_scene, generation) = {
-        let scene = channel.scene.lock().map(|scene| scene.clone()).unwrap_or_default();
-        let generation = *channel.generation.lock().map_err(|error| error.to_string())?;
+        let scene = channel
+            .scene
+            .lock()
+            .map(|scene| scene.clone())
+            .unwrap_or_default();
+        let generation = *channel
+            .generation
+            .lock()
+            .map_err(|error| error.to_string())?;
         (scene, generation)
     };
     let mut seen = generation;
@@ -803,12 +830,22 @@ fn events(
     }
 
     if channel.subscribers.load(Ordering::Acquire) == 1 {
-        start_pump(config, &channel, width, height, sidebar, passthrough.clone());
+        start_pump(
+            config,
+            &channel,
+            width,
+            height,
+            sidebar,
+            passthrough.clone(),
+        );
     }
 
     loop {
         let (generation, scene) = {
-            let guard = channel.generation.lock().map_err(|error| error.to_string())?;
+            let guard = channel
+                .generation
+                .lock()
+                .map_err(|error| error.to_string())?;
             if *guard == seen {
                 let _ = channel
                     .wake
@@ -818,7 +855,11 @@ fn events(
             }
             let generation = *guard;
             drop(guard);
-            let scene = channel.scene.lock().map(|scene| scene.clone()).unwrap_or_default();
+            let scene = channel
+                .scene
+                .lock()
+                .map(|scene| scene.clone())
+                .unwrap_or_default();
             (generation, scene)
         };
         if scene.is_empty() {

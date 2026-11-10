@@ -14,13 +14,52 @@
 # It cannot tell that soil has moved on: noticing that needs soil present, which
 # is a dependency decision rather than a check.
 #
-# source:      fungOS-linux/soil, wit/soil-records.wit
-# soil-commit: a7f23664f0912b31809cae50c97752a95df18ca7 (soil main)
-#
 # Each row is <path> and the git blob SHA of the canonical file it was copied
 # from. Bumping a copy means copying soil's file over it and putting the new
 # blob here in the same commit.
+#
+# The check reads the covered packages out of the rows below rather than keeping
+# its own list of filenames. Adding a row for `soil:foo` therefore makes every
+# vendored `soil:foo` copy in the tree something that must be recorded -- which
+# is the half that failed before: the copies were found by a filename glob, so
+# a package nobody had thought of was never looked for.
+#
+# Coverage is not yet complete. This repository vendors roughly twenty soil
+# packages; the three below are the ones whose drift has actually bitten. A
+# package that is not covered here is neither checked nor claimed to be current.
+
+# --- soil-records.wit -------------------------------------------------------
+# source:      fungOS-linux/soil, wit/soil-records.wit
+# soil-commit: a7f23664f0912b31809cae50c97752a95df18ca7 (soil main)
 
 spores/contacts/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
 spores/crm/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
 spores/unibus/wit/deps/soil-records/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
+
+# --- soil-spore.wit ---------------------------------------------------------
+# source:      fungOS-linux/soil, wit/soil-spore.wit
+# soil-commit: 697be58c0ed9fc57d5cd9e642b89b3d88e129500 (soil main, PR #38)
+#
+# NOT RECORDED YET, deliberately, and the check says so by having no rows here.
+#
+# Four copies exist (launcher, launcher-host, spore-browser, spore-browser-host)
+# and all four still carry `surfaces: list<string>`; soil main now has
+# `list<surface>`. They cannot be bumped one at a time: `launcher-host` and
+# `spore-browser-host` pin soil at `4d4271b`, which is NOT on soil main, and it
+# is the last place `crates/soil-spore-host` exists at all -- the catalogue and
+# `Launcher` trait those two hosts are built on were replaced on main, not
+# moved. Bumping the contract under them compiles the wrong `Entry` type, which
+# is how this was found. Refreshing these four needs the two hosts ported onto
+# soil main's `soil-spore` first, and that is a design decision, not a copy.
+#
+# Recording one copy without the others would be the lie this file exists to
+# prevent, so until all four move, none is listed.
+
+# --- soil-surface-import.wit ------------------------------------------------
+# source:      fungOS-linux/soil, wit/soil-surface-import.wit
+# soil-commit: 697be58c0ed9fc57d5cd9e642b89b3d88e129500 (soil main, PR #38)
+#
+# `browser` joined `surface-import.kind`: a host-provided browser view is a kind
+# of import, and the enum could not say so before.
+
+spores/surface-probe/wit/deps/soil-surface-import/package.wit 2e9482b034b952c44d02ec9ea17004ba372a4474
