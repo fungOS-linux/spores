@@ -109,7 +109,10 @@ impl State {
     }
 
     fn members_of(&self, room: &str) -> Vec<&Member> {
-        self.members.iter().filter(|member| member.room == room).collect()
+        self.members
+            .iter()
+            .filter(|member| member.room == room)
+            .collect()
     }
 
     fn messages_of(&self, room: &str) -> Vec<&Message> {
@@ -138,7 +141,8 @@ impl State {
     fn may_join(&self, room: &str, session: &str) -> bool {
         match self.room(room) {
             Some(room) if room.gated => matches!(
-                self.guest(room.id.as_str(), session).map(|guest| &guest.status),
+                self.guest(room.id.as_str(), session)
+                    .map(|guest| &guest.status),
                 Some(Admission::Allowed)
             ),
             _ => true,
@@ -229,7 +233,13 @@ impl State {
         }
     }
 
-    fn say(&mut self, room: &str, from: &str, name: Option<&str>, text: &str) -> Result<(), String> {
+    fn say(
+        &mut self,
+        room: &str,
+        from: &str,
+        name: Option<&str>,
+        text: &str,
+    ) -> Result<(), String> {
         let text = text.trim();
         if text.is_empty() {
             return Err("a room message cannot be empty".into());
@@ -651,7 +661,10 @@ mod tests {
         let mut state = room();
         state.gate("studio", true).unwrap();
         assert!(!state.may_join("studio", "avery"));
-        assert_eq!(state.request("studio", "avery", Some("Avery")), Admission::Waiting);
+        assert_eq!(
+            state.request("studio", "avery", Some("Avery")),
+            Admission::Waiting
+        );
         assert!(!state.may_join("studio", "avery"));
         state.decide("studio", "avery", Admission::Allowed).unwrap();
         assert!(state.may_join("studio", "avery"));
@@ -666,7 +679,12 @@ mod tests {
         assert!(!state.may_join("studio", "avery"));
         state.gate("studio", false).unwrap();
         assert!(state.may_join("studio", "avery"));
-        assert!(state.guests.iter().all(|guest| guest.status != Admission::Waiting));
+        assert!(
+            state
+                .guests
+                .iter()
+                .all(|guest| guest.status != Admission::Waiting)
+        );
     }
 
     #[test]
@@ -684,7 +702,9 @@ mod tests {
     fn messages_are_room_scoped_and_ordered() {
         let mut state = room();
         state.open("other", None);
-        state.say("studio", "avery", Some("Avery"), "hello").unwrap();
+        state
+            .say("studio", "avery", Some("Avery"), "hello")
+            .unwrap();
         state.say("other", "sam", Some("Sam"), "elsewhere").unwrap();
         state.say("studio", "sam", Some("Sam"), "hi").unwrap();
         let messages = state.messages_of("studio");
