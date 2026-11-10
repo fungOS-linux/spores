@@ -1,0 +1,6 @@
+spore-lock 1
+spore dev.fungos.jarvis-telemetry
+version 0.1.0
+file e8e96e3c9d80b0b0ca2bd76d7ac72632bcc0e8fb7446b7dd6ee9a2a48d77b994 256789 module.wasm
+file def8a929562f41f191ac90268dd1e42bd9ee7c27dd90ce9751acaef6b48c5bd9 1697 spore.toml
+digest 82cde833f6346d24a7b0a7a95ca8ff27ba00f117bbb66de6ba54f5f94e79affe
