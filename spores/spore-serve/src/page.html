@@ -48,6 +48,10 @@
     width: 34px; flex: none; text-align: center; color: #8395a2;
   }
   #picker .close:hover { color: #ff8f8f; border-color: #ff8f8f; }
+  #hover {
+    position: fixed; display: none; pointer-events: none; z-index: 5;
+    background: rgba(255,255,255,.07); border-radius: 6px;
+  }
   #notice {
     position: fixed; left: 50%; top: 18%; transform: translateX(-50%); z-index: 25;
     max-width: 640px; display: none; padding: 10px 14px; border-radius: 8px;
@@ -76,12 +80,14 @@
 <div id="picker"></div>
 <div id="empty">no output yet — the shell is still starting, or this target has nothing to show</div>
 <div id="notice"></div>
+<div id="hover"></div>
 <div id="hint"><span id="stats" class="num"></span> · <b>sessions</b> to switch</div>
 <script>
 (() => {
   const screen = document.getElementById('screen');
   const notice = document.getElementById('notice');
   const stats = document.getElementById('stats');
+  const hover = document.getElementById('hover');
   const empty = document.getElementById('empty');
 
   // A blank screen is not a diagnosis. Anything that throws is shown on the page
@@ -179,33 +185,60 @@
     screen.replaceChildren(frag);
   }
 
-  async function poll() {
-    if (rendering) return;
-    rendering = true;
-    try {
-      const w = window.innerWidth, h = window.innerHeight;
-      const response = await fetch('/scene.json' + qs({ w, h }), { cache: 'no-store' });
-      if (response.ok) {
-        const scene = await response.json();
-        meta = scene.meta || meta;
-        if (meta.title) document.title = meta.title;
-        notice.classList.remove('show');
-        draw(scene);
-        empty.classList.toggle('show', !(scene.nodes || []).some((node) => node.type === 'text'));
-        const first = (scene.nodes || []).find((node) => node.type === 'text');
-        const size = first && first.transform ? Math.round(first.transform.scale[0] * (meta.base || 16) * 1.25) : '?';
-        stats.textContent = `${meta.cols || '?'}x${meta.rows || '?'} · ${size}px` +
-          (session ? ` · session ${session}` : '');
-      } else {
-        fail('scene ' + response.status + ': ' + (await response.text()).trim().slice(0, 400));
+  function apply(scene) {
+    meta = scene.meta || meta;
+    if (meta.title) document.title = meta.title;
+    notice.classList.remove('show');
+    draw(scene);
+    empty.classList.toggle('show', !(scene.nodes || []).some((node) => node.type === 'text'));
+    const first = (scene.nodes || []).find((node) => node.type === 'text');
+    const size = first && first.transform ? Math.round(first.transform.scale[0] * (meta.base || 16) * 1.25) : '?';
+    stats.textContent = `${meta.cols || '?'}x${meta.rows || '?'} · ${size}px` +
+      (session ? ` · session ${session}` : '');
+  }
+
+  // Frames are pushed, not polled: the producer changes, the host renders once,
+  // the page draws. A keystroke reaches the screen in one round trip instead of
+  // waiting for the next tick, and an idle terminal costs nothing.
+  let source = null;
+  function connect() {
+    if (source) { source.close(); source = null; }
+    if (typeof EventSource !== 'function') return poll();
+    const w = window.innerWidth, h = window.innerHeight;
+    source = new EventSource('/events' + qs({ w, h }));
+    source.onmessage = (event) => {
+      try {
+        apply(JSON.parse(event.data));
+      } catch (error) {
+        fail('scene is not JSON: ' + error.message);
       }
+    };
+    source.addEventListener('error', () => {
+      // EventSource reconnects on its own; a closed stream means the host went
+      // away, and the retry will find it again when it is back.
+    });
+  }
+
+  async function poll() {
+    const w = window.innerWidth, h = window.innerHeight;
+    try {
+      const response = await fetch('/scene.json' + qs({ w, h }), { cache: 'no-store' });
+      if (response.ok) apply(await response.json());
+      else fail('scene ' + response.status);
     } catch (error) {
-      // A dropped poll is a frame not drawn; the next one is 200ms away. A
-      // persistent one is reported once, not 5 times a second.
       if (error instanceof SyntaxError) fail('scene is not JSON: ' + error.message);
-    } finally {
-      rendering = false;
     }
+  }
+
+  // Switching is a reconnect, not a navigation: a reload blanks the screen until
+  // the first frame arrives, which is the black flash.
+  function switchTo(id) {
+    if (String(id) === String(session)) return;
+    session = String(id);
+    const url = new URL(location.href);
+    url.searchParams.set('session', session);
+    history.replaceState(null, '', url);
+    connect();
   }
 
   function post(path, body) {
@@ -223,6 +256,8 @@
     if (meta.cols === cols && meta.rows === rows) { sentSize = key; return; }
     sentSize = key;
     post('/resize', JSON.stringify({ cols, rows }));
+    // The scene is rendered for a surface size; a new size is a new stream.
+    connect();
   }
 
   function encode(event) {
@@ -395,7 +430,7 @@
     if (!item) return;
     event.preventDefault();
     if (item.kind === 'session') {
-      location.search = '?session=' + item.id;
+      switchTo(item.id);
       return;
     }
     const response = await fetch('/sessions' + qs(), {
@@ -404,8 +439,43 @@
     }).catch(() => null);
     if (response && response.ok) {
       const opened = await response.json();
-      location.search = '?session=' + opened.id;
+      switchTo(opened.id);
     }
+  });
+
+  // A tab is a session. The view published where each one landed.
+  function tabHit(x, y) {
+    for (const tab of Object.values(meta.tabs || {})) {
+      if (x >= tab.x && x < tab.x + tab.width && y >= tab.y && y < tab.y + tab.height) return tab;
+    }
+    return null;
+  }
+
+  // Hover is the page's job because it is a pointer fact, not a frame fact: the
+  // scene says where the rows are, the pointer says which one it is on, and
+  // nothing needs a round trip.
+  window.addEventListener('mousemove', (event) => {
+    const tab = tabHit(event.clientX, event.clientY);
+    const item = sidebarHit(event.clientX, event.clientY);
+    const hit = tab || item;
+    if (!hit) {
+      hover.style.display = 'none';
+      document.body.style.cursor = '';
+      return;
+    }
+    document.body.style.cursor = 'pointer';
+    hover.style.display = 'block';
+    hover.style.left = (tab ? tab.x : 6) + 'px';
+    hover.style.top = hit.y + 'px';
+    hover.style.width = (tab ? tab.width : (meta.sidebar.width - 12)) + 'px';
+    hover.style.height = hit.height + 'px';
+  });
+
+  window.addEventListener('mousedown', (event) => {
+    const tab = tabHit(event.clientX, event.clientY);
+    if (!tab) return;
+    event.preventDefault();
+    switchTo(tab.id);
   });
 
   window.addEventListener('resize', resize);
@@ -419,8 +489,7 @@
       return;
     }
     resize();
-    poll();
-    setInterval(poll, 200);
+    connect();
   })();
 })();
 </script>
