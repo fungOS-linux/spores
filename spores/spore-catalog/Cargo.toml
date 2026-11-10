@@ -1,0 +1,18 @@
+[package]
+name = "spore-catalog"
+description = "Installed-Spore discovery and the host-owned launch decision"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# The manifest is soil's type, not ours: a catalogue that re-implemented
+# `spore.toml` would be a second parser drifting against the first.
+[dependencies]
+anyhow = "1"
+soil-spore = { git = "https://github.com/fungOS-linux/soil.git", rev = "697be58c0ed9fc57d5cd9e642b89b3d88e129500" }
+
+[dev-dependencies]
+tempfile = "3"
