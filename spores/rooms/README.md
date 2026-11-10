@@ -86,13 +86,21 @@ browser tabs served by this process. The service keeps a bounded, ephemeral
 history and includes it in `room.welcome.v1` for late joiners. `Ask JARVIS`
 uses the typed text for the addressed turn instead.
 
-Each tab has its own call session and its own call panel, while this server
-process is one Unibus member (the fixed participant identity in `CLIENT.json`).
-That is deliberate for the first live cut: two tabs can prove the WebRTC mesh,
-but they do not become two independent room members. A second person should run
-their own `rooms-serve` with their own client identity; JARVIS is not yet a
-browser peer. The page is audio-only (`video: false`); video and screen share
-ride a later track on the same peer connection.
+Each tab is a distinct LiveKit participant, while this server process is one
+Unibus member (the fixed participant identity in `CLIENT.json`). That keeps the
+call usable for two tabs without pretending they are two independent room
+members; a second person should run their own `rooms-serve` with their own
+client identity. `rooms-serve` mints the LiveKit token, so the API secret stays
+in the host process. JARVIS is not yet a browser call participant.
+
+The call uses LiveKit for camera, microphone and screen share. Configure it
+with `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` when starting
+`rooms-serve`; the page loads the pinned `livekit-client` browser bundle from
+jsDelivr. If LiveKit is not configured, the room and text composer still work,
+but Join call reports that the call service is unavailable.
+
+Screen share is currently a LiveKit track, not `soil:surface-export`; tying it
+to the native surface picker is a later adapter.
 
 The module is not yet an installable Spore package: `soil-spore check` requires
 a module or a chrome region, and `spores/gallery` has the same gap.
