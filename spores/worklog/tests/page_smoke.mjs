@@ -88,6 +88,12 @@ class FakeRenderer {
     createdWith = bytes.length;
     return new FakeRenderer();
   }
+  // What the page shows about a frame: the kinds it asked for, and a census of
+  // what came back. A count of the document alone is the lie that shipped.
+  static describe(document) {
+    const nodes = (JSON.parse(document).nodes || []).length;
+    return `{"nodes":${nodes},"rects":0,"texts":0}`;
+  }
   set_background() {}
   set_body() {}
   async render(document, width, height) {

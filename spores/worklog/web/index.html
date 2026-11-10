@@ -45,7 +45,7 @@ let query = '', offset = 0, hover = '', meta = { row_height: 0, first: 0, shown:
 // paints a scene node by node, it asks that renderer for pixels. The module, its
 // glue and one single-face font come from the host, so nothing licensed is
 // compiled into the artifact and a font swap is a host decision.
-let gpu = null, gpuError = null;
+let gpu = null, gpuError = null, rendererClass = null;
 
 // Resizing a canvas clears it, so it happens only when the window actually
 // changed size — never on a poll.
@@ -64,7 +64,8 @@ function fit() {
 // replaces every pixel at once or not at all.
 async function paintFrame(document, w, h) {
   const width = Math.max(1, Math.round(w)), height = Math.max(1, Math.round(h));
-  const rgba = await gpu.render(JSON.stringify(document), width, height);
+  const text = JSON.stringify(document);
+  const rgba = await gpu.render(text, width, height);
   if (frame.width !== width || frame.height !== height) {
     frame.width = width;
     frame.height = height;
@@ -72,6 +73,22 @@ async function paintFrame(document, w, h) {
   paint.putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.drawImage(frame, 0, 0, width, height);
+  // What was asked for and what came back, on the same line: a node count alone
+  // described the document even when nothing was drawn.
+  return `${rendererClass.describe(text)} · ${census(rgba)}`;
+}
+
+// A sampled census of the frame: how many samples are lit, and the byte range. A
+// frame that is only its ground reports one value and no lit samples.
+function census(rgba) {
+  let lit = 0, low = 255, high = 0;
+  for (let i = 0; i < rgba.length; i += 4 * 97) {
+    const value = rgba[i];
+    if (value < low) low = value;
+    if (value > high) high = value;
+    if (value > 70) lit += 1;
+  }
+  return `${lit} lit, ${low}..${high}`;
 }
 
 // The font, by content id. Fetched once, cached under the id it was served with,
@@ -95,7 +112,8 @@ async function start() {
     const bytes = await face();
     const module = await import('./pkg/scene.js');
     await module.default();
-    gpu = await module.SceneRenderer.create(bytes);
+    rendererClass = module.SceneRenderer;
+    gpu = await rendererClass.create(bytes);
     // The ground, and the type scale's base: the two facts a scene does not carry
     // because they are the host's, not the view's.
     gpu.set_background(25, 25, 25);
@@ -194,9 +212,9 @@ async function refresh() {
     if (scene.error) throw new Error(scene.error);
     current = scene;
     meta = scene.meta || meta;
-    await paintFrame(scene, w, h);
+    const drawn = await paintFrame(scene, w, h);
     place();
-    status.textContent = `${scene.nodes.length} nodes · ${new Date().toLocaleTimeString()}`;
+    status.textContent = `${drawn} · ${new Date().toLocaleTimeString()}`;
   } catch (error) {
     status.textContent = String(error.message || error);
   } finally {
