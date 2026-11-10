@@ -18,7 +18,9 @@ abi = { mycelium = "0.1.0", terminal = "0.1.0" }
 path = "module.wasm"
 
 [ui]
-entry = "ui/terminal.lua"
+# The terminal itself. `ui/terminal.lua` stays as the status/fallback projection
+# for a surface that cannot draw a grid.
+entry = "ui/grid.lua"
 jit = true
 hot_reload = true
 

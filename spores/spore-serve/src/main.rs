@@ -80,6 +80,13 @@ fn run() -> Result<(), String> {
         };
         match flag {
             "--root" => root = Some(PathBuf::from(value()?)),
+            // A Spore already names its view in `spore.toml`. Repeating the path
+            // on the command line is how a host and a manifest come to disagree.
+            "--spore" => {
+                let dir = PathBuf::from(value()?);
+                root = Some(dir.clone());
+                view = Some(spore_view(&dir)?);
+            }
             "--view" => view = Some(PathBuf::from(value()?)),
             "--snapshot" => snapshot_file = Some(PathBuf::from(value()?)),
             "--snapshot-cmd" => snapshot_cmd = Some(value()?),
@@ -192,6 +199,8 @@ fn handle(mut stream: TcpStream, config: &Config) -> Result<(), String> {
             // id, a path, a query. `{query}` in `--snapshot-cmd` is how the
             // command sees it, so one host serves every session the producer has.
             let passthrough = query_without(&request.target, &["w", "h"]);
+            // The page's own viewport is the one number a blank screen hides.
+            eprintln!("scene {width}x{height} {passthrough}");
             match scene(
                 config,
                 width.clamp(200, 4000),
@@ -416,6 +425,35 @@ fn query_without(target: &str, drop: &[&str]) -> String {
     } else {
         format!("?{}", kept.join("&"))
     }
+}
+
+/// The view a Spore declares in its manifest: `[ui] entry = "ui/x.lua"`.
+///
+/// A manifest is TOML, but this reads one string from one table. A full parser
+/// would be a dependency for a key that is always written the same way, and a
+/// missing entry is a clear error rather than a silent default.
+fn spore_view(dir: &Path) -> Result<PathBuf, String> {
+    let manifest = dir.join("spore.toml");
+    let text = std::fs::read_to_string(&manifest)
+        .map_err(|error| format!("read {}: {error}", manifest.display()))?;
+    let mut in_ui = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_ui = line == "[ui]";
+            continue;
+        }
+        if in_ui
+            && let Some(rest) = line.strip_prefix("entry")
+            && let Some((_, value)) = rest.split_once('=')
+        {
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            if !value.is_empty() {
+                return Ok(PathBuf::from(value));
+            }
+        }
+    }
+    Err(format!("{} has no [ui] entry", manifest.display()))
 }
 
 fn query_number(target: &str, name: &str) -> Option<u32> {

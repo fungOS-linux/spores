@@ -37,6 +37,29 @@
   #picker button:hover { border-color: #7dd3a8; }
   #picker .live { color: #7dd3a8; }
   #picker .meta { color: #5b6b78; margin-left: 8px; }
+  #picker input {
+    display: block; width: 100%; max-width: 520px; box-sizing: border-box;
+    background: #0b0e11; color: #dce5ea; border: 1px solid #1c252d; border-radius: 6px;
+    padding: 7px 10px; margin: 0 0 6px; font: inherit;
+  }
+  #picker .row { display: flex; align-items: stretch; gap: 4px; max-width: 520px; }
+  #picker .row button { flex: 1; }
+  #picker .close {
+    width: 34px; flex: none; text-align: center; color: #8395a2;
+  }
+  #picker .close:hover { color: #ff8f8f; border-color: #ff8f8f; }
+  #notice {
+    position: fixed; left: 50%; top: 18%; transform: translateX(-50%); z-index: 25;
+    max-width: 640px; display: none; padding: 10px 14px; border-radius: 8px;
+    background: #1b1214; border: 1px solid #5a2b2f; color: #ffb4b4;
+    font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap;
+  }
+  #notice.show { display: block; }
+  #empty {
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    font: 13px ui-monospace, monospace; color: #5b6b78; pointer-events: none;
+  }
+  #empty.show { display: flex; }
   #hint {
     position: fixed; right: 10px; bottom: 8px; z-index: 10;
     font: 11px ui-monospace, monospace; color: #5b6b78; opacity: .0;
@@ -44,16 +67,31 @@
   }
   body:hover #hint { opacity: .7; }
   #hint b { color: #7dd3a8; font-weight: 600; }
+  #hint .num { color: #8395a2; }
 </style>
 </head>
 <body>
 <div id="screen"></div>
 <button id="menu" type="button">sessions</button>
 <div id="picker"></div>
-<div id="hint"><b>click</b> to type · <b>esc</b> clears · resize the window to reflow</div>
+<div id="empty">no output yet — the shell is still starting, or this target has nothing to show</div>
+<div id="notice"></div>
+<div id="hint"><span id="stats" class="num"></span> · <b>sessions</b> to switch</div>
 <script>
 (() => {
   const screen = document.getElementById('screen');
+  const notice = document.getElementById('notice');
+  const stats = document.getElementById('stats');
+  const empty = document.getElementById('empty');
+
+  // A blank screen is not a diagnosis. Anything that throws is shown on the page
+  // instead of leaving a grey field and a console nobody is looking at.
+  function fail(message) {
+    notice.textContent = String(message);
+    notice.classList.add('show');
+  }
+  window.addEventListener('error', (event) => fail(event.message || 'script error'));
+  window.addEventListener('unhandledrejection', (event) => fail(event.reason && event.reason.message || event.reason));
   const session = new URLSearchParams(location.search).get('session') || '';
   const qs = (extra) => {
     const p = new URLSearchParams(extra || {});
@@ -126,10 +164,19 @@
         const scene = await response.json();
         meta = scene.meta || meta;
         if (meta.title) document.title = meta.title;
+        notice.classList.remove('show');
         draw(scene);
+        empty.classList.toggle('show', !(scene.nodes || []).some((node) => node.type === 'text'));
+        const first = (scene.nodes || []).find((node) => node.type === 'text');
+        stats.textContent = `${meta.cols || '?'}x${meta.rows || '?'} · ${first ? Math.round(first.px) : '?'}px` +
+          (session ? ` · session ${session}` : '');
+      } else {
+        fail('scene ' + response.status + ': ' + (await response.text()).trim().slice(0, 400));
       }
     } catch (error) {
-      // A dropped poll is a frame not drawn; the next one is 200ms away.
+      // A dropped poll is a frame not drawn; the next one is 200ms away. A
+      // persistent one is reported once, not 5 times a second.
+      if (error instanceof SyntaxError) fail('scene is not JSON: ' + error.message);
     } finally {
       rendering = false;
     }
@@ -171,6 +218,17 @@
   const menu = document.getElementById('menu');
   let pickerOpen = false;
 
+  const GROUPS = [['shell', 'shells'], ['ssh', 'hosts'], ['fleet', 'fleet'], ['mush', 'desktops']];
+
+  function button(html, onclick, className) {
+    const element = document.createElement('button');
+    element.type = 'button';
+    element.innerHTML = html;
+    element.onclick = onclick;
+    if (className) element.className = className;
+    return element;
+  }
+
   async function openPicker() {
     pickerOpen = true;
     picker.classList.add('open');
@@ -181,35 +239,73 @@
         fetch('/targets' + qs()).then((r) => r.json()),
       ]);
       const parts = [];
-      const heading = (text) => parts.push(Object.assign(document.createElement('h2'), { textContent: text }));
-      heading('sessions');
-      for (const item of sessions.sessions || []) {
-        const button = document.createElement('button');
-        button.innerHTML = `<span class="live">${item.exited ? '·' : '●'}</span> ${item.label || item.target}` +
-          `<span class="meta">session ${item.id}</span>`;
-        button.onclick = () => { location.search = '?session=' + item.id; };
-        parts.push(button);
-      }
-      if (!(sessions.sessions || []).length) {
-        parts.push(Object.assign(document.createElement('div'), { textContent: 'none open', className: 'meta' }));
-      }
-      heading('targets');
-      for (const item of targets.targets || []) {
-        const button = document.createElement('button');
-        button.innerHTML = `${item.label || item.name}<span class="meta">${item.kind || 'target'} · ${item.detail || ''}</span>`;
-        button.onclick = async () => {
-          const response = await fetch('/sessions' + qs(), {
-            method: 'POST',
-            body: JSON.stringify({ target: item.name }),
-          });
-          if (response.ok) {
-            const opened = await response.json();
-            location.search = '?session=' + opened.id;
+
+      const filter = document.createElement('input');
+      filter.placeholder = 'filter devices and sessions';
+      filter.autofocus = true;
+      parts.push(filter);
+
+      const body = document.createElement('div');
+      parts.push(body);
+
+      const draw = (needle) => {
+        body.replaceChildren();
+        // Headings belong to the filtered list, not to the overlay: a heading
+        // appended once outside `draw` would survive every keystroke and stack up.
+        const heading = (text) => body.append(Object.assign(document.createElement('h2'), { textContent: text }));
+        const match = (item) => !needle ||
+          (item.label || '').toLowerCase().includes(needle) ||
+          (item.name || '').toLowerCase().includes(needle) ||
+          (item.detail || '').toLowerCase().includes(needle);
+
+        heading('sessions');
+        const live = (sessions.sessions || []).filter(match);
+        if (!live.length) {
+          body.append(Object.assign(document.createElement('div'), {
+            textContent: 'none open', className: 'meta',
+          }));
+        }
+        for (const item of live) {
+          const row = document.createElement('div');
+          row.className = 'row';
+          row.append(
+            button(`<span class="live">${item.exited ? '·' : '●'}</span> ${item.label || item.target}` +
+              `<span class="meta">session ${item.id}</span>`,
+              () => { location.search = '?session=' + item.id; }),
+            button('×', async (event) => {
+              event.stopPropagation();
+              await fetch('/sessions/' + item.id + qs(), { method: 'DELETE' }).catch(() => {});
+              row.remove();
+            }, 'close'),
+          );
+          body.append(row);
+        }
+
+        for (const [kind, title] of GROUPS) {
+          const items = (targets.targets || []).filter((item) => item.kind === kind && match(item));
+          if (!items.length) continue;
+          heading(title);
+          for (const item of items) {
+            body.append(button(
+              `${item.label || item.name}<span class="meta">${item.detail || kind}</span>`,
+              async () => {
+                const response = await fetch('/sessions' + qs(), {
+                  method: 'POST',
+                  body: JSON.stringify({ target: item.name }),
+                });
+                if (response.ok) {
+                  const opened = await response.json();
+                  location.search = '?session=' + opened.id;
+                }
+              },
+            ));
           }
-        };
-        parts.push(button);
-      }
-      picker.replaceChildren(...parts);
+        }
+      };
+
+      filter.addEventListener('input', () => draw(filter.value.trim().toLowerCase()));
+      draw('');
+      requestAnimationFrame(() => filter.focus());
     } catch (error) {
       picker.replaceChildren(Object.assign(document.createElement('h2'), { textContent: 'could not list sessions' }));
     }
