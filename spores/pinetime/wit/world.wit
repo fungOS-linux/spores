@@ -1,0 +1,18 @@
+// The PineTime Spore: concrete hardware first, generic watch later.
+//
+// Importing a package is the capability declaration; the manifest's [grants]
+// names the package and explains why. The Spore never sees a radio handle, a
+// path, or a socket.
+package fungos:pinetime@0.1.0;
+
+world pinetime-spore {
+  import soil:ble/ble@1.0.0;
+  import soil:time/time@1.0.0;
+  import soil:records/records@0.1.0;
+
+  /// `watch`, `notify`, `media`, or `find`; see README.md.
+  export run: func(args: list<string>) -> result<_, string>;
+
+  /// The last run's device state and signal counts, as JSON.
+  export snapshot: func() -> result<list<u8>, string>;
+}

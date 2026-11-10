@@ -1,0 +1,6 @@
+spore-lock 1
+spore dev.fungos.pinetime
+version 0.1.0
+file 6bef127a8872c20de21f6a40ef0276de200c601b4da03c1f44a8c891cfc75be8 207510 module.wasm
+file ae8fb89d0738eb2ff0b6d34d56592c33998cc8aa5886f2207fa1ad30ecb04409 2015 spore.toml
+digest 06572a381b8641a6df1d151d626df466e9c5a73b5ee1e275b4f12c8e2adac6c8

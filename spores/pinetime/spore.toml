@@ -1,0 +1,49 @@
+# The PineTime Spore. Concrete hardware first; a generic smartwatch profile can
+# arrive when a second watch exists and has its own protocol.
+schema = 1
+
+[spore]
+id = "dev.fungos.pinetime"
+name = "pinetime"
+version = "0.1.0"
+license = "MIT"
+summary = "PineTime health, motion, notifications, and media over soil:ble"
+description = "Reads heart rate, battery, step count and motion from an InfiniTime watch, sends notifications and media metadata to it, and stores typed device/signal records for JARVIS. The radio lease and transport stay in soil-ble-host; this Spore never sees an address or a raw handle."
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { ble = "1.0.0", time = "1.0.0", records = "0.1.0" }
+
+[module]
+path = "module.wasm"
+
+[launch]
+default = "native"
+surfaces = ["native"]
+
+[grants]
+# The package is the host-link unit; the reason names the verbs this Spore
+# actually calls. There is no socket, path, environment, or wall clock.
+"soil:ble" = "observe (scan/services/read/subscribe/next-event), connect (take the radio lease), and write (notifications, media, find)"
+"soil:records" = "read the previous device state and write device.state.v1 and signal.sample.v1 records"
+"soil:time" = "stamp observations with the host's monotonic clock; no wall clock"
+# Rust std on wasm32-wasip2 pulls these in even though this Spore does no file or
+# network I/O. They are declared rather than hidden; the module's only writes go
+# through soil:records and soil:ble.
+"wasi:cli" = "Rust std stdio for the host's log stream"
+"wasi:clocks" = "Rust std runtime dependency; observations use soil:time, not the wall clock"
+"wasi:io" = "Rust std runtime I/O primitives"
+
+[denied]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "wall-clock"]
+
+[catalog]
+categories = ["system", "utilities"]
+keywords = ["pinetime", "infinitime", "ble", "health", "wearable"]
+
+[presentation]
+badge = "P"
+color = "#6ea8fe"
