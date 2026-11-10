@@ -1,0 +1,47 @@
+# The fungOS home surface. It draws the launcher and emits intents; opening a
+# Spore is the host's authority, so the view names a target and nothing more.
+
+schema = 1
+
+[spore]
+id = "dev.fungos.home"
+name = "home"
+version = "0.1.0"
+license = "MIT"
+summary = "The launcher: apps, widgets and the state of this machine"
+description = "The home surface: wallpaper, a status bar, widgets that read the machine and the store, a grid of Spores and a dock. It draws what the host hands it and emits home.open intents."
+homepage = "https://github.com/fungOS-linux/spores"
+
+[docs]
+usage = ["home", "home --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["system"]
+keywords = ["launcher", "home", "apps", "widgets", "dock"]
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { canvas = "1.0.0" }
+
+[ui]
+entry = "ui/home.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+canvas_module = "spore-dev-home"
+surfaces = ["canvas"]
+
+[grants]
+"soil:canvas" = "present the launcher"
+
+[denied]
+"soil:spore.install" = ["installing is the host's authority, not the launcher's"]
+"soil:http" = ["the host fetches the catalog and the metrics; the view reads a snapshot"]
+
+[presentation]
+badge = "H"
+color = "#8b9dff"

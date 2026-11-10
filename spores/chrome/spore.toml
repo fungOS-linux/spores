@@ -10,6 +10,14 @@ license = "MIT"
 summary = "The system bar: workspaces, focus, and the ambient facts"
 homepage = "https://github.com/fungOS-linux/spores"
 
+[docs]
+usage = ["chrome"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["system"]
+keywords = ["shell", "desktop", "dock", "launcher"]
+
 [engine]
 soil = ">=0.1"
 target = "wasm32-wasip2"

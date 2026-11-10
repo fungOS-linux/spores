@@ -6,7 +6,16 @@ name = "worklog"
 version = "0.1.0"
 license = "MIT"
 summary = "Read-only timeline of what happened across Marbles, GitHub and threads"
+description = "One chronological log of work: commits, issues, merges and agent threads, ordered by when they happened rather than by which tool recorded them."
 homepage = "https://github.com/fungOS-linux/spores"
+
+[docs]
+usage = ["worklog", "worklog --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["developer-tools", "productivity"]
+keywords = ["worklog", "timeline", "marbles", "github"]
 
 [engine]
 soil = ">=0.1"

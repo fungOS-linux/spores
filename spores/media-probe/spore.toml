@@ -6,6 +6,15 @@ name = "media-probe"
 version = "0.1.0"
 license = "MIT"
 summary = "Fixture Spore for soil:media playback, encoded chunks, and image readback"
+description = "A fixture, not an app: it exercises media playback, encoded chunks and image readback so the host ABI can be tested without a real media application."
+
+[docs]
+usage = ["media-probe"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["developer-tools", "media"]
+keywords = ["fixture", "media", "abi", "test"]
 
 [engine]
 soil = ">=0.1"

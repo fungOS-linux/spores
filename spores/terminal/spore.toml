@@ -7,7 +7,16 @@ name = "terminal"
 version = "0.1.0"
 license = "MIT"
 summary = "Browse Mycelium targets and open a terminal session"
+description = "A terminal that lists the Mycelium targets this machine may reach and opens a host-mediated session, without ever holding SSH credentials itself."
 homepage = "https://github.com/fungOS-linux/spores"
+
+[docs]
+usage = ["terminal", "terminal --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["developer-tools", "utilities"]
+keywords = ["terminal", "ssh", "mycelium", "shell"]
 
 [engine]
 soil = ">=0.1"

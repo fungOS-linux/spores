@@ -7,7 +7,16 @@ name = "spore-browser"
 version = "0.1.0"
 license = "MIT"
 summary = "Browse installed Spores and launch one bounded surface"
+description = "A browser over what is installed: each Spore's identity, declared surfaces and grants, with launch as a host action rather than something the view performs."
 homepage = "https://github.com/fungOS-linux/spores"
+
+[docs]
+usage = ["spore-browser", "spore-browser --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["system", "developer-tools"]
+keywords = ["spores", "launcher", "catalog", "browser"]
 
 [engine]
 soil = ">=0.1"

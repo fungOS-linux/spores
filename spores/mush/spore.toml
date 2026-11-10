@@ -6,6 +6,15 @@ name = "mush"
 version = "0.1.0"
 license = "MIT"
 summary = "Sandboxed VFS shell with a real environment and startup file"
+description = "A shell over one workspace: real `PWD`, environment and startup file, with installed wasm commands instead of host binaries."
+
+[docs]
+usage = ["mush [--root DIR]", "mush --script FILE", "man NAME"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["developer-tools", "system"]
+keywords = ["shell", "terminal", "wasm", "vfs"]
 
 [engine]
 soil = ">=0.1"

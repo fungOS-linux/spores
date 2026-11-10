@@ -184,6 +184,13 @@ ui.glyph = {
   bold = "B", italic = "I", code = "</>", link = "∞",
   doc = "▤", files = "▣", grid = "▦", list = "☰", columns = "◫",
   chevron = "▸", check = "✓", dot = "●", eye = "◉",
+  -- Launcher surfaces. A Spore names a mark; the host draws it.
+  home = "⌂", terminal = "❯", term = "❯", store = "◈", wiki = "▤", worklog = "▥",
+  sfx = "♪", ai = "✧", mcp = "⌁", webhook = "☁", confluence = "☁",
+  manavault = "⚿", chrome = "◉", contacts = "☺", crm = "◫",
+  dfm = "◔", gallery = "◨", git = "⑂", inbox = "✉", notify = "⚑",
+  ["media-probe"] = "∿", mush = "☂", consent = "✓", rooms = "⌗",
+  ["spore-browser"] = "◉", ["surface-probe"] = "⬚",
 }
 
 function ui.icon(name, props)

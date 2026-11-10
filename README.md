@@ -9,7 +9,53 @@ spore format itself. Personal and unreleased spores live in
 [`ajmwagar/spores`](https://github.com/ajmwagar/spores) until their author
 publishes them.
 
-**License:** every spore in this repository is MIT. See [LICENSE](LICENSE).
+**License:** every spore here is MIT, or Apache-2.0 OR MIT where its manifest
+says so. The manifest is the licence of record; `spore.toml` and `LICENSE`
+are checked together in review.
+
+## Identity, manuals, and listings
+
+Every Spore declares what `man` prints and what a store may list:
+
+```toml
+[spore]
+summary = "Markdown reader/editor with a hot-reloadable Lua UI"
+description = "Read and edit Markdown as one document."
+
+[docs]
+usage = ["markdown [FILE]", "markdown --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["productivity"]
+keywords = ["markdown", "editor"]
+```
+
+`soil-spore man <dir>` renders the page: NAME, SYNOPSIS, DESCRIPTION, VERSION,
+LICENSE, LAUNCH, GRANTS and SEE ALSO. Only the synopsis and the prose are
+authored; everything else is generated from the manifest, so a page cannot drift
+from what the package declares. `soil-spore info <dir>` prints the compact
+identity block, and `--version` works on the tool itself.
+
+Store artwork — icons, screenshots, the rich listing record — is a CID, not a
+file:
+
+```toml
+[presentation]
+icon = "ipfs://bafy…"
+
+[catalog]
+screenshots = [{ cid = "ipfs://bafy…", caption = "Editing a note" }]
+```
+
+That keeps the bundle to what a Spore needs at runtime. `soil-spore
+check --publish` refuses a listing without two screenshots, a manual, an icon, a
+homepage and a category; human review comes after. See
+[`docs/spore-store.md`](https://github.com/fungOS-linux/soil/blob/master/docs/spore-store.md).
+
+A package is the manifest, the module, every `.lua` under `ui/`, declared
+assets, `docs/man.md`, and `spore.lock`. `src/`, `wit/`, `Cargo.*`, tests and
+repo docs are build inputs and are not packed.
 
 ## One scene, three hosts
 
@@ -46,6 +92,7 @@ storage boundary is already the real one.
 
 ```text
 spores/chrome              shell regions: top bar, dock, launcher, switcher, control center, window
+spores/store               Spore Store front end: browse, listings, reviews, classified updates
 spores/spore-browser       installed-Spore browser, launched through soil:spore
 spores/spore-browser-host  wasmtime host for the browser Spore
 spores/dragshift           convert and edit a dropped file from a radial menu
@@ -99,6 +146,9 @@ spores/markdown     the Markdown reader/editor Spore
                     src/   semantics and editor state
                     ui/    the Lua UI Canvas renders
                     spore.toml  manifest, grants, launch surfaces
+spores/store        the storefront Spore (id `dev.fungos.store`)
+                    ui/    browse, listing and updates views
+                    docs/  the manual `man store` prints
 spores/unibus       the inbox Spore (id `dev.fungos.inbox`)
                     src/   record keys/schemas for mail + chat metadata
                     spore.toml  records/unibus grants, read-only

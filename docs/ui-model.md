@@ -153,3 +153,86 @@ module host reads — the same artifact, produced early.
 - Whether the tree is ever sent over the wire as data (Streamdown-style) instead
   of being evaluated from Lua. Evaluating Lua is the current answer: the source
   is the stream.
+
+## The browser is another Canvas backend
+
+The renderer decision is settled: **there is one renderer, and it is iced 0.14.**
+Native Canvas already draws through it; the browser compiles the same host to
+wasm with the `webgl`/`wgpu` renderer and draws the same view. The browser is a
+fourth backend beside mac, linux and tv, not a separate product.
+
+The first slice is live in `canvas-web`: the same iced application builds
+for `wasm32-unknown-unknown` with the `webgl`/wgpu renderer and draws the home
+Spore's scene document. There is no screenshot bridge in that path. A pointer
+layer hit-tests the document's host-owned control rectangles; pressing one
+emits a typed `canvas-intent` to the page, it does not open anything itself.
+The scene fixture is generated from `spores/home/ui/home.lua` by
+`spores/home/tools/dump_scene.lua`, so the browser is drawing the Spore's own
+layout, not a hand-built approximation. Replacing that fixture with a document
+produced by a Luau-in-wasm runtime is the next slice; the renderer does not
+change.
+
+That rules out three things that were considered and rejected:
+
+- **No DOM renderer.** Mapping scene nodes to elements would have made the web
+  a second implementation with its own layout, focus and text behaviour. It also
+  contradicts the paragraph above about geometry owners.
+- **No scene over the wire.** `ui.present` hands a document to a host; a browser
+  host is that host. Serialising the document to a second renderer adds a
+  protocol where there was a function call.
+- **No PNG mirror.** The old `canvas-web` polled `/v1/frame` every 125 ms and
+  painted a display capture. It is gone, along with `direct.rs` and the
+  `canvas-web-host` bridge: nothing in that path was clickable, scalable or
+  attributable to a surface, and `screenshot` ignored `surface_id` (every
+  surface returned the same image).
+
+### Lua in the browser
+
+Canvas runs views on `mlua` with the **Luau** backend. Luau is C++, and
+`wasm32-unknown-unknown` is not one of its targets, so the browser needs Luau
+compiled to wasm through `wasi-sdk`/emscripten and loaded as a wasm runtime.
+
+The accepted consequence: **a browser cannot compile wasm at runtime**, so the
+web loses live Lua editing and hot reload. A module is composed and its runtime
+shipped once; changing a view means rebuilding and reloading the page. Native
+keeps the hot loop. That is a fine trade for a stable surface.
+
+### What the browser loses, stated plainly
+
+- **Accessibility.** iced 0.14 exposes no accessibility tree. Text selection and
+  copy are weaker than the DOM. Acceptable for a launcher, store, terminal and
+  charts; not acceptable for prose.
+- **Documents.** `wiki` and `markdown` stay host pages on purpose. A canvas is
+  not a document, and pretending otherwise produces a worse wiki.
+- **Find-in-page, IME quirks, browser extensions.** Winit supplies a hidden input
+  for IME; that is the only DOM the UI uses, and it is not part of the view.
+
+### The node service
+
+A node that runs Spores can optionally publish them over HTTP:
+
+```text
+GET /spore/<id>/            the wasm host + composed module
+GET /healthz                is this node serving surfaces
+```
+
+`soil:spore` knows which Spores are installed; the surface server knows which
+are running and under which surface id. The two are different facts and must
+not be conflated: installed is not running.
+
+Mycelium already proves the selection mechanism — `service_kind` plus
+`services.candidates(kind)` prefers loopback, then the mesh, then configured
+fallbacks. A `spore-surface` kind advertises the server; a node not running the
+Spore is simply not a candidate. That is the anycast: same name, whichever node
+actually has the surface.
+
+### Work, by repo
+
+| Repo | Change |
+|---|---|
+| `canvas` | **done:** `direct.rs`/frame mirror deleted; iced app target for wasm renders the home scene; remaining: serve assets and modules from a node |
+| `canvas-native` | isolate the Lua host behind a runtime trait so the wasm build can use the Luau-to-wasm VM |
+| `luau` build | compile Luau for wasm (`wasi-sdk`), ship it as a wasm module the host instantiates |
+| `soil` | a node surface server (grow `soil-home`'s binary or add `soil-surface`) |
+| `mycelium` | `spore-surface` service kind; route selection by kind |
+| `spores` | keep `[launch] canvas_module` truthful; compose on install, not by hand |

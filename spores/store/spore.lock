@@ -1,0 +1,7 @@
+spore-lock 1
+spore dev.fungos.store
+version 0.1.0
+file c9199eeb5a269fd7319147c75056a881ff576ec629e4030d6c6dfeac3c708cd8 2301 docs/man.md
+file 7968302e0f81f4dcaa8bf6c6d0459fdddef6c6d2edb99bb607796b85f8b82635 1811 spore.toml
+file 72c8ebbb9616ec3abb7cd90fdc5cd6210ac57990385478643b996a2a4272c04e 25150 ui/store.lua
+digest 47583072cbfbc7220f2a01475f624aee440eb0c23a0deb0aa0ad6aa017eba728

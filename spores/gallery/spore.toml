@@ -11,7 +11,16 @@ name = "gallery"
 version = "0.1.0"
 license = "MIT"
 summary = "Dashboard primitive gallery for the shared Spore UI library"
+description = "A fixture-driven gallery of the shared dashboard primitives: stat, gauge, table and chart, rendered from one synthetic document."
 homepage = "https://github.com/fungOS-linux/spores"
+
+[docs]
+usage = ["gallery", "gallery --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["developer-tools", "graphics"]
+keywords = ["ui", "components", "gallery", "dashboard"]
 
 [engine]
 soil = ">=0.1"

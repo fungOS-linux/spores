@@ -6,7 +6,16 @@ name = "git"
 version = "0.1.0"
 license = "MIT"
 summary = "Landing queue: finished work awaiting a merge decision"
+description = "A queue of finished work awaiting a merge decision, projected from tracker state. It shows the decision and the evidence; it does not perform the merge."
 homepage = "https://github.com/fungOS-linux/spores"
+
+[docs]
+usage = ["git", "git --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["developer-tools"]
+keywords = ["git", "review", "merge", "queue"]
 
 [engine]
 soil = ">=0.1"
