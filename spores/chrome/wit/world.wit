@@ -1,0 +1,26 @@
+// Chrome bar: a view over host capabilities, never a schema of its own.
+//
+// There is deliberately no `spores:chrome` package. WIT is the host/guest ABI:
+// one versioned contract per capability, shared by every Spore that needs it. An
+// app-shaped package would mint a new contract per app, drift on every data tweak,
+// and give the bar a second identity beside its manifest.
+//
+// So the bar imports what it reads and the manifest stays the app declaration:
+//
+//   soil:canvas  - present the bar
+//   soil:time    - wall clock (wall-clock, 1.1.0) and elapsed time
+//   soil:device  - battery
+//   soil:shell   - workspaces and focus (package does not exist yet)
+//
+// One gap this bar found, soil's to close rather than chrome's to route around:
+// nothing exposes shell state. `soil:view` is a viewer target, not a workspace
+// list; workspace/focus belongs in a small `soil:shell` package
+// (`workspaces()`, `focus()`) that any bar, launcher or agent tool can share.
+// The clock gap is closed: `soil:time@1.1.0` carries `wall-clock`.
+package fungos:chrome-spore@0.1.0;
+
+world chrome-spore {
+  import soil:canvas/surface@1.0.0;
+  import soil:time/time@1.1.0;
+  import soil:device/battery@0.1.0;
+}

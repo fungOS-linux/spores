@@ -66,6 +66,8 @@ impl Guest for Component {
 }
 
 struct Shell {
+    /// The Desktop this session belongs to, when the host names one.
+    desktop: Option<String>,
     cwd: String,
     env: BTreeMap<String, String>,
     out: String,
@@ -89,6 +91,7 @@ impl Shell {
         ] {
             env.insert(key.into(), value.into());
         }
+        let mut desktop = None;
         let mut iter = args.into_iter();
         while let Some(arg) = iter.next() {
             if let Some(value) = arg.strip_prefix("--term=") {
@@ -99,9 +102,12 @@ impl Shell {
                 }
             } else if let Some(value) = arg.strip_prefix("--home=") {
                 env.insert("HOME".into(), value.into());
+            } else if let Some(value) = arg.strip_prefix("--desktop=") {
+                desktop = Some(value.to_owned());
             }
         }
         Self {
+            desktop,
             cwd: String::new(),
             env,
             out: String::new(),
@@ -157,6 +163,12 @@ impl Shell {
             "help" => {
                 self.out.push_str(HELP);
                 self.out.push('\n');
+                Ok(())
+            }
+            "clear" => {
+                // The host owns the screen; the Spore only says what to do
+                // with it, so this works on every surface.
+                self.out.push_str("\x1b[2J\x1b[H");
                 Ok(())
             }
             "exit" | "quit" => {
@@ -1014,7 +1026,13 @@ impl Shell {
             .env
             .get("PS1")
             .cloned()
-            .unwrap_or_else(|| "mush:\\w$ ".into());
+            .unwrap_or_else(|| {
+                if self.desktop.is_some() {
+                    "mush:\\d:\\w$ ".into()
+                } else {
+                    "mush:\\w$ ".into()
+                }
+            });
         let mut prompt = String::new();
         let mut chars = format.chars();
         while let Some(ch) = chars.next() {
@@ -1027,6 +1045,7 @@ impl Shell {
                     prompt.push_str(self.env.get("USER").map(String::as_str).unwrap_or("mush"))
                 }
                 Some('h') => prompt.push_str("mush"),
+                Some('d') => prompt.push_str(self.desktop.as_deref().unwrap_or("mush")),
                 Some('w') => prompt.push_str(&self.display_cwd()),
                 Some('W') => prompt.push_str(
                     self.cwd
@@ -1204,6 +1223,7 @@ const HELP: &str = "\
 mush — a sandboxed VFS shell
 
   help                    this text
+  clear                   clear the screen
   pwd                     print workspace path
   cd [DIR|-]              change directory
   ls [-l] [DIR]           list direct children

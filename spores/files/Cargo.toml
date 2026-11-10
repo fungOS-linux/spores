@@ -1,0 +1,30 @@
+[package]
+name = "spore-files"
+description = "VFS browser and storage census Spore"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "files"
+
+# The view host: scans a real namespace, writes the flat snapshot the Lua view
+# paints, and serves the rendered scene at files.myc. It is a stand-in for Soil,
+# which will supply the same `Vfs` from `soil:vfs` and run the module itself.
+[[bin]]
+name = "files-serve"
+path = "src/bin/serve.rs"
+
+[dependencies]
+serde_json = "1"
+
+# The host stand-in reads the fungOS VFS namespace directly. The Spore itself
+# still sees only `soil:vfs`; SQLite never enters the wasm guest.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rusqlite = { version = "0.37", default-features = false, features = ["bundled"] }
+
+[lints]
+workspace = true

@@ -97,7 +97,9 @@ spores/spore-browser       installed-Spore browser, launched through soil:spore
 spores/spore-browser-host  wasmtime host for the browser Spore
 spores/dragshift           convert and edit a dropped file from a radial menu
 spores/search              fuzzy search, ranking, and action dispatch
+spores/fleet               mycelium peers, sites and topology on one wall
 spores/markdown            Markdown reader/editor
+spores/files               VFS browser + storage census (files.myc)
 spores/unibus              read-only inbox (dev.fungos.inbox)
 spores/worklog             cross-tool timeline (dev.fungos.worklog)
 spores/terminal            terminal Spore
@@ -106,12 +108,36 @@ spores/terminal-host       native terminal host
 spores/crm                 CRM Spore over namespaced records
 spores/contacts            personal contacts + explicit CRM projections
 spores/notify              notification tray and ringer
+spores/rooms               audio/video rooms with a Holodeck twin
 spores/consent             system consent popup
 spores/dfm-report          DFM report renderer
 spores/mush                sandboxed VFS shell
+spores/hue                 Philips Hue CLI over the local bridge API
+spores/spotify             Spotify Connect remote for RASpotify
+spores/tui                 ratatui dashboard that emits ANSI frames
+spores/cli-http            the narrow host-mediated HTTP seam shared by CLI spores
 spores/media-probe         soil:media fixture
 spores/surface-probe       soil:surface-import fixture
 ```
+
+## TUI spores
+
+A TUI is bytes. A TUI Spore owns layout and state and returns one complete ANSI
+frame per call; the host owns the screen. [`spores/tui`](spores/tui) is the
+proof: it uses ratatui with **no terminal backend** and implements
+`ratatui::backend::Backend` over a `Vec<u8>`, including truecolor, attributes,
+cursor placement and region clears.
+
+```text
+ratatui App ──► AnsiBackend ──► Vec<u8> ──► soil-vt ──► cells ──► pixels
+                                      └──► a real terminal
+```
+
+Because the frame is just bytes, the same module can run on all three surfaces:
+a real terminal, `soil-vt` inside the terminal Spore, or Canvas. `mush` can
+*launch* a TUI as a command, but a line-oriented shell cannot host an
+interactive one without handing over the screen — that handover is the terminal
+surface's job, not the shell's.
 
 ## Layout
 
@@ -130,7 +156,15 @@ spores/worklog      the worklog Spore (id `dev.fungos.worklog`) + receiver
                     src/   fungos.worklog/event@1: normalize, order, store
                     ui/    the timeline view Canvas renders
                     (composed by tend, like every other Lua view)
+spores/files        the VFS browser and storage census (id `dev.fungos.files`)
+                    src/   VFS adapter, bounded scan, flat snapshot
+                    ui/    the three-pane view Canvas and files.myc render
+                    src/bin/serve.rs  the host stand-in that serves files.myc
 docs/               host/spore contract, records/sync, AI inbox spec
+spores/fleet        the mycelium wall
+                    src/   fleet status + topology -> one snapshot
+                    ui/    the graph-and-tables view Canvas renders
+                    web/   the same scene document, served at fleet.myc
 ```
 
 ## Build and check

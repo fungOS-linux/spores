@@ -1,0 +1,21 @@
+[package]
+name = "spore-spotify"
+description = "Spotify Connect remote for RASpotify and other Spotify devices"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cli-http = { path = "../cli-http" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wit-bindgen = "0.57"
+
+[lints.rust]
+unsafe_code = "allow"

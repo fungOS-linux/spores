@@ -11,20 +11,21 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use worklog::{
-    Append, Event, Store, from_github, from_marbles, iso8601_utc, now_ms, snapshot_lua,
-    verify_signature,
+    Append, Event, Store, from_confluence, from_github, from_marbles, iso8601_utc, now_ms,
+    snapshot_lua, verify_signature,
 };
 
 const USAGE: &str = "\
 worklog — the fungos.worklog/event@1 receiver and reader
 
-  worklog ingest   --source marbles|github --log PATH --secret-file PATH
+  worklog ingest   --source marbles|github|confluence --log PATH --secret-file PATH
                    [--signature VALUE] [--at MS]
                    read one payload from stdin
-  worklog ingest-batch --source marbles|github --log PATH --allow-unsigned
+  worklog ingest-batch --source marbles|github|confluence --log PATH --allow-unsigned
                    [--at MS]                read one payload per line
   worklog serve    --bind ADDR --log PATH
                    --marbles-secret-file PATH --github-secret-file PATH
+                   --confluence-secret-file PATH
   worklog tail     --log PATH [--limit N] [--all]
   worklog render-lua --log PATH [--limit N] [--all] [--now MS]
   worklog verify   --secret-file PATH --header VALUE   body on stdin
@@ -121,6 +122,7 @@ fn accept(
     }
     match source {
         "marbles" => from_marbles(body).map_err(|error| Rejected::new(400, &error)),
+        "confluence" => from_confluence(body, now).map_err(|error| Rejected::new(400, &error)),
         "github" => from_github(body, now).map_err(|error| Rejected::new(400, &error)),
         other => Err(Rejected::new(400, &format!("unknown source {other:?}"))),
     }
@@ -244,6 +246,7 @@ const MAX_LINE: u64 = 8 << 10;
 struct Routes {
     marbles: Option<Vec<u8>>,
     github: Option<Vec<u8>>,
+    confluence: Option<Vec<u8>>,
 }
 
 /// Read many envelopes in one process.
@@ -310,12 +313,18 @@ fn serve(args: &[String]) -> Result<(), String> {
             Some(path) => Some(secret(&path)?),
             None => None,
         },
+        confluence: match option(args, "--confluence-secret-file") {
+            Some(path) => Some(secret(&path)?),
+            None => None,
+        },
     };
-    if routes.marbles.is_none() && routes.github.is_none() {
+    if routes.marbles.is_none() && routes.github.is_none() && routes.confluence.is_none() {
         // Refusing to start beats starting a receiver that would accept
         // unsigned payloads as if they were authenticated.
         return Err(
-            "no secret configured: pass --marbles-secret-file or --github-secret-file".to_string(),
+            "no secret configured: pass --marbles-secret-file, --github-secret-file or \
+             --confluence-secret-file"
+                .to_string(),
         );
     }
 
@@ -356,6 +365,7 @@ fn handle(mut stream: TcpStream, store: &mut Store, routes: &Routes) -> Result<(
     let source = match path {
         "/ingest/marbles" => "marbles",
         "/ingest/github" => "github",
+        "/ingest/confluence" => "confluence",
         _ => return respond(&mut stream, 404, "unknown ingestion route"),
     };
     if method != "POST" {
@@ -407,6 +417,7 @@ fn handle(mut stream: TcpStream, store: &mut Store, routes: &Routes) -> Result<(
 
     let secret = match source {
         "marbles" => routes.marbles.as_deref(),
+        "confluence" => routes.confluence.as_deref(),
         _ => routes.github.as_deref(),
     };
     let Some(secret) = secret else {

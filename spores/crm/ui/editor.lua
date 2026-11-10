@@ -1,5 +1,10 @@
 -- CRM snapshot UI. Pure projection over the host-provided snapshot; emits action
 -- intents only. The host owns data access and namespaces.
+--
+-- The view builds a `fungos.ui` tree and hands it to `ui.present`, which lays it
+-- out (host Taffy when there is one, the kit's own pass when there is not) and
+-- paints it. Returning the tree instead would paint nothing: a host records
+-- primitives, it does not mount a tree.
 local ui = require("fungos.ui")
 local action = require("fungos.action")
 
@@ -18,7 +23,7 @@ local function selected_account(snapshot)
   return (snapshot.accounts or {})[1]
 end
 
-local function account_rail(ctx, snapshot)
+local function account_rail(snapshot)
   local children = {
     ui.text("crm-label", "ACCOUNTS", { size = 9, height = 16, ink = "muted" }),
   }
@@ -35,10 +40,10 @@ local function account_rail(ctx, snapshot)
       size = 10, height = 24, ink = "muted",
     }))
   end
-  return ui.column("crm-rail", { width = 240, flex_shrink = 0, gap = 2 }, children)
+  return ui.panel("crm-rail", { width = 240, flex_shrink = 0, gap = 2, padding = 12 }, children)
 end
 
-local function detail(ctx, snapshot)
+local function detail(snapshot)
   local account = snapshot.account or selected_account(snapshot) or {}
   local children = {
     ui.text("crm-title", account.name or "CRM", { size = 22, height = 30, ink = "primary" }),
@@ -68,7 +73,7 @@ local function money(amount)
   return string.format("$%d", value)
 end
 
-local function pipeline_board(ctx, snapshot)
+local function pipeline_board(snapshot)
   local pipeline = snapshot.pipeline or {}
   local columns = {}
   for stage_index, stage in ipairs(pipeline.stages or {}) do
@@ -82,38 +87,43 @@ local function pipeline_board(ctx, snapshot)
         }),
     }
     for card_index, opportunity in ipairs(stage.opportunities or {}) do
+      -- One line: `canvas.text` carries no width and does not honour a newline,
+      -- so a three-line label would paint as one long string across the column.
       ui.push(children, ui.button("crm-opp-" .. stage_index .. "-" .. card_index,
-        tostring(opportunity.name or opportunity.id) .. "\n"
-          .. tostring(opportunity.account_name or "") .. "\n"
+        tostring(opportunity.name or opportunity.id) .. " · "
+          .. tostring(opportunity.account_name or "") .. " · "
           .. money(opportunity.amount), {
           height = 64,
           size = 10,
           action = action.intent("crm.opportunity", { id = opportunity.id }),
         }))
     end
-    ui.push(columns, ui.column("crm-stage-col-" .. stage_index, {
-      width = 220, flex_shrink = 0, gap = 2,
-    }, children))
+    ui.push(columns, ui.panel("crm-stage-col-" .. stage_index, {
+      width = 220, flex_shrink = 0, gap = 2, padding = 10,
+    }, children, { opacity = 0.24 }))
   end
   if #columns == 0 then
     ui.push(columns, ui.text("crm-pipeline-empty", "No pipeline stages.", {
       size = 12, ink = "muted",
     }))
   end
-  return ui.column("crm-pipeline-root", { flex_grow = 1, gap = 3 }, {
+  return ui.column("crm-pipeline-root", { flex_grow = 1, gap = 12, padding = 16 }, {
     ui.text("crm-pipeline-title", "Pipeline", { size = 22, height = 30, ink = "primary" }),
-    ui.row("crm-pipeline-board", { flex_grow = 1, gap = 4 }, columns),
+    ui.row("crm-pipeline-board", { flex_grow = 1, gap = 16 }, columns),
   })
 end
 
-function M.render(ctx, snapshot)
+function M.render(snapshot)
+  local tree
   if snapshot.mode == "pipeline" then
-    return pipeline_board(ctx, snapshot)
+    tree = pipeline_board(snapshot)
+  else
+    tree = ui.row("crm-root", { flex_grow = 1, gap = 16, padding = 16 }, {
+      account_rail(snapshot),
+      detail(snapshot),
+    })
   end
-  return ui.row("crm-root", { flex_grow = 1, gap = 4 }, {
-    account_rail(ctx, snapshot),
-    detail(ctx, snapshot),
-  })
+  M.hits = ui.present(tree)
 end
 
 return M

@@ -1,0 +1,24 @@
+// TUI Spore ABI.
+//
+// A TUI is bytes: the Spore owns layout and state, the host owns the screen.
+// Every export returns one complete ANSI frame, so the host can hand it to a
+// real terminal, to `soil-vt`, or to Canvas without the Spore knowing which.
+package fungos:tui@0.1.0;
+
+world tui {
+  /// Start a session and return its first frame.
+  export start: func(cols: u16, rows: u16) -> result<string, string>;
+
+  /// Feed one key (`tab`, `j`, `k`, `up`, `down`, `space`, `q`, or a single
+  /// character) and return the frame to draw.
+  export key: func(key: string) -> result<string, string>;
+
+  /// Resize the virtual screen and return the reflowed frame.
+  export resize: func(cols: u16, rows: u16) -> result<string, string>;
+
+  /// Return the current frame without changing state.
+  export frame: func() -> result<string, string>;
+
+  /// A stateless preview: useful for a launcher thumbnail or a smoke test.
+  export render: func(cols: u16, rows: u16, tick: u64) -> result<string, string>;
+}

@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 
 use worklog::{
-    Append, Event, Kind, Store, from_github, from_marbles, signature_header, snapshot_lua,
-    verify_signature,
+    Append, Event, Kind, Store, from_confluence, from_github, from_marbles, signature_header,
+    snapshot_lua, verify_signature,
 };
 
 /// A log path that no other test in this binary shares.
@@ -189,6 +189,78 @@ fn signatures_cover_the_body() {
         !verify_signature(secret, body, "sha256=zz"),
         "non-hex is refused"
     );
+}
+
+#[test]
+fn a_confluence_page_edit_becomes_a_changed_event() {
+    // The classic space webhook shape: `page`, `spaceKey`, milliseconds.
+    let body = r#"{
+      "event": "page_updated",
+      "timestamp": 1767323045000,
+      "username": "ajmwagar",
+      "spaceKey": "FPL",
+      "page": {
+        "id": "948231",
+        "title": "Confluence webhook ingress architecture",
+        "spaceKey": "FPL",
+        "version": {"number": 7}
+      }
+    }"#;
+    let event = from_confluence(body.as_bytes(), 999).expect("normalize");
+    assert_eq!(event.kind, Kind::Changed);
+    assert_eq!(event.source, "confluence");
+    assert_eq!(event.actor, "ajmwagar");
+    assert_eq!(event.subject.as_str(), "confluence:FPL/948231");
+    assert_eq!(
+        event.summary,
+        "updated: Confluence webhook ingress architecture"
+    );
+    // The version is in the id: three edits of one page are three events.
+    assert_eq!(event.id, "confluence:FPL/948231:page_updated:7");
+    assert_eq!(event.at, 1_767_323_045_000);
+}
+
+#[test]
+fn a_confluence_content_event_reads_its_own_shape() {
+    // The newer content events carry `content.space.key` and no `spaceKey`.
+    let body = r#"{
+      "event": "content_created",
+      "timestamp": 1767323045,
+      "userAccountId": "5b10ac8d",
+      "content": {
+        "id": "77",
+        "title": "Runbook",
+        "space": {"key": "ENG"}
+      }
+    }"#;
+    let event = from_confluence(body.as_bytes(), 999).expect("normalize");
+    assert_eq!(event.kind, Kind::Created);
+    assert_eq!(event.subject.as_str(), "confluence:ENG/77");
+    // Seconds are converted rather than read as 1970.
+    assert_eq!(event.at, 1_767_323_045_000);
+    // No username: the opaque account id is better than an empty actor.
+    assert_eq!(event.actor, "5b10ac8d");
+}
+
+#[test]
+fn a_confluence_comment_points_at_its_page() {
+    let body = r#"{
+      "event": "comment_created",
+      "timestamp": 1767323045000,
+      "username": "reviewer",
+      "page": {"id": "12", "title": "Design", "spaceKey": "FPL"}
+    }"#;
+    let event = from_confluence(body.as_bytes(), 1).expect("normalize");
+    assert_eq!(event.kind, Kind::Mention);
+    assert_eq!(event.subject.as_str(), "confluence:FPL/12");
+    assert_eq!(event.summary, "commented on: Design");
+}
+
+#[test]
+fn an_unknown_confluence_event_is_rejected_rather_than_guessed() {
+    let body = r#"{"event": "page_moved", "page": {"id": "1"}}"#;
+    let error = from_confluence(body.as_bytes(), 1).expect_err("unmapped events fail");
+    assert!(error.contains("page_moved"), "{error}");
 }
 
 #[test]

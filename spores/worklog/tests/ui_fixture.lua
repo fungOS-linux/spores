@@ -1,137 +1,135 @@
 -- Fixture for the worklog view. Run from spores/worklog:
---   lua tests/ui_fixture.lua
+--   FUNGOS_SDK=<fungos-sdk checkout> lua tests/ui_fixture.lua
 --
--- The view builds a node tree and hands geometry to the host. Canvas has no
--- layout service, so it draws through the kit's Lua flow layout — which is what
--- this fixture runs, at the surface sizes the wall actually hands out. Geometry
--- is asserted, not stubbed: the defect this guards was geometric (a wrapped
--- label given one line's height while the host drew several, so the detail
--- column landed on top of itself), and a placeholder rect per node hides it.
+-- Canvas hands a module `canvas.rect` and `canvas.text` and nothing else: no
+-- layout service, no text measurement, no hit targets. So the fixture stubs
+-- exactly those two primitives and holds the view to the things the host cannot
+-- check for it — every node inside the surface, one id per node, one node per
+-- line, and a line no wider than the column it was measured for. The defects
+-- this guards were all geometric: a wrapped label given one line's height, a
+-- summary drawn over the field stacked below it, a row painted past the bottom
+-- edge and still counted in "1–40 of 40".
 
--- The layout kit lives in the inbox Spore: one kit, composed into every view
--- rather than copied per Spore. Only `ui.layout` is used here.
-local source = assert(io.open("../unibus/ui/lib/ui.lua", "rb"),
-  "../unibus/ui/lib/ui.lua is missing; the worklog view composes the shared kit")
-local ui = assert(load(source:read("*a"), "ui/lib/ui.lua"))()
-source:close()
-_G.ui = ui
+-- The library is the SDK package, loaded the way a host loads it: through
+-- `require`. `FUNGOS_SDK` points at a fungos-sdk checkout (`~/src/fungos-sdk` by
+-- default), which is where `lua/fungos/ui.lua` lives.
+local sdk = os.getenv("FUNGOS_SDK") or ((os.getenv("HOME") or "") .. "/src/fungos-sdk")
+local lib_path = sdk .. "/lua/fungos/ui.lua"
+local lib_source = assert(io.open(lib_path, "rb"),
+  "no fungos.ui at " .. lib_path .. "; set FUNGOS_SDK to a fungos-sdk checkout")
+local lib_chunk = assert(load(lib_source:read("*a"), "@" .. lib_path))
+lib_source:close()
+package.preload["fungos.ui"] = function() return lib_chunk() end
 
-_G.module = {
-  viewport = { width = 1086, height = 1569 },
-  theme = {
-    title = 0.34, large = 0.24, body = 0.145,
-    small = 0.105, micro = 0.085, radius = 0.02,
-  },
-}
+-- The scale the wall publishes: a 1.5x theme in pixels. Canvas sizes text as
+-- `scale * theme.body * depth(z)`, so `body` is what it draws with, not a value
+-- the view may round to its own defaults.
+local THEME = { micro = 15, small = 18, body = 24, large = 27 }
+
+-- The size the host granted this surface. The view cannot ask for it, so the
+-- fixture has to hand it over and then hold the view to it.
+local view = { width = 1182, height = 1569 }
 
 local drawn = { rects = {}, texts = {} }
-local checked = { width = 0, height = 0 }
--- What each wrapped label was allowed to draw: the emit path must stay inside
--- it, which is the invariant a wall depends on. A box sized for one line while
--- the ink ran to eight is what put the detail column on top of itself.
-local budget = {}
--- The view publishes the wrap budget; the fixture asks it rather than keeping a
--- second guess at how many characters fit.
-local chars_per_line
 
-local function check_geometry(laid, width, height)
-  checked.width, checked.height = width, height
-  local by_id, nodes = {}, {}
-  for _, node in ipairs(laid.nodes or {}) do
-    local rect = node.rect
-    assert(rect, "laid-out node without a rect: " .. tostring(node.id))
-    assert(rect.x >= -0.5 and rect.y >= -0.5,
-      string.format("%s starts outside the surface (%.1f, %.1f)", tostring(node.id), rect.x, rect.y))
-    assert(rect.x + rect.width <= width + 0.5,
-      string.format("%s runs past the right edge (%.1f > %d)", tostring(node.id), rect.x + rect.width, width))
-    assert(rect.y + rect.height <= height + 0.5,
-      string.format("%s runs past the bottom edge (%.1f > %d)", tostring(node.id), rect.y + rect.height, height))
-    by_id[node.id] = rect
-    nodes[node.id] = node
-  end
-  -- Every wrapped label has to reserve the height its lines take. The host draws
-  -- the lines and the layout only honours the box, so a box of one line's height
-  -- does not clip the ink: it lets it run over whatever the column stacks next —
-  -- which is what put the detail column on top of its own summary.
-  for id, node in pairs(nodes) do
-    local rect, style = by_id[id], node.style
-    if rect and style and style.wrap and node.kind == "text" then
-      local line_height = style.line_height or (style.size + 4)
-      budget[id] = {
-        per_line = chars_per_line and chars_per_line(rect.width, style.size) or 1,
-        lines = math.max(1, math.floor(rect.height / line_height)),
-      }
-    end
-  end
-  -- And the column stacks: the field after the summary may not sit under it.
-  local summary, below = by_id["worklog-detail-summary"], by_id["worklog-detail-when"]
-  if summary and below then
-    assert(below.y >= summary.y + summary.height - 0.5,
-      string.format("the detail column overlaps its own summary (summary ends %.1f, worklog-detail-when starts %.1f)",
-        summary.y + summary.height, below.y))
-  end
-  -- The two columns sit side by side, not on top of each other: a flexible list
-  -- pane used to take the whole row and lay its text across the detail column.
-  local list_pane, detail_pane = by_id["worklog-list-pane"], by_id["worklog-detail-pane"]
-  if list_pane and detail_pane then
-    assert(detail_pane.x >= list_pane.x + list_pane.width,
-      string.format("the detail column starts inside the list column (list ends %.1f, detail starts %.1f)",
-        list_pane.x + list_pane.width, detail_pane.x))
-  end
+-- The library's advance estimate, which is also what `surface:measure_text`
+-- returns on a host with no `canvas.measure_text` — and Canvas has none. Using
+-- the same number here is the point: a view reserving with a different constant
+-- reserves lines the host then paints past.
+local function width_of(value, size) return #tostring(value) * size * 0.58 end
+
+-- `surface:ts(size)` is `size / (theme.body * 1.25)`, so this is the inverse.
+local function text_size(spec) return spec.scale[1] * THEME.body * 1.25 end
+
+-- Normalized scene units are 8 wide and 8 tall over the whole surface with the
+-- origin at the top-left, which is what `nx`/`ny` map into.
+local function place(spec)
+  return (spec.translation[1] + 4) / 8 * view.width,
+    (4 - spec.translation[2]) / 8 * view.height
 end
 
-_G.canvas = {
-  -- The kit's own flow layout: the same code Canvas falls back to when the host
-  -- offers no `canvas.layout`.
-  layout = function(root, width, height)
-    local laid = ui.layout(root, width, height)
-    check_geometry(laid, width, height)
-    return laid
-  end,
-  rect = function(spec) drawn.rects[#drawn.rects + 1] = spec end,
-  text = function(spec) drawn.texts[#drawn.texts + 1] = spec end,
-}
-
 local worklog = assert(loadfile("ui/worklog.lua"))()
-chars_per_line = worklog.chars_per_line
-local snapshot = assert(loadfile("examples/worklog_mock.lua"))()
+local chars_per_line = worklog.chars_per_line
 
-local function render(snap)
+local function install_host()
+  _G.module = { viewport = { width = view.width, height = view.height }, theme = THEME }
+  _G.widget = {}
+  _G.canvas = {
+    rect = function(spec) drawn.rects[#drawn.rects + 1] = spec end,
+    text = function(spec) drawn.texts[#drawn.texts + 1] = spec end,
+  }
+end
+
+local function render(snapshot)
   drawn = { rects = {}, texts = {} }
-  assert(worklog.render(snap) == nil, "render draws through the host and returns nothing")
-  local lines, ids = {}, {}
+  -- A module re-executes for every render, so its pending controls are per-render
+  -- too. Leaving them to accumulate counts the same chip once per repaint and
+  -- makes the node budget below fail on a scene that is actually inside it.
+  for index = #worklog.pending_presses, 1, -1 do worklog.pending_presses[index] = nil end
+  for index = #worklog.pending_hits, 1, -1 do worklog.pending_hits[index] = nil end
+  assert(worklog.render(snapshot) == nil, "render draws through the host and returns nothing")
+
+  local ids, lines = {}, {}
   for _, spec in ipairs(drawn.texts) do
     lines[#lines + 1] = tostring(spec.text)
-    local x, y = spec.translation[1], spec.translation[2]
-    assert(x >= -4.5 and x <= 4.5 and y >= -4.5 and y <= 4.5,
-      "text drawn outside the surface: " .. tostring(spec.id))
-    assert(not ids[spec.id], "duplicate text id: " .. tostring(spec.id))
+    assert(not ids[spec.id], "duplicate node id: " .. tostring(spec.id))
     ids[spec.id] = true
+    local x, y = place(spec)
+    local size = text_size(spec)
+    assert(x >= -0.5 and y >= -0.5, "text starts outside the surface: " .. tostring(spec.id))
+    -- The host neither wraps nor clips a `canvas.text`, so a line past the edge is
+    -- a line drawn over whatever is beside it. One node is one line here, which
+    -- is why the view breaks text itself.
+    assert(x + width_of(spec.text, size) <= view.width + 0.5,
+      string.format("%s runs past the right edge", tostring(spec.id)))
+    assert(y + size * 1.3 <= view.height + 0.5,
+      string.format("%s runs past the bottom edge", tostring(spec.id)))
   end
   for _, spec in ipairs(drawn.rects) do
     assert(not ids[spec.id], "duplicate node id: " .. tostring(spec.id))
     ids[spec.id] = true
+    local x, y = place(spec)
+    local w, h = spec.scale[1] / 8 * view.width, spec.scale[2] / 8 * view.height
+    assert(x >= -0.5 and y >= -0.5 and x + w <= view.width + 0.5 and y + h <= view.height + 0.5,
+      string.format("%s is not inside the surface (%.1f,%.1f %.1fx%.1f)",
+        tostring(spec.id), x, y, w, h))
   end
-  -- The host rejects a scene over 256 nodes, and a rejected scene is an error
-  -- card where the surface should be. Width x height is not the only bound.
-  local total_nodes = #drawn.rects + #drawn.texts + #worklog.pending_presses
-  assert(total_nodes <= 256,
-    string.format("the scene is %d nodes; Canvas rejects anything over 256", total_nodes))
-  -- Every wrapped line has to fit the box it was given: a line past the budget
-  -- is a line drawn over whatever the column stacked next.
-  for _, spec in ipairs(drawn.texts) do
-    local base, index = tostring(spec.id):match("^(.-)%-l(%d+)$")
-    local allowed = base and budget[base]
-    if allowed then
-      assert(tonumber(index) <= allowed.lines,
-        string.format("%s drew line %s of %d", base, index, allowed.lines))
-      assert(#tostring(spec.text) <= allowed.per_line,
-        string.format("%s line %s is %d chars, budget %d", base, index, #tostring(spec.text), allowed.per_line))
-    end
-  end
+  -- Canvas rejects a scene over its node budget, and a rejected scene is an error
+  -- card where the surface should be. Rects, text and controls all count toward
+  -- it. The view plans against a stricter number than this: the installed host's
+  -- observed headroom, not this tree's default.
+  local total = #drawn.rects + #drawn.texts + #worklog.pending_presses
+  assert(total <= 256, string.format("the scene is %d nodes; Canvas rejects anything over 256", total))
   return table.concat(lines, "\n")
 end
 
+local function rect_of(id)
+  for _, spec in ipairs(drawn.rects) do
+    if spec.id == id then
+      local x, y = place(spec)
+      return { x = x, y = y, w = spec.scale[1] / 8 * view.width, h = spec.scale[2] / 8 * view.height }
+    end
+  end
+end
+
+local function text_at(id)
+  for _, spec in ipairs(drawn.texts) do
+    if spec.id == id then
+      local x, y = place(spec)
+      return { x = x, y = y, text = spec.text, size = text_size(spec) }
+    end
+  end
+end
+
+local function ids_drawn()
+  local ids = {}
+  for _, spec in ipairs(drawn.texts) do ids[tostring(spec.id)] = true end
+  for _, spec in ipairs(drawn.rects) do ids[tostring(spec.id)] = true end
+  return ids
+end
+
+install_host()
+local snapshot = assert(loadfile("examples/worklog_mock.lua"))()
 local copy = render(snapshot)
 
 assert(#drawn.texts > 0, "the view drew no text")
@@ -140,6 +138,17 @@ for _, spec in ipairs(drawn.texts) do
   assert(type(spec.text) == "string", "text primitive without a string")
   assert(type(spec.ink) == "string", "text primitive without an ink role")
 end
+
+-- The view draws the size it was granted, not the size it would have preferred:
+-- the backdrop covers the viewport and the two panes sit side by side inside it.
+local backdrop = assert(rect_of("worklog-bg"), "the view draws no backdrop")
+assert(math.abs(backdrop.w - view.width) < 0.5 and math.abs(backdrop.h - view.height) < 0.5,
+  string.format("the backdrop is %.0fx%.0f on a %dx%d surface", backdrop.w, backdrop.h, view.width, view.height))
+local list_pane = assert(rect_of("worklog-list-bg"), "the view draws no list pane")
+local detail_pane = assert(rect_of("worklog-detail-bg"), "the view draws no detail pane")
+assert(detail_pane.x >= list_pane.x + list_pane.w,
+  string.format("the detail column starts inside the list column (list ends %.1f, detail starts %.1f)",
+    list_pane.x + list_pane.w, detail_pane.x))
 
 -- The timeline reads from the snapshot, not from constants.
 assert(copy:find("WORKLOG", 1, true), "title is missing")
@@ -171,6 +180,7 @@ local selected = snapshot.events[1]
 local pressable = false
 for _, spec in ipairs(worklog.pending_presses or {}) do
   if spec.body and spec.body.locator == selected.subject then pressable = true end
+  assert(spec.action == "worklog-open-locator", "a press without the declared action id")
 end
 assert(pressable, "the selected event's locator is not pressable")
 
@@ -186,9 +196,9 @@ for index, event in ipairs(snapshot.events) do event.selected = index == 1 end
 local empty = render({ title = "WORKLOG", counts = { total = 0, today = 0 }, events = {} })
 assert(empty:find("Nothing has arrived yet", 1, true), "an empty log should say so")
 
--- A summary long enough to wrap: Marbles' detail runs to hundreds of
--- characters, and a column that reserves one line's height for it lays the rest
--- of itself under the paragraph.
+-- A summary long enough to wrap: Marbles' detail runs to hundreds of characters,
+-- and a column that reserves one line's height lays the rest of itself over the
+-- field stacked below.
 local long_summary = string.rep("ack:superseded by scan recognition ", 11) .. "end"
 local long = {
   id = "long", kind = "closed", source = "marbles", actor = "ajmwagar",
@@ -203,32 +213,41 @@ local wrapped_copy = render({
 })
 assert(wrapped_copy:find("superseded", 1, true), "the long summary is not drawn")
 
--- A wrapped label is one node per line, so the host cannot draw a line the
--- layout never reserved. The pane is 268 px wide at 16 px type: 32 characters.
-local summary_lines = 0
+local summary_lines, last_line = 0, nil
 for _, spec in ipairs(drawn.texts) do
   local index = tostring(spec.id):match("^worklog%-detail%-summary%-l(%d+)$")
   if index then
     summary_lines = math.max(summary_lines, tonumber(index))
-    assert(#tostring(spec.text) <= chars_per_line(268, 16),
-      "a detail summary line is wider than its pane: " .. tostring(spec.text))
+    if tonumber(index) == summary_lines then last_line = spec end
   end
 end
 assert(summary_lines >= 2, "the long summary was not wrapped into lines")
-assert(summary_lines <= 8, "the detail summary drew more lines than the column reserved: " .. summary_lines)
+assert(summary_lines <= worklog.summary_lines,
+  "the detail summary drew more lines than the column reserved: " .. summary_lines)
+
+-- The invariant that actually matters: the field after the summary starts below
+-- the last line of it. A column that reserves two lines for an eight-line
+-- summary leaves a hole; one that reserves eight for a two-line summary draws
+-- the next field over the text.
+local _, summary_top = place(last_line)
+local summary_end = summary_top + text_size(last_line) * 1.3
+local when = assert(text_at("worklog-detail-when"), "the detail column has no timestamp line")
+assert(when.y >= summary_end - 0.5,
+  string.format("the detail column overlaps its own summary (summary ends %.1f, when starts %.1f)",
+    summary_end, when.y))
+-- And every detail label stays inside the pane it was measured for.
+for _, spec in ipairs(drawn.texts) do
+  if tostring(spec.id):find("^worklog%-detail") and not tostring(spec.id):find("%-bg$") then
+    local x_px = place(spec)
+    assert(x_px + width_of(spec.text, text_size(spec)) <= detail_pane.x + detail_pane.w + 0.5,
+      tostring(spec.id) .. " runs out of the detail pane")
+    assert(x_px >= detail_pane.x - 0.5, tostring(spec.id) .. " starts left of the detail pane")
+  end
+end
 
 -- Scrolling: the host owns the offset, the view windows the log to it. A wheel
 -- notch is pixels, and a view that ignored them would render the same first row
 -- no matter how far the reader scrolled.
-local function drawn_ids()
-  local ids = {}
-  for _, spec in ipairs(drawn.texts) do ids[tostring(spec.id)] = true end
-  for _, spec in ipairs(drawn.rects) do ids[tostring(spec.id)] = true end
-  return ids
-end
-
--- A log longer than the window: with every event already visible there is
--- nothing to scroll, so the fixture has to have more events than fit.
 local many = { title = "WORKLOG", counts = { total = 30, today = 3 },
   sources = { { id = "marbles", label = "Marbles", count = 30 } }, events = {} }
 for index = 1, 30 do
@@ -244,73 +263,82 @@ end
 -- The pitch is derived per page, so it has to be read from a render of *this*
 -- snapshot: using the previous page's pitch would scroll to the wrong row.
 _G.module.scroll = nil
-render(many)
+local pitched = render(many)
+assert(pitched:find("event 1:", 1, true), "the first page does not start at the newest event")
 local pitch = worklog.row_height
 _G.module.scroll = { offset = pitch * 3 }
 render(many)
-local scrolled = drawn_ids()
+local scrolled = ids_drawn()
 assert(scrolled["event-4-summary"], "a scrolled window does not start at row 4")
 assert(not scrolled["event-1-summary"], "the first row is still drawn after scrolling")
 _G.module.scroll = { offset = pitch * 1000 }
 render(many)
-assert(drawn_ids()["event-30-summary"], "a scroll past the end does not clamp to the last page")
+assert(ids_drawn()["event-30-summary"], "a scroll past the end does not clamp to the last page")
 _G.module.scroll = nil
+
+-- How much log fits is as much a part of the view as whether it fits. The node
+-- budget used to be estimated rather than counted, and the estimate put 17 rows
+-- on a page that could hold twice that. The pitch is now derived from counted
+-- costs, so a row is a row — and if a page ever has to drop a row to stay inside
+-- the host's ceiling, this says so instead of hiding it in the range label.
+render(many)
+assert(worklog.rows_drawn == worklog.rows_planned,
+  string.format("rows dropped at draw time on a page that had room: %d of %d",
+    worklog.rows_drawn, worklog.rows_planned))
+assert(worklog.row_height <= worklog.max_row_height,
+  string.format("the pitch is %d px, past the view's own cap of %d",
+    worklog.row_height, worklog.max_row_height))
+assert(worklog.rows_drawn >= 16,
+  string.format("a 1,569 px surface fits only %d rows", worklog.rows_drawn))
 
 -- Hover: the id the host hit is the row under the pointer, so it is the row the
 -- view lights — no geometry guess of its own.
 _G.module.hover = "event-2"
 render(snapshot)
-assert(drawn_ids()["event-hover-2"], "the hovered row is not lit")
+assert(ids_drawn()["event-hover-2"], "the hovered row is not lit")
 _G.module.hover = nil
 
--- The size the wall actually hands this surface. The view cannot ask for it, so
--- it has to survive it: rows and the detail column are both computed from H.
-_G.module.viewport = { width = 1182, height = 797 }
-local at_surface = render(snapshot)
-assert(checked.width == 1182 and checked.height == 797, "the view laid out for a size it was not given")
-assert(at_surface:find("WORKLOG", 1, true), "the title is missing at surface size")
-_G.module.viewport = { width = 1086, height = 1569 }
+-- Search: the host owns the text, the view decides what matches, because what a
+-- hit is is a fact about the events. A filtered page also has to say how much it
+-- kept — "1–20 of 40" over a list of three reads as thirty-seven losses.
+_G.module.query = "spores-42"
+local found = render(snapshot)
+assert(found:find("match", 1, true), "a filtered list should say how much it kept")
+assert(found:find("spores-42", 1, true), "the matching events are not drawn")
+assert(not found:find("Render the worklog", 1, true), "a non-matching summary was drawn")
+_G.module.query = "nothing-matches-this"
+local none = render(snapshot)
+assert(none:find("Nothing matches", 1, true), "an empty result should say so, not look like an empty log")
+_G.module.query = nil
+
+-- A short surface: the view cannot ask for a size, so it has to survive one.
+-- Rows and the detail column are both computed from the height it was handed.
+view = { width = 1182, height = 797 }
+install_host()
+local short = render(snapshot)
+assert(short:find("WORKLOG", 1, true), "the title is missing at surface size")
+local short_backdrop = assert(rect_of("worklog-bg"), "no backdrop at surface size")
+assert(math.abs(short_backdrop.h - 797) < 0.5,
+  string.format("the view laid out for %.0f px when it was handed 797", short_backdrop.h))
+view = { width = 1182, height = 1569 }
+install_host()
 
 print("ui: ok")
 
 -- Canvas provides no `widget.hit`: its `widget` is the theming library and Soil
 -- exposes no hit targets. Rendering there must not crash, and the spec must not
 -- vanish.
-local themed_widget = _G.widget
-_G.widget = {}
 for index = #worklog.pending_hits, 1, -1 do worklog.pending_hits[index] = nil end
-
 drawn = { rects = {}, texts = {} }
 local rendered, render_error = pcall(worklog.render, snapshot)
 assert(rendered, "render crashed without widget.hit: " .. tostring(render_error))
 assert(#drawn.texts > 0, "the no-hit host drew nothing")
-assert(#worklog.pending_hits == #snapshot.events, "every row should stay addressable")
+assert(#worklog.pending_hits == worklog.rows_drawn + 1,
+  "every drawn row, and the search field, should stay addressable")
 
 local delivered = nil
 _G.widget = { hit = function(spec) delivered = spec end }
 worklog.hit({ id = "probe", label = "hit", x = 0, y = 0, width = 1, height = 1 })
 assert(delivered and delivered.id == "probe", "hit was not delivered to a host that provides it")
-
-_G.widget = themed_widget
+_G.widget = {}
 print("ui: no-hit host ok")
-
--- Canvas has no layout service either, so the view must run without
--- `canvas.layout` and draw the same copy through the Lua fallback.
-local real_layout = _G.canvas.layout
-_G.canvas.layout = nil
-drawn = { rects = {}, texts = {} }
-
-local laid_ok, laid_error = pcall(worklog.render, snapshot)
-_G.canvas.layout = real_layout
-
-assert(laid_ok, "render failed without canvas.layout: " .. tostring(laid_error))
-assert(#drawn.texts > 0, "the layout fallback drew nothing")
-assert(#drawn.rects > 0, "the layout fallback drew no rects")
-
-local laid = {}
-for _, spec in ipairs(drawn.texts) do laid[#laid + 1] = tostring(spec.text) end
-local laid_text = table.concat(laid, "\n")
-assert(laid_text:find("WORKLOG", 1, true), "the layout fallback lost the title")
-assert(laid_text:find(snapshot.events[1].summary, 1, true), "the layout fallback lost the newest event")
-
-print("ui: layout fallback ok")

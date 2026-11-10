@@ -1,0 +1,10 @@
+spore-lock 1
+spore dev.fungos.divebar
+version 0.1.0
+file 6f2ccb6fc792d0ddc521fc04335981cb2a3adf4857fe25cfd1b66583c99d99b3 4385 README.md
+file a208173e2b64ca4f6c29df44f327a1eb1e7a5188629c8bd319fd2d71ab5fd071 56231 dist/top-bar.lua
+file cf55bd2711beb4f9a1e8bba8dc673b5a3f357434d21f4462ce5d2bcc80c48fae 2113 spore.toml
+file 4c071bf6ca9c21a764c7efed1036a9c67e17ce8617967039c048c889264bc6f5 5953 ui/API.md
+file c62dd0c68f39e38de61102e1b7cf4f24abefb64090cf03f92fa60b503ed831c1 9906 ui/divebar.lua
+file 481905a7526b22c9dfe96bdb5d04337d56acaca56138c2f0e9714c8b9e186728 622 ui/snapshot.lua
+digest ee42b5b934ec80e34f5ddb712aac3dcc54730cfc7461daeb671bcbd5fb581db3

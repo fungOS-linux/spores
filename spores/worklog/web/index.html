@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Worklog</title>
+  <style>
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#191919;color:#e9e9e7;font:13px ui-sans-serif,-apple-system,Helvetica,Arial,sans-serif}
+    canvas{display:block;width:100%;height:100%}    /* The view draws the field and its text; the input is the caret and the keys.
+       Text is transparent so the glyphs on screen are the document's, never two
+       copies of the same word. */
+    #q{position:fixed;border:0;outline:0;background:transparent;color:transparent;
+       caret-color:#e9e9e7;font:inherit;padding:0;margin:0;z-index:2}
+    #status{position:fixed;right:14px;bottom:10px;color:#6a6a6a;font-size:11px;pointer-events:none;z-index:1}
+  </style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<input id="q" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="">
+<div id="status">loading</div>
+<script>
+// The page draws the worklog's scene document; it does not know what a worklog
+// row is. Nodes carry `transform.translation` / `transform.scale` in the -4..4
+// space, `ink` as a role, and — because this document came from a preview — the
+// resolved `rgb` and text `px` as well. A host resolves those two itself; the
+// page can only draw them.
+const canvas = document.getElementById('scene');
+const ctx = canvas.getContext('2d');
+// Every frame is built off-screen and blitted in one call. The canvas on screen is
+// never cleared, so there is no moment when it can show an empty or half-built
+// scene — a repaint replaces every pixel at once or not at all.
+const frame = document.createElement('canvas');
+const paint = frame.getContext('2d');
+const status = document.getElementById('status');
+const input = document.getElementById('q');
+let dpr = 1, size = { w: 0, h: 0 };
+// The last body we painted, and the tag that names it. A poll that comes back
+// unchanged must not touch the canvas at all.
+let tag = null, lastBody = null, inFlight = false, current = null;
+// Host state the view reads. The page owns the text, the pointer and the offset;
+// what a query matches and how far the log goes are the view's answers.
+let query = '', offset = 0, hover = '', meta = { row_height: 0, first: 0, shown: 0, total: 0 };
+
+// The rasterizer is the one the wall runs, compiled to wasm: this page no longer
+// paints a scene node by node, it asks that renderer for pixels. The module, its
+// glue and one single-face font come from the host, so nothing licensed is
+// compiled into the artifact and a font swap is a host decision.
+let gpu = null, gpuError = null, rendererClass = null;
+
+// Resizing a canvas clears it, so it happens only when the window actually
+// changed size — never on a poll.
+function fit() {
+  const next = { w: innerWidth, h: innerHeight };
+  if (next.w === size.w && next.h === size.h && canvas.width > 0) return false;
+  dpr = window.devicePixelRatio || 1;
+  size = next;
+  canvas.width = Math.floor(size.w * dpr);
+  canvas.height = Math.floor(size.h * dpr);
+  return true;
+}
+
+// A frame arrives as tightly packed RGBA at the size the scene was asked for. It
+// is painted into the off-screen canvas and blitted in one call, so a repaint
+// replaces every pixel at once or not at all.
+async function paintFrame(document, w, h) {
+  const width = Math.max(1, Math.round(w)), height = Math.max(1, Math.round(h));
+  const text = JSON.stringify(document);
+  const rgba = await gpu.render(text, width, height);
+  if (frame.width !== width || frame.height !== height) {
+    frame.width = width;
+    frame.height = height;
+  }
+  paint.putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.drawImage(frame, 0, 0, width, height);
+  // What was asked for and what came back, on the same line: a node count alone
+  // described the document even when nothing was drawn.
+  return `${rendererClass.describe(text)} · ${census(rgba)}`;
+}
+
+// A sampled census of the frame: how many samples are lit, and the byte range. A
+// frame that is only its ground reports one value and no lit samples.
+function census(rgba) {
+  let lit = 0, low = 255, high = 0;
+  for (let i = 0; i < rgba.length; i += 4 * 97) {
+    const value = rgba[i];
+    if (value < low) low = value;
+    if (value > high) high = value;
+    if (value > 70) lit += 1;
+  }
+  return `${lit} lit, ${low}..${high}`;
+}
+
+// The font, by content id. Fetched once, cached under the id it was served with,
+// and a reload is a cache hit; a different font is a different URL, which is what
+// makes caching it safe instead of a bet.
+async function face() {
+  const descriptor = await (await fetch('fonts.json', { cache: 'no-store' })).json();
+  const store = await caches.open('fungos-fonts');
+  let cached = await store.match(descriptor.url);
+  if (!cached) {
+    cached = await fetch(descriptor.url);
+    if (!cached.ok) throw new Error(`font ${cached.status}`);
+    await store.put(descriptor.url, cached.clone());
+  }
+  return new Uint8Array(await cached.arrayBuffer());
+}
+
+async function start() {
+  try {
+    status.textContent = 'starting renderer…';
+    const bytes = await face();
+    const module = await import('./pkg/scene.js');
+    await module.default();
+    rendererClass = module.SceneRenderer;
+    gpu = await rendererClass.create(bytes);
+    // The ground, and the type scale's base: the two facts a scene does not carry
+    // because they are the host's, not the view's.
+    gpu.set_background(25, 25, 25);
+    gpu.set_body(24);
+    await refresh();
+  } catch (error) {
+    gpuError = String(error.message || error);
+    status.textContent = `renderer: ${gpuError}`;
+  }
+}
+
+// Normalized scene units -> surface pixels, the inverse of `nx`/`ny`. Hit targets
+// arrive in the same space the nodes do.
+function rectOf(hit) {
+  return {
+    x: (hit.x + 4) / 8 * size.w,
+    y: (4 - hit.y) / 8 * size.h,
+    w: hit.width / 8 * size.w,
+    h: hit.height / 8 * size.h,
+  };
+}
+
+// The view draws the search field; the input sits on top of it, invisible except
+// for the caret, so the text on screen is the document's and never two copies of
+// the same word. It is placed from the text node, not the box, so the caret and
+// the glyphs agree about where the first character is.
+function place() {
+  if (!current) return;
+  const field = (current.hits || []).find((entry) => entry.id === 'worklog-search');
+  const text = (current.nodes || []).find((entry) => entry.id === 'worklog-search-value');
+  if (!field || !text) {
+    input.style.display = 'none';
+    return;
+  }
+  const box = rectOf(field);
+  const [tx, ty] = text.transform.translation;
+  const left = (tx + 4) / 8 * size.w;
+  const top = (4 - ty) / 8 * size.h;
+  const field_px = Math.max(11, Math.round(text.px || 13));
+  input.style.display = 'block';
+  input.style.left = `${left - 1}px`;
+  input.style.top = `${top}px`;
+  input.style.width = `${Math.max(24, box.x + box.w - left - 12)}px`;
+  input.style.height = `${Math.round(field_px * 1.35)}px`;
+  input.style.font = `${field_px}px ui-sans-serif,-apple-system,Helvetica,Arial,sans-serif`;
+}
+function hitAt(x, y) {
+  if (!current) return '';
+  for (const hit of current.hits || []) {
+    if (hit.id === 'worklog-search') continue;
+    const box = rectOf(hit);
+    if (x >= box.x && x <= box.x + box.w && y >= box.y && y <= box.y + box.h) return hit.id;
+  }
+  return '';
+}
+
+let timer = 0, queued = false;
+function schedule(delay = 80) {
+  clearTimeout(timer);
+  timer = setTimeout(refresh, delay);
+}
+
+async function refresh() {
+  // Nothing to ask for until there is something to draw with: the module, the
+  // font and the device are all fetched once, and a request before that would be
+  // a scene no one can paint.
+  if (!gpu) return;
+  if (inFlight) {
+    // A keystroke that lands mid-request has to be asked again, or the last word
+    // typed is the one the page never shows.
+    queued = true;
+    return;
+  }
+  inFlight = true;
+  fit();
+  const w = Math.round(size.w), h = Math.round(size.h);
+  try {
+    const params = new URLSearchParams({ w, h, q: query, offset, hover });
+    const headers = tag ? { 'if-none-match': tag } : {};
+    // `no-cache` means "revalidate before reuse", which is what makes the
+    // conditional request meaningful; `no-store` makes the browser bypass its
+    // cache entirely, and a bypassed cache has nothing to revalidate.
+    const response = await fetch(`scene.json?${params}`, { cache: 'no-cache', headers });
+    // Nothing to draw and nothing to say: the page stays exactly as it was, down
+    // to the status line. Writing to the DOM on every poll repaints over a canvas
+    // that did not need it.
+    if (response.status === 304) return;
+    if (!response.ok) throw new Error(`scene ${response.status}: ${await response.text()}`);
+    // The tag is an optimisation the browser is free to ignore. The body is not:
+    // if it is the bytes already on screen, there is nothing to draw.
+    const body = await response.text();
+    tag = response.headers.get('etag') || tag;
+    if (body === lastBody) return;
+    lastBody = body;
+    const scene = JSON.parse(body);
+    if (scene.error) throw new Error(scene.error);
+    current = scene;
+    meta = scene.meta || meta;
+    const drawn = await paintFrame(scene, w, h);
+    place();
+    status.textContent = `${drawn} · ${new Date().toLocaleTimeString()}`;
+  } catch (error) {
+    status.textContent = String(error.message || error);
+  } finally {
+    inFlight = false;
+    if (queued) {
+      queued = false;
+      schedule(0);
+    }
+  }
+}
+
+addEventListener('resize', () => {
+  schedule(120);
+  place();
+});
+
+// Hover and scroll are host state the view reads back, so the pointer never draws
+// anything itself: it names a row, the view lights it, the new frame is blitted.
+canvas.addEventListener('mousemove', (event) => {
+  const next = hitAt(event.clientX, event.clientY);
+  if (next === hover) return;
+  hover = next;
+  schedule();
+});
+canvas.addEventListener('mouseleave', () => {
+  if (!hover) return;
+  hover = '';
+  schedule();
+});
+canvas.addEventListener('wheel', (event) => {
+  event.preventDefault();
+  const furthest = Math.max(0, (meta.total - meta.shown) * meta.row_height);
+  const next = Math.min(furthest, Math.max(0, offset + event.deltaY));
+  if (next === offset) return;
+  offset = next;
+  schedule(40);
+}, { passive: false });
+
+input.addEventListener('input', () => {
+  query = input.value;
+  // A new search starts at the top: staying at row 400 of a list that now has
+  // three matches is how a search looks broken.
+  offset = 0;
+  schedule(140);
+});
+
+start();
+// The scene is regenerated by the host from the tail of the log, so polling is
+// what keeps the page equal to the log rather than equal to the moment I looked.
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

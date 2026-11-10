@@ -17,6 +17,14 @@ name = "worklog"
 name = "worklog"
 path = "src/main.rs"
 
+# The view host: the same Lua view the wall draws, served to a browser. It owns
+# no state, so it is a second binary rather than a mode of the receiver —
+# exposing the receiver's signed socket through the desktop gateway would put an
+# ingest endpoint on the same origin as a page.
+[[bin]]
+name = "worklog-serve"
+path = "src/bin/serve.rs"
+
 [dependencies]
 hmac = "0.12"
 serde = { version = "1", features = ["derive"] }
