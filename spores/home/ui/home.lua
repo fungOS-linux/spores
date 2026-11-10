@@ -203,7 +203,7 @@ local function tile(app)
     children = {
       ui.icon_button(app.glyph or "grid", {
         id = "home-open-" .. slug(app.id),
-        action = ui.action("home.open", { id = app.id, host = app.host or "" }),
+        action = ui.action("home-open", { id = app.id, host = app.host or "" }),
       }),
       ui.text(app.name or app.id, { style = "caption", ink = "text" }),
       label(app.category or "app", "subheading", "muted"),
@@ -261,7 +261,7 @@ local function dock(view)
     if app then
       children[#children + 1] = ui.icon_button(app.glyph or "grid", {
         id = "home-dock-" .. slug(app.id),
-        action = ui.action("home.open", { id = app.id, host = app.host or "" }),
+        action = ui.action("home-open", { id = app.id, host = app.host or "" }),
       })
     end
   end

@@ -18,4 +18,12 @@ compose.install {
   view = "ui/home.lua",
   snapshot = arg[2],
   libs = { ["fungos.ui"] = spore .. "/../../sdk/ui/ui.lua" },
+  -- The launcher draws rows, cards and controls only, and the host's module
+  -- bound is 64 KiB, so it composes without the dashboard section.
+  ui_profile = "layout",
+  -- A tile's action is a grant the manifest has to name, or the host replaces
+  -- the surface with an error card. One intent: open the app this tile is.
+  actions = {
+    { id = "home-open", destination = "dev.fungos.home", kind = "intent" },
+  },
 }

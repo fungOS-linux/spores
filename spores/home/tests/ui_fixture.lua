@@ -80,8 +80,8 @@ assert(has_text("terminal") and has_text("worklog") and has_text("gallery"),
 assert(has_text("averys-mac-studio"), "host name missing")
 
 -- Every app is openable, and the dock repeats three of them.
-assert(count_buttons("home.open") == 19,
-  "16 grid tiles plus 3 dock tiles, drew " .. count_buttons("home.open"))
+assert(count_buttons("home-open") == 19,
+  "16 grid tiles plus 3 dock tiles, drew " .. count_buttons("home-open"))
 
 -- ---- partial and empty snapshots --------------------------------------
 
@@ -90,6 +90,6 @@ assert(has_text("TODAY"), "an empty snapshot should keep the shell")
 
 render({ apps = {}, services = {}, dock = {} })
 assert(has_text("SERVICES"), "an app-less snapshot should still draw the rail")
-assert(count_buttons("home.open") == 0, "no apps means no open controls")
+assert(count_buttons("home-open") == 0, "no apps means no open controls")
 
 print("home ui: ok")
