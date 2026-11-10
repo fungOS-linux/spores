@@ -120,33 +120,15 @@ end
 -- in the Spore's own scene and publishes where each row landed, so a click is a
 -- lookup rather than a second copy of the layout.
 local SIDEBAR = 232
+local TAB = 34
 local ROW = 26
 local GROUP = { { "shell", "shells" }, { "ssh", "hosts" }, { "fleet", "fleet" }, { "mush", "desktops" } }
 
-local function paint_sidebar(frame, height)
+local function paint_sidebar(frame, height, top)
   local items = {}
-  surface:rect("nav-bg", 0, 0, SIDEBAR, height, "surface", 0.22, 0, 0.05)
+  surface:rect("nav-bg", 0, top, SIDEBAR, height - top, "surface", 0.22, 0, 0.05)
 
-  local y = 10
-  text("nav-sessions", "SESSIONS", 12, y, 9, "muted")
-  y = y + 18
-  for _, session in ipairs(frame.sessions or {}) do
-    local active = tonumber(session.id) == tonumber(frame.active)
-    if active then
-      surface:rect("nav-active", 6, y - 3, SIDEBAR - 12, ROW - 4, "primary", 0.16, 5, 0.06)
-    end
-    text("nav-session-" .. tostring(session.id),
-      (session.exited and "· " or "● ") .. clip(session.label or session.target, 22),
-      12, y, 10, active and "primary" or "text")
-    items[#items + 1] = { kind = "session", id = session.id, y = y - 3, height = ROW - 4 }
-    y = y + ROW
-  end
-  if #(frame.sessions or {}) == 0 then
-    text("nav-sessions-empty", "none open", 12, y, 9, "muted")
-    y = y + ROW
-  end
-
-  y = y + 10
+  local y = top + 10
   for _, group in ipairs(GROUP) do
     local kind, heading = group[1], group[2]
     local targets = {}
@@ -183,16 +165,34 @@ function M.render(frame)
   local rows = math.max(1, tonumber(frame.rows) or 24)
   local sidebar = (frame.fleet and #frame.fleet > 0) and SIDEBAR or 0
   local ox = sidebar > 0 and sidebar or 0
-  local cw, ch, size = M.cell(cols, rows, width - ox, height)
+  local tabs = frame.sessions or {}
+  local tab_height = #tabs > 0 and TAB or 0
+  local cw, ch, size = M.cell(cols, rows, width - ox, height - tab_height)
 
   local theme = ui.theme()
   surface = ui.surface(width, height, theme)
   M.meta = {}
   surface:rect("terminal-bg", 0, 0, width, height, "background", 1, 0)
-  if sidebar > 0 then paint_sidebar(frame, height) end
+  if tab_height > 0 then
+    -- Sessions are a tab strip, not a list: a session is a place you are, and
+    -- the thing you are in should be visible without opening a menu.
+    local strip = {}
+    for index, session in ipairs(tabs) do
+      strip[#strip + 1] = {
+        id = tostring(session.id),
+        label = clip(session.label or session.target, 24),
+        selected = tonumber(session.id) == tonumber(frame.active),
+        muted = session.exited == true,
+        action = "session:" .. tostring(session.id),
+      }
+    end
+    M.meta.tabs = ui.paint_tabs(surface, 0, 0, width - ox, tab_height, strip, { size = 11, z = 0.07 })
+    surface:rect("tab-strip-rule", 0, tab_height - 1, width, 1, "muted", 0.18, 0, 0.06)
+  end
+  if sidebar > 0 then paint_sidebar(frame, height, tab_height) end
 
   for _, row in ipairs(frame.lines or {}) do
-    local y = (tonumber(row.y) or 0) * ch
+    local y = tab_height + (tonumber(row.y) or 0) * ch
     if y + ch <= height + 0.5 then
       paint_row(row, cols, y, cw, ch, size, ox)
     end
@@ -216,7 +216,7 @@ function M.render(frame)
 
   local cursor = frame.cursor
   if type(cursor) == "table" and cursor.visible ~= false then
-    surface:rect("terminal-cursor", ox + (tonumber(cursor.x) or 0) * cw, (tonumber(cursor.y) or 0) * ch,
+    surface:rect("terminal-cursor", ox + (tonumber(cursor.x) or 0) * cw, tab_height + (tonumber(cursor.y) or 0) * ch,
       math.max(2, cw), ch, "primary", 0.55, 0)
   end
 end

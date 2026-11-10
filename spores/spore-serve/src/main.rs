@@ -221,6 +221,7 @@ fn handle(mut stream: TcpStream, config: &Config) -> Result<(), String> {
                 ),
             }
         }
+        ("GET", "/events") => events(&mut stream, config, &request.target),
         _ => match &config.proxy {
             Some(upstream) => forward(&mut stream, upstream, &request),
             None => respond(
@@ -233,16 +234,12 @@ fn handle(mut stream: TcpStream, config: &Config) -> Result<(), String> {
     }
 }
 
-fn scene(config: &Config, width: u32, height: u32, query: &str) -> Result<String, String> {
-    let stamp = format!("{}-{}", std::process::id(), now_ms());
-    let dir = std::env::temp_dir();
-
-    let snapshot_path = dir.join(format!("spore-serve-snapshot-{stamp}.lua"));
+/// Ask the producer for one snapshot. This is the cheap half: a command that
+/// prints a few kilobytes, not a render.
+fn snapshot(config: &Config, query: &str) -> Result<String, String> {
     match &config.snapshot {
-        SnapshotSource::File(path) => {
-            std::fs::copy(path, &snapshot_path)
-                .map_err(|error| format!("read {}: {error}", path.display()))?;
-        }
+        SnapshotSource::File(path) => std::fs::read_to_string(path)
+            .map_err(|error| format!("read {}: {error}", path.display())),
         SnapshotSource::Command(command) => {
             let command = command.replace("{query}", query);
             let output = Command::new("sh")
@@ -256,10 +253,18 @@ fn scene(config: &Config, width: u32, height: u32, query: &str) -> Result<String
                     String::from_utf8_lossy(&output.stderr).trim()
                 ));
             }
-            std::fs::write(&snapshot_path, &output.stdout)
-                .map_err(|error| format!("write {}: {error}", snapshot_path.display()))?;
+            String::from_utf8(output.stdout).map_err(|error| format!("snapshot is not utf-8: {error}"))
         }
     }
+}
+
+/// Render one snapshot through the Spore's view.
+fn render(config: &Config, snapshot: &str, width: u32, height: u32) -> Result<String, String> {
+    let stamp = format!("{}-{}", std::process::id(), now_ms());
+    let dir = std::env::temp_dir();
+    let snapshot_path = dir.join(format!("spore-serve-snapshot-{stamp}.lua"));
+    std::fs::write(&snapshot_path, snapshot)
+        .map_err(|error| format!("write {}: {error}", snapshot_path.display()))?;
 
     let out = dir.join(format!("spore-serve-scene-{stamp}.json"));
     let result = Command::new(&config.lua)
@@ -286,6 +291,82 @@ fn scene(config: &Config, width: u32, height: u32, query: &str) -> Result<String
         .map_err(|error| format!("read {}: {error}", out.display()))?;
     let _ = std::fs::remove_file(&out);
     Ok(body)
+}
+
+fn scene(config: &Config, width: u32, height: u32, query: &str) -> Result<String, String> {
+    let snapshot = snapshot(config, query)?;
+    render(config, &snapshot, width, height)
+}
+
+/// Push a new scene whenever the producer's snapshot changes.
+///
+/// The page used to poll, which made every keystroke wait for the next tick and
+/// every tick pay for a render whether or not anything had happened. This is the
+/// same work, driven by the producer instead of a clock: read the snapshot (a
+/// few kilobytes), compare, render only on change, push.
+fn events(stream: &mut TcpStream, config: &Config, target: &str) -> Result<(), String> {
+    let width = query_number(target, "w").unwrap_or(config.width).clamp(200, 4000);
+    let height = query_number(target, "h").unwrap_or(config.height).clamp(200, 4000);
+    let passthrough = query_without(target, &["w", "h"]);
+
+    stream
+        .write_all(
+            b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream; charset=utf-8\r\ncache-control: no-store\r\nconnection: keep-alive\r\nx-accel-buffering: no\r\n\r\n",
+        )
+        .map_err(|error| error.to_string())?;
+    stream.flush().map_err(|error| error.to_string())?;
+
+    let mut last: Option<String> = None;
+    let mut last_write = std::time::Instant::now();
+    loop {
+        match snapshot(config, &passthrough) {
+            Ok(current) => {
+                if last.as_deref() != Some(current.as_str()) {
+                    match render(config, &current, width, height) {
+                        Ok(body) => {
+                            let message = format!("data: {body}\n\n");
+                            if stream.write_all(message.as_bytes()).is_err() {
+                                return Ok(());
+                            }
+                            if stream.flush().is_err() {
+                                return Ok(());
+                            }
+                            last = Some(current);
+                            last_write = std::time::Instant::now();
+                        }
+                        Err(error) => {
+                            let message = format!("event: error\ndata: {}\n\n", error.replace('\n', " "));
+                            if stream.write_all(message.as_bytes()).is_err() {
+                                return Ok(());
+                            }
+                            let _ = stream.flush();
+                            last = Some(current);
+                            last_write = std::time::Instant::now();
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                let message = format!("event: error\ndata: {}\n\n", error.replace('\n', " "));
+                if stream.write_all(message.as_bytes()).is_err() {
+                    return Ok(());
+                }
+                let _ = stream.flush();
+                last_write = std::time::Instant::now();
+            }
+        }
+        if last_write.elapsed() > std::time::Duration::from_secs(15) {
+            if stream.write_all(b": keepalive\n\n").is_err() {
+                return Ok(());
+            }
+            let _ = stream.flush();
+            last_write = std::time::Instant::now();
+        }
+        // The snapshot read is a few kilobytes; the render is the expensive part
+        // and only runs on change. Polling the producer this often is what makes
+        // a keystroke reach the screen in one frame.
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
 }
 
 /// Hand an unserved request to the process that owns the state, byte for byte.
