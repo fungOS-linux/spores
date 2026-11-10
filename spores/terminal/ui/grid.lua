@@ -111,7 +111,8 @@ function M.render(frame)
   local rows = math.max(1, tonumber(frame.rows) or 24)
   local cw, ch, size = M.cell(cols, rows, width, height)
 
-  surface = ui.surface(width, height, ui.theme())
+  local theme = ui.theme()
+  surface = ui.surface(width, height, theme)
   surface:rect("terminal-bg", 0, 0, width, height, "background", 1, 0)
 
   for _, row in ipairs(frame.lines or {}) do
@@ -128,6 +129,11 @@ function M.render(frame)
     rows = rows,
     cell_width = cw,
     cell_height = ch,
+    -- The base the surface normalised against, so a renderer can turn a node's
+    -- scale back into pixels: `scale * base * 1.25` is the size this view asked
+    -- for. Without it a page has to guess, and guessing wrong is text at half
+    -- the size the layout reserved.
+    base = theme.body or 16,
     -- Empty means the shell set no title (OSC 0); the page keeps its own name
     -- rather than replacing it with a blank one.
     title = type(frame.title) == "string" and frame.title or "",
