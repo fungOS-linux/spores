@@ -40,20 +40,20 @@ spores/unibus/wit/deps/soil-records/soil-records.wit 898cb3a58c473488e877a624e65
 # source:      fungOS-linux/soil, wit/soil-spore.wit
 # soil-commit: 697be58c0ed9fc57d5cd9e642b89b3d88e129500 (soil main, PR #38)
 #
-# NOT RECORDED YET, deliberately, and the check says so by having no rows here.
+# `surface` and `surface-kind` landed here: a Spore declares the views it ships,
+# and a host can tell before opening anything whether it can present one.
 #
-# Four copies exist (launcher, launcher-host, spore-browser, spore-browser-host)
-# and all four still carry `surfaces: list<string>`; soil main now has
-# `list<surface>`. They cannot be bumped one at a time: `launcher-host` and
-# `spore-browser-host` pin soil at `4d4271b`, which is NOT on soil main, and it
-# is the last place `crates/soil-spore-host` exists at all -- the catalogue and
-# `Launcher` trait those two hosts are built on were replaced on main, not
-# moved. Bumping the contract under them compiles the wrong `Entry` type, which
-# is how this was found. Refreshing these four needs the two hosts ported onto
-# soil main's `soil-spore` first, and that is a design decision, not a copy.
-#
-# Recording one copy without the others would be the lie this file exists to
-# prevent, so until all four move, none is listed.
+# All four copies moved together. They could not have moved separately: the two
+# hosts were built on `soil-spore-host`, a crate that exists only at soil
+# `4d4271b` -- a commit that is not on soil's main and predates both this
+# contract and the `spores-public` submodule. Recording one copy and leaving
+# the rest behind is the lie this file exists to prevent, so this section stayed
+# empty until `spores/spore-catalog` put both hosts back on soil's main.
+
+spores/launcher/wit/deps/soil-spore/spore.wit f129fa88029744ed09a3a9f35b494060182a12a7
+spores/launcher-host/wit/deps/soil-spore/spore.wit f129fa88029744ed09a3a9f35b494060182a12a7
+spores/spore-browser/wit/deps/soil-spore/spore.wit f129fa88029744ed09a3a9f35b494060182a12a7
+spores/spore-browser-host/wit/deps/soil-spore/spore.wit f129fa88029744ed09a3a9f35b494060182a12a7
 
 # --- soil-surface-import.wit ------------------------------------------------
 # source:      fungOS-linux/soil, wit/soil-surface-import.wit

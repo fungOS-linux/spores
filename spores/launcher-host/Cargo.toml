@@ -16,4 +16,7 @@ path = "src/main.rs"
 anyhow = "1"
 wasmtime = { version = "50", features = ["anyhow"] }
 wasmtime-wasi = "50"
-soil-spore-host = { git = "https://github.com/fungOS-linux/soil.git", rev = "4d4271b" }
+# The catalogue is ours (discovery is host-side work); the manifest inside it
+# is soil's. This replaced a git pin on `soil-spore-host`, a crate that does
+# not exist on soil's main.
+spore-catalog = { path = "../spore-catalog" }

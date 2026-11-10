@@ -4,10 +4,18 @@ use serde_json::json;
 
 wit_bindgen::generate!({ path: "wit", world: "launcher-spore", generate_all });
 
-use soil::spore::catalog;
+use soil::spore::catalog::{self, SurfaceKind};
 
 struct Component;
 export!(Component);
+
+/// The catalog's `surface-kind` as the page spells it.
+fn kind_name(kind: SurfaceKind) -> &'static str {
+    match kind {
+        SurfaceKind::Canvas => "canvas",
+        SurfaceKind::Web => "web",
+    }
+}
 
 impl Guest for Component {
     fn snapshot() -> Result<Vec<u8>, String> {
@@ -22,7 +30,19 @@ impl Guest for Component {
                     "summary": entry.summary,
                     "workspace": entry.workspace,
                     "default_surface": entry.default_surface,
-                    "surfaces": entry.surfaces,
+                    // A declared surface is a record now, not a bare kind name:
+                    // the page needs the name and entry to open one, and the
+                    // kind to say whether it can.
+                    "surfaces": entry
+                        .surfaces
+                        .into_iter()
+                        .map(|surface| json!({
+                            "name": surface.name,
+                            "kind": kind_name(surface.kind),
+                            "entry": surface.entry,
+                            "requires": surface.requires,
+                        }))
+                        .collect::<Vec<_>>(),
                 })
             })
             .collect::<Vec<_>>();
