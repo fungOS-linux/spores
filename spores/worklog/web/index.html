@@ -75,16 +75,47 @@ async function paintFrame(document, w, h) {
   ctx.drawImage(frame, 0, 0, width, height);
   const lit = census(rgba);
   // A frame with nothing lit in it is a renderer that answered, not a theme that
-  // is dark: say so in a colour no palette in this house contains, because a grey
-  // canvas and a deliberate ground are otherwise the same picture.
+  // is dark: say so in a colour no palette in this house contains, and write the
+  // numbers on it, because a grey canvas and a deliberate ground are otherwise
+  // the same picture.
+  const summary = `${rendererClass.describe(text)} · ${lit.count}`;
   if (lit.lit === 0) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#b3245a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '20px ui-monospace, Menlo, monospace';
+    ctx.fillText('EMPTY FRAME', 40, 70);
+    ctx.fillText(summary, 40, 104);
+    ctx.fillText(`probe: ${probe.text}`, 40, 138);
   }
   // What was asked for and what came back, on the same line: a node count alone
   // described the document even when nothing was drawn.
-  return `${rendererClass.describe(text)} · ${lit.count} · ${lit.lit === 0 ? 'EMPTY FRAME' : 'ok'}`;
+  return `${summary} · ${lit.lit === 0 ? 'EMPTY FRAME' : 'ok'}`;
+}
+
+// A frame that is empty has two very different causes: this document, or the GPU
+// path itself. A three-node probe answers which, on the machine that is failing,
+// without a person guessing: if the probe is lit too, the renderer works and the
+// document is the question.
+let probe = { lit: -1, text: 'not run' };
+
+async function runProbe() {
+  const document = {
+    kind: 'scene', schema: 1,
+    nodes: [{
+      id: 'probe', type: 'rect', ink: 'primary', opacity: 1, radius: 0, rgb: [200, 40, 90],
+      transform: { translation: [-4, 4, 0], rotation: [0, 0, 0], scale: [8, 8, 1] },
+    }],
+  };
+  try {
+    const px = await gpu.render(JSON.stringify(document), 64, 64);
+    let lit = 0;
+    for (let i = 0; i < px.length; i += 4) if (px[i] > 70) lit += 1;
+    probe = { lit, text: `${lit} of 4096 lit` };
+  } catch (error) {
+    probe = { lit: -2, text: String(error.message || error) };
+  }
 }
 
 // A sampled census of the frame: how many samples are lit, and the byte range. A
@@ -127,6 +158,7 @@ async function start() {
     // because they are the host's, not the view's.
     gpu.set_background(25, 25, 25);
     gpu.set_body(24);
+    await runProbe();
     await refresh();
   } catch (error) {
     gpuError = String(error.message || error);
