@@ -73,6 +73,14 @@ The protocol crate is pure Rust and runs on the host. The Spore crate is the thi
 BLE/records wrapper. `soil-spore check .` verifies the manifest against the
 module's real imports.
 
+## Host requirement
+
+The module imports `soil:ble`, `soil:records`, and `soil:time`. The current
+`soil-ble-host` binary links only `soil:ble` + WASI, so it can scan a simulated
+or real device but cannot yet instantiate this Spore. A device host must link
+the records and monotonic-clock capabilities too; that host wiring is the next
+integration step, not a change to this Spore.
+
 ## Simulator
 
 `soil-ble-sim` exposes a virtual PineTime with the same InfiniTime services,

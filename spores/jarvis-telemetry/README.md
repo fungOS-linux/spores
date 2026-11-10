@@ -68,6 +68,14 @@ cp target/wasm32-wasip2/release/jarvis_telemetry_spore.wasm module.wasm
 The core crate is pure Rust and holds the policy tests. `soil-spore check .`
 verifies the manifest against the module's real imports.
 
+## Host requirement
+
+The module imports `soil:records`, `soil:unibus`, and `soil:time`. There is no
+dev host in this phase that links all three (the `soil-ble-host` binary is
+BLE-only, and `spores/unibus` notes its host capabilities are still pending).
+The policy, seed data, and wasm component are complete and checked; wiring a
+dev host is the next integration step.
+
 ## Development without hardware
 
 1. `jarvis-telemetry seed` — writes fake owner and guest signals.
