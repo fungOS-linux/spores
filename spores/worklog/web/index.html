@@ -73,13 +73,22 @@ async function paintFrame(document, w, h) {
   paint.putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.drawImage(frame, 0, 0, width, height);
+  const lit = census(rgba);
+  // A frame with nothing lit in it is a renderer that answered, not a theme that
+  // is dark: say so in a colour no palette in this house contains, because a grey
+  // canvas and a deliberate ground are otherwise the same picture.
+  if (lit.lit === 0) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#b3245a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
   // What was asked for and what came back, on the same line: a node count alone
   // described the document even when nothing was drawn.
-  return `${rendererClass.describe(text)} · ${census(rgba)}`;
+  return `${rendererClass.describe(text)} · ${lit.count} · ${lit.lit === 0 ? 'EMPTY FRAME' : 'ok'}`;
 }
 
 // A sampled census of the frame: how many samples are lit, and the byte range. A
-// frame that is only its ground reports one value and no lit samples.
+// frame that is only its ground reports one range and no lit samples.
 function census(rgba) {
   let lit = 0, low = 255, high = 0;
   for (let i = 0; i < rgba.length; i += 4 * 97) {
@@ -88,7 +97,7 @@ function census(rgba) {
     if (value > high) high = value;
     if (value > 70) lit += 1;
   }
-  return `${lit} lit, ${low}..${high}`;
+  return { lit, count: `${lit} lit, ${low}..${high}` };
 }
 
 // The font, by content id. Fetched once, cached under the id it was served with,

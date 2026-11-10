@@ -46,8 +46,10 @@ const element = (extra = {}) => {
     getContext: () => ({
       setTransform() {},
       clearRect() {},
+      fillRect() {},
       drawImage() { blits += 1; },
       putImageData() { pasted += 1; },
+      fillStyle: '',
     }),
     addEventListener: (type, fn) => { handlers[type] = fn; },
     fire: (type, event) => { if (handlers[type]) handlers[type](event); },
@@ -99,9 +101,10 @@ class FakeRenderer {
   async render(document, width, height) {
     rendered.push({ document, width, height });
     // One lit pixel, so "the page blitted something" is not the same claim as
-    // "the page blitted an empty buffer".
+    // "the page blitted an empty buffer" — a frame with nothing lit in it is the
+    // empty-frame case the page now shouts about.
     const rgba = new Uint8ClampedArray(width * height * 4);
-    rgba[0] = 33;
+    rgba[0] = 200;
     return rgba;
   }
 }
