@@ -253,7 +253,8 @@ fn snapshot(config: &Config, query: &str) -> Result<String, String> {
                     String::from_utf8_lossy(&output.stderr).trim()
                 ));
             }
-            String::from_utf8(output.stdout).map_err(|error| format!("snapshot is not utf-8: {error}"))
+            String::from_utf8(output.stdout)
+                .map_err(|error| format!("snapshot is not utf-8: {error}"))
         }
     }
 }
@@ -305,8 +306,12 @@ fn scene(config: &Config, width: u32, height: u32, query: &str) -> Result<String
 /// same work, driven by the producer instead of a clock: read the snapshot (a
 /// few kilobytes), compare, render only on change, push.
 fn events(stream: &mut TcpStream, config: &Config, target: &str) -> Result<(), String> {
-    let width = query_number(target, "w").unwrap_or(config.width).clamp(200, 4000);
-    let height = query_number(target, "h").unwrap_or(config.height).clamp(200, 4000);
+    let width = query_number(target, "w")
+        .unwrap_or(config.width)
+        .clamp(200, 4000);
+    let height = query_number(target, "h")
+        .unwrap_or(config.height)
+        .clamp(200, 4000);
     let passthrough = query_without(target, &["w", "h"]);
 
     stream
@@ -335,7 +340,8 @@ fn events(stream: &mut TcpStream, config: &Config, target: &str) -> Result<(), S
                             last_write = std::time::Instant::now();
                         }
                         Err(error) => {
-                            let message = format!("event: error\ndata: {}\n\n", error.replace('\n', " "));
+                            let message =
+                                format!("event: error\ndata: {}\n\n", error.replace('\n', " "));
                             if stream.write_all(message.as_bytes()).is_err() {
                                 return Ok(());
                             }
