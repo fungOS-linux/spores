@@ -501,9 +501,27 @@
   // Hover is the page's job because it is a pointer fact, not a frame fact: the
   // scene says where the rows are, the pointer says which one it is on, and
   // nothing needs a round trip.
+  // A hover is the only warning a click gives. Asking the host to render the
+  // session under the pointer means the click finds a frame already in memory
+  // instead of starting a render — the difference between instant and a pause.
+  const warmed = new Set();
+  let warmTimer = 0;
+  function warmSession(id) {
+    if (!id || warmed.has(String(id))) return;
+    clearTimeout(warmTimer);
+    warmTimer = setTimeout(() => {
+      warmed.add(String(id));
+      const params = new URLSearchParams({ session: String(id), w: window.innerWidth, h: window.innerHeight });
+      if (sidebarOffset > 0) params.set('sidebar', String(sidebarOffset));
+      fetch('/warm?' + params.toString()).catch(() => {});
+    }, 80);
+  }
+
   window.addEventListener('mousemove', (event) => {
     const tab = tabHit(event.clientX, event.clientY);
     const item = sidebarHit(event.clientX, event.clientY);
+    if (tab) warmSession(tab.id);
+    else if (item && item.kind === 'session') warmSession(item.id);
     const hit = tab || item;
     if (!hit) {
       hover.style.display = 'none';

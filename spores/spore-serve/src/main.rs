@@ -197,6 +197,25 @@ fn handle(mut stream: TcpStream, config: &Arc<Config>) -> Result<(), String> {
             )
         }
         ("GET", "/health") => respond(&mut stream, "200 OK", "text/plain; charset=utf-8", b"ok\n"),
+        // Warm a channel without watching it.
+        //
+        // A click is preceded by a hover, and a hover is the only warning a host
+        // gets. Rendering the session under the pointer means the click finds a
+        // channel whose frame is already in memory instead of starting one.
+        ("GET", "/warm") => {
+            let width = query_number(&request.target, "w").unwrap_or(config.width).clamp(200, 4000);
+            let height = query_number(&request.target, "h")
+                .unwrap_or(config.height)
+                .clamp(200, 4000);
+            let passthrough = query_without(&request.target, &["w", "h", "sidebar"]);
+            let sidebar = query_number(&request.target, "sidebar").unwrap_or(0);
+            let key = channel_key(config, width, height, sidebar, &passthrough);
+            let channel = config.hub.subscribe(key.clone());
+            start_pump(config, &channel, width, height, sidebar, passthrough);
+            warm(&channel);
+            config.hub.unsubscribe(&key, &channel);
+            respond(&mut stream, "204 No Content", "text/plain; charset=utf-8", b"")
+        }
         ("GET", "/scene.json") => {
             // A page asks for the surface it is drawing on: a terminal sized for
             // a 1200x900 authoring window and then stretched to a laptop screen
@@ -430,6 +449,49 @@ impl Hub {
     }
 }
 
+/// What a scene depends on, and therefore what one render can be shared by.
+fn channel_key(
+    config: &Config,
+    width: u32,
+    height: u32,
+    sidebar: u32,
+    query: &str,
+) -> String {
+    format!("{}|{width}x{height}|{sidebar}|{query}", config.view.display())
+}
+
+/// Start the render loop for a channel that has no pump yet.
+fn start_pump(
+    config: &Arc<Config>,
+    channel: &Arc<Channel>,
+    width: u32,
+    height: u32,
+    sidebar: u32,
+    query: String,
+) {
+    if channel.subscribers.load(Ordering::Acquire) != 1 {
+        return;
+    }
+    let cached = channel.snapshot.lock().map(|snapshot| snapshot.clone()).unwrap_or_default();
+    let last = if cached.is_empty() { None } else { Some(cached) };
+    let config = Arc::clone(config);
+    let pump_channel = Arc::clone(channel);
+    std::thread::spawn(move || pump(config, pump_channel, width, height, sidebar, query, last));
+}
+
+/// Wait for a channel's first frame, but not forever: a hover that never becomes
+/// a click should not hold the thread that served it.
+fn warm(channel: &Arc<Channel>) {
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < deadline {
+        let ready = channel.scene.lock().map(|scene| !scene.is_empty()).unwrap_or(false);
+        if ready {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// The loop that owns this channel's renders.
 fn pump(
     config: Arc<Config>,
@@ -478,10 +540,7 @@ fn events(
     let height = query_number(target, "h").unwrap_or(config.height).clamp(200, 4000);
     let passthrough = query_without(target, &["w", "h", "sidebar"]);
     let sidebar = query_number(target, "sidebar").unwrap_or(0);
-    let key = format!(
-        "{}|{width}x{height}|{sidebar}|{passthrough}",
-        config.view.display()
-    );
+    let key = channel_key(config, width, height, sidebar, &passthrough);
 
     stream
         .write_all(
@@ -495,11 +554,10 @@ fn events(
     // A channel that kept its last frame paints before the producer is asked
     // anything. Switching back to a session you were just in is a socket and a
     // copy, not a render.
-    let (cached_scene, cached_snapshot, generation) = {
+    let (cached_scene, generation) = {
         let scene = channel.scene.lock().map(|scene| scene.clone()).unwrap_or_default();
-        let snapshot = channel.snapshot.lock().map(|snapshot| snapshot.clone()).unwrap_or_default();
         let generation = *channel.generation.lock().map_err(|error| error.to_string())?;
-        (scene, snapshot, generation)
+        (scene, generation)
     };
     let mut seen = generation;
     if !cached_scene.is_empty() {
@@ -511,11 +569,7 @@ fn events(
     }
 
     if channel.subscribers.load(Ordering::Acquire) == 1 {
-        let config = Arc::clone(config);
-        let pump_channel = Arc::clone(&channel);
-        let query = passthrough.clone();
-        let last = if cached_snapshot.is_empty() { None } else { Some(cached_snapshot) };
-        std::thread::spawn(move || pump(config, pump_channel, width, height, sidebar, query, last));
+        start_pump(config, &channel, width, height, sidebar, passthrough.clone());
     }
 
     loop {
