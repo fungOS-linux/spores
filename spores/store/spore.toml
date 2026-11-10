@@ -38,6 +38,7 @@ hot_reload = true
 
 [launch]
 default = "canvas"
+canvas_module = "spore-dev-store"
 surfaces = ["canvas", "web", "native"]
 
 # The host allowlists an exact id, role, digest and publisher before treating a

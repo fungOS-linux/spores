@@ -42,6 +42,28 @@ local function short_ref(value)
   return value:sub(1, 14) .. "…" .. value:sub(-8)
 end
 
+local function equal(count)
+  local widths = {}
+  for index = 1, count do widths[index] = 1 / count end
+  return widths
+end
+
+local function rows_of(items, per_row, build)
+  local rows, row = {}, {}
+  for _, item in ipairs(items or {}) do
+    row[#row + 1] = build(item)
+    if #row == per_row then
+      rows[#rows + 1] = ui.row({ widths = equal(per_row), gap = "sm", children = row })
+      row = {}
+    end
+  end
+  if #row > 0 then
+    while #row < per_row do row[#row + 1] = ui.spacer({}) end
+    rows[#rows + 1] = ui.row({ widths = equal(per_row), gap = "sm", children = row })
+  end
+  return rows
+end
+
 -- How an update applies. The class is the promise the store makes about what a
 -- person will have to approve or restart, so it is never inferred in the view.
 local CLASS = {
@@ -105,6 +127,10 @@ local function fixture()
       badge = "T", color = "#8bd5ca", state = "installed",
       summary = "Browse Mycelium targets and open a terminal session",
       description = "A terminal that lists the Mycelium targets this machine may reach and opens a host-mediated session, without ever holding SSH credentials itself.",
+      screenshots = {
+        { caption = "Targets this machine may reach, with the one in use marked" },
+        { caption = "A session in a pane the host owns" },
+      },
       license = "MIT",
     },
     {
@@ -113,6 +139,10 @@ local function fixture()
       badge = "I", color = "#6ea8fe", state = "update",
       summary = "One inbox over mail and chat metadata",
       description = "Mail threads and chat conversations in one list. It observes, caches and labels; it never sends.",
+      screenshots = {
+        { caption = "Mail and chat in one timeline" },
+        { caption = "A thread with its participants and labels" },
+      },
       license = "MIT",
     },
     {
@@ -121,6 +151,10 @@ local function fixture()
       badge = "W", color = "#8fbf7f", state = "update",
       summary = "Timeline of what happened across Marbles, GitHub and threads",
       description = "One chronological log of work, ordered by when it happened rather than by which tool recorded it.",
+      screenshots = {
+        { caption = "A day of work, ordered by when it happened" },
+        { caption = "One row, with every source that touched it" },
+      },
       license = "MIT",
     },
     {
@@ -137,6 +171,9 @@ local function fixture()
       badge = "G", color = "#8b9dff", state = "get",
       summary = "Dashboard primitives, rendered",
       description = "A fixture-driven gallery of the shared dashboard nodes, so a component change can be seen before it ships in an app.",
+      screenshots = {
+        { caption = "The primitive gallery, one card per component" },
+      },
       license = "MIT",
     },
     {
@@ -145,6 +182,9 @@ local function fixture()
       badge = "N", color = "#f0a35e", state = "installed",
       summary = "Notification tray, focus mode and shared ringer",
       description = "The tray for everything that wants attention: notifications, focus profiles, and calls through one ringer.",
+      screenshots = {
+        { caption = "The tray, grouped by what is asking for attention" },
+      },
       license = "Apache-2.0 OR MIT",
     },
   }
@@ -185,6 +225,10 @@ local function fixture()
       { id = "utilities", label = "Utilities", count = 0 },
     },
     apps = apps,
+    featured = {
+      "dev.fungos.markdown", "dev.fungos.terminal",
+      "dev.fungos.inbox", "dev.fungos.worklog",
+    },
     updates = updates,
     pending = { total = #updates, consent = 1, reboot = 1, hold = 1 },
   }
@@ -206,12 +250,97 @@ end
 
 -- ---- shared pieces -----------------------------------------------------
 
-local function monogram(app, size)
+local function mark(app, size, suffix)
+  local name = slug(app.id) .. (suffix and ("-" .. suffix) or "")
+  local spore = app.name or tostring(app.id):match("([^.]+)$") or "?"
+  local glyph = ui.glyph[spore] or app.badge or "?"
   return ui.card({
-    id = "store-mark-" .. slug(app.id),
+    id = "store-mark-" .. name,
+    w = size,
     h = size,
     pad = "sm",
-    children = { ui.text(app.badge or "?", { id = "store-mark-text-" .. slug(app.id), style = "heading", ink = "primary" }) },
+    ink = "primary",
+    opacity = 0.16,
+    children = { ui.text(glyph, {
+      id = "store-mark-text-" .. name,
+      style = size >= 80 and "display" or "title",
+      ink = "primary",
+    }) },
+  })
+end
+
+local function px(value)
+  return math.max(4, math.floor(value / 4) * 4)
+end
+
+-- A screenshot is a CID reference, not bytes in the package. The store draws a
+-- framed window in its place until the host resolves the listing's asset; that is
+-- a presentation choice, not a second image pipeline. It is shaped like the thing
+-- it stands in for — title dots, a rail, content lines — so a card reads as an
+-- app with a surface rather than as a row of grey bars.
+local function shot_art(id, height, accent)
+  local line = math.max(8, px(height * 0.07))
+  local body = px(height * 0.72)
+  local ink = accent and "primary" or "muted"
+  local tint = accent and 0.3 or 0.12
+  local children = {}
+  -- A title bar only when there is room for one; at 72px the dots would be the
+  -- whole picture.
+  if height >= 96 then
+    children[#children + 1] = ui.row({ id = id .. "-dots", gap = "xs",
+      widths = { 0.04, 0.04, 0.04 }, children = {
+        ui.fill({ ink = ink, opacity = tint, h = line }),
+        ui.fill({ ink = ink, opacity = tint, h = line }),
+        ui.fill({ ink = ink, opacity = tint, h = line }),
+      } })
+  end
+  children[#children + 1] = ui.row({ id = id .. "-body", widths = { 0.26, 0.74 }, gap = "xs", children = {
+    ui.fill({ ink = ink, opacity = tint * 0.55, h = body }),
+    ui.column({ id = id .. "-lines", gap = "xs", children = {
+      ui.fill({ ink = ink, opacity = tint * 0.8, h = px(body * 0.5) }),
+      ui.fill({ ink = "muted", opacity = 0.2, h = line }),
+      ui.fill({ ink = "muted", opacity = 0.16, h = line }),
+      ui.fill({ ink = "muted", opacity = 0.12, h = line }),
+    } }),
+  } })
+  return ui.card({ id = id, h = height, pad = "xs", gap = "xs", children = children })
+end
+
+local function preview(shot, id, height)
+  local caption = shot and shot.caption or "Screenshots arrive with the signed listing"
+  return ui.column({ id = id, gap = "xs", children = {
+    shot_art(id .. "-art", height, shot ~= nil),
+    ui.text(caption, { id = id .. "-caption", style = "caption",
+      ink = shot and "text" or "muted" }),
+    shot and shot.cid and ui.text("screenshot · " .. short_ref(shot.cid), {
+      id = id .. "-cid", style = "caption", ink = "muted",
+    }) or nil,
+  } })
+end
+
+local function rating_line(app, style, suffix)
+  if not app.rating then
+    return ui.text("New · no ratings yet", { style = "caption", ink = "muted" })
+  end
+  local name = slug(app.id) .. (suffix and ("-" .. suffix) or "")
+  return ui.row({ id = "store-rating-" .. name, widths = { 0.55, 0.45 },
+    gap = "sm", children = {
+      ui.text(stars(app.rating), { style = style or "body", ink = "primary" }),
+      ui.text(string.format("%.1f · %d ratings", app.rating, app.ratings or 0), {
+        style = "caption", ink = "muted",
+      }),
+    } })
+end
+
+-- Installing and updating are the work; opening an app already installed is not.
+-- So the loud button is the one that changes the machine.
+local function app_action(app, suffix)
+  local label = app.state == "get" and "Get" or (app.state == "update" and "Update" or "Open")
+  return ui.button(label, {
+    id = "store-open-" .. slug(app.id) .. "-" .. suffix,
+    small = true,
+    quiet = app.state == "installed",
+    action = ui.action("store-select", { id = app.id }),
   })
 end
 
@@ -228,10 +357,10 @@ local function header(view)
       } }),
       ui.row({ id = "store-head-actions", gap = "sm", align = "end", children = {
         ui.button("Sources", { id = "store-sources", small = true, quiet = true,
-          action = ui.action("store.source", { name = view.source.name }) }),
+          action = ui.action("store-source", { name = view.source.name }) }),
         ui.button(pending > 0 and ("Updates · " .. pending) or "Updates", {
           id = "store-updates", small = true, quiet = pending == 0,
-          action = ui.action("store.category", { category = "updates" }),
+          action = ui.action("store-category", { category = "updates" }),
         }),
       } }),
     } }),
@@ -271,89 +400,166 @@ local function sidebar(view)
       id = "store-cat-" .. slug(category.id),
       small = true,
       quiet = not category.selected,
-      action = ui.action("store.category", { category = category.id }),
+      action = ui.action("store-category", { category = category.id }),
     })
   end
   return ui.column({ id = "store-side", gap = "xs", children = items })
 end
 
-local function app_card(app)
+local function hero(app)
+  local shot = (app.screenshots or {})[1]
+  return ui.card({
+    id = "store-hero",
+    pad = "md",
+    gap = "md",
+    children = {
+      ui.row({ id = "store-hero-body", widths = { 0.58, 0.42 }, gap = "md", children = {
+        ui.column({ id = "store-hero-copy", gap = "sm", children = {
+          ui.row({ id = "store-hero-identity", widths = { 0.17, 0.83 }, gap = "sm", children = {
+            mark(app, 96, "hero"),
+            ui.column({ gap = "xs", children = {
+              ui.text("EDITOR'S CHOICE", { id = "store-hero-kicker", style = "caption", ink = "primary" }),
+              ui.text(app.name, { id = "store-hero-name", style = "title", ink = "text" }),
+              ui.text(string.format("%s · %s · v%s", app.publisher, app.category, app.version), {
+                id = "store-hero-meta", style = "caption", ink = "muted",
+              }),
+            } }),
+          } }),
+          rating_line(app, "heading", "hero"),
+          ui.text(app.summary, { id = "store-hero-summary", style = "body", ink = "text" }),
+          ui.row({ id = "store-hero-actions", gap = "sm", children = {
+            app_action(app, "hero"),
+            ui.button("See screenshots", {
+              id = "store-hero-shots", small = true, quiet = true,
+              action = ui.action("store-select", { id = app.id }),
+            }),
+          } }),
+        } }),
+        preview(shot, "store-hero-preview", 144),
+      } }),
+    },
+  })
+end
+
+-- The picks carry no artwork: at this size a screenshot frame is a grey band, and
+-- the hero already shows what a listing's surface looks like. An icon, a rating
+-- and one line of what the app does is what a person scans in a row of three.
+local function feature_card(app)
+  local cardslug = slug(app.id)
+  return ui.card({
+    id = "store-feature-" .. cardslug,
+    pad = "sm",
+    gap = "sm",
+    children = {
+      ui.row({ id = "store-feature-top-" .. cardslug, widths = { 0.22, 0.78 }, gap = "sm", children = {
+        mark(app, 56, "feature"),
+        ui.column({ gap = "xs", children = {
+          ui.text(app.name, { id = "store-feature-name-" .. cardslug, style = "heading", ink = "text" }),
+          ui.text(app.publisher .. " · " .. app.category, { style = "caption", ink = "muted" }),
+        } }),
+      } }),
+      rating_line(app, nil, "feature"),
+      ui.text(app.summary, { style = "caption", ink = "muted" }),
+      app_action(app, "feature"),
+    },
+  })
+end
+
+local function grid_card(app)
   return ui.card({
     id = "store-card-" .. slug(app.id),
     pad = "sm",
     gap = "sm",
-    h = 220,
     children = {
-      ui.row({ id = "store-card-top-" .. slug(app.id), widths = { 0.2, 0.8 }, gap = "sm", children = {
-        monogram(app, 56),
+      ui.row({ id = "store-card-top-" .. slug(app.id), widths = { 0.22, 0.78 }, gap = "sm", children = {
+        mark(app, 56, "grid"),
         ui.column({ gap = "xs", children = {
           ui.text(app.name, { id = "store-card-name-" .. slug(app.id), style = "heading", ink = "text" }),
-          ui.text(app.publisher, { style = "caption", ink = "muted" }),
+          ui.text(app.publisher .. " · " .. app.category, { style = "caption", ink = "muted" }),
         } }),
       } }),
+      rating_line(app, nil, "grid"),
       ui.text(app.summary, { style = "caption", ink = "muted" }),
-      ui.text(rating_text(app), { id = "store-card-rating-" .. slug(app.id), style = "caption", ink = "text" }),
-      ui.button(app.state == "get" and "Get" or (app.state == "update" and "Update" or "Open"), {
-        id = "store-card-open-" .. slug(app.id),
-        small = true,
-        quiet = app.state ~= "update",
-        action = ui.action("store.select", { id = app.id }),
-      }),
+      app_action(app, "grid"),
     },
   })
 end
 
 -- ---- browse ------------------------------------------------------------
 
-local function browse(view)
-  local featured = {}
-  for index = 1, math.min(3, #(view.apps or {})) do
-    featured[#featured + 1] = app_card(view.apps[index])
+local function featured_apps(view)
+  local apps = {}
+  for _, id in ipairs(view.featured or {}) do
+    local app = find_app(view, id)
+    if app then apps[#apps + 1] = app end
   end
+  if #apps == 0 then
+    for index = 1, math.min(4, #(view.apps or {})) do apps[#apps + 1] = view.apps[index] end
+  end
+  return apps
+end
 
-  local rows = {}
-  for _, app in ipairs(view.apps or {}) do
-    rows[#rows + 1] = {
-      id = app.id,
-      name = app.name,
-      publisher = app.publisher,
-      rating_text = rating_text(app),
-      version = app.version,
-      state = state_text(app),
-      enabled = true,
-    }
-  end
+local function browse(view)
+  local featured = featured_apps(view)
+  local hero_app = featured[1] or (view.apps or {})[1]
+  local picks = {}
+  for index = 2, math.min(4, #featured) do picks[#picks + 1] = feature_card(featured[index]) end
 
   local current = "All Spores"
   for _, category in ipairs(view.categories or {}) do
     if category.selected then current = category.label end
   end
 
-  return ui.row({ id = "store-body", widths = { 0.2, 0.8 }, gap = "md", grow = true, children = {
-    sidebar(view),
-    ui.column({ id = "store-main", gap = "md", children = {
-      ui.row({ id = "store-main-head", widths = { 0.78, 0.22 }, gap = "sm", children = {
-        ui.text(current, { id = "store-main-title", style = "heading", ink = "text" }),
-        ui.text(string.format("%d results", #rows), { id = "store-main-count", style = "caption", ink = "muted" }),
+  local section = function(title, subtitle, children)
+    return ui.column({ gap = "sm", children = {
+      ui.row({ widths = { 0.72, 0.28 }, gap = "sm", children = {
+        ui.text(title, { style = "heading", ink = "text" }),
+        ui.text(subtitle, { style = "caption", ink = "muted" }),
       } }),
-      ui.row({ id = "store-featured", widths = { 1 / 3, 1 / 3, 1 / 3 }, gap = "sm", children = featured }),
-      ui.table({
-        id = "store-list",
-        title = "All Spores",
-        subtitle = "signed index · every row is a package digest",
-        columns = {
-          { key = "name", label = "App", width = 1.6 },
-          { key = "publisher", label = "Publisher", width = 1.0 },
-          { key = "rating_text", label = "Rating", width = 1.6 },
-          { key = "version", label = "Version", width = 0.7, align = "right" },
-          { key = "state", label = "State", width = 1.0, ink = "muted" },
-        },
-        rows = rows,
-        row_action = "store.select",
-        row_key = "id",
-        h = 260,
+      table.unpack(children),
+    } })
+  end
+
+  local main_children = {
+    ui.row({ id = "store-main-head", widths = { 0.72, 0.28 }, gap = "sm", children = {
+      ui.column({ gap = "xs", children = {
+        ui.text(current == "All Spores" and "Discover" or current, {
+          id = "store-main-title", style = "title", ink = "text",
+        }),
+        ui.text("Signed by the source, installed by digest", { style = "caption", ink = "muted" }),
+      } }),
+      ui.text(string.format("%d apps", #(view.apps or {})), {
+        id = "store-main-count", style = "caption", ink = "muted",
       }),
     } }),
+  }
+  if hero_app then main_children[#main_children + 1] = hero(hero_app) end
+  if #picks > 0 then
+    main_children[#main_children + 1] = section("Featured", "Editor's picks this week", {
+      ui.row({ id = "store-featured", widths = equal(#picks), gap = "sm", children = picks }),
+    })
+  end
+  local grid_apps = {}
+  for index = 1, math.min(6, #(view.apps or {})) do grid_apps[#grid_apps + 1] = view.apps[index] end
+  main_children[#main_children + 1] = ui.column({ gap = "sm", children = {
+    ui.row({ id = "store-all-head", widths = { 0.72, 0.28 }, gap = "sm", children = {
+      ui.column({ gap = "xs", children = {
+        ui.text("All Spores", { style = "heading", ink = "text" }),
+        ui.text("Every listing is a package digest", { style = "caption", ink = "muted" }),
+      } }),
+      ui.row({ id = "store-all-action", gap = "sm", align = "end", children = {
+        ui.button(string.format("See all %d", #(view.apps or {})), {
+          id = "store-see-all", small = true, quiet = true,
+          action = ui.action("store-category", { category = "all" }),
+        }),
+      } }),
+    } }),
+    ui.column({ id = "store-grid", gap = "sm", children = rows_of(grid_apps, 3, grid_card) }),
+  } })
+
+  return ui.row({ id = "store-body", widths = { 0.2, 0.8 }, gap = "md", grow = true, children = {
+    sidebar(view),
+    ui.column({ id = "store-main", gap = "md", children = main_children }),
   } })
 end
 
@@ -368,9 +574,9 @@ local function screenshots(app)
       id = "store-shot-" .. slug(app.id) .. "-" .. index,
       pad = "sm",
       gap = "xs",
-      h = 200,
+      h = 240,
       children = {
-        ui.fill({ id = "store-shot-frame-" .. index, ink = "surface_sunken", radius = "sm", h = 96 }),
+        shot_art("store-shot-frame-" .. index, 160, true),
         ui.text(shot.caption, { id = "store-shot-caption-" .. index, style = "caption", ink = "text" }),
         ui.text("screenshot · " .. short_ref(shot.cid or "pending pin"), {
           id = "store-shot-cid-" .. index, style = "caption", ink = "muted",
@@ -437,27 +643,27 @@ end
 local function detail(view)
   local app = view.selected
   local update = view.selected_update
-  local action = "store.install"
+  local action = "store-install"
   local label = "Get"
   if app.state == "update" then label = "Update"
-  elseif app.state == "installed" then label = "Open"; action = "store.open" end
+  elseif app.state == "installed" then label = "Open"; action = "store-open" end
 
   local meta = string.format("%s · %s · %s", app.publisher, app.category, app.version)
   local children = {
     ui.row({ id = "store-detail-bar", widths = { 0.32, 0.68 }, gap = "sm", children = {
       ui.row({ id = "store-detail-back", gap = "sm", children = {
         ui.button("Back", { id = "store-back", small = true, quiet = true,
-          action = ui.action("store.back", {}) }),
+          action = ui.action("store-back", {}) }),
       } }),
       ui.row({ id = "store-detail-actions", gap = "sm", align = "end", children = {
         ui.button("Write a review", { id = "store-write-review", small = true, quiet = true,
-          action = ui.action("store.review", { id = app.id, digest = app.digest }) }),
+          action = ui.action("store-review", { id = app.id, digest = app.digest }) }),
         ui.button(label, { id = "store-install",
           action = ui.action(action, { id = app.id, digest = app.digest }) }),
       } }),
     } }),
-    ui.row({ id = "store-detail-head", widths = { 0.12, 0.58, 0.3 }, gap = "md", children = {
-      monogram(app, 72),
+    ui.row({ id = "store-detail-head", widths = { 0.13, 0.57, 0.3 }, gap = "md", children = {
+      mark(app, 120, "detail"),
       ui.column({ id = "store-detail-title", gap = "xs", children = {
         ui.text(app.name, { id = "store-detail-name", style = "title", ink = "text" }),
         ui.text(meta, { id = "store-detail-meta", style = "caption", ink = "muted" }),
@@ -517,7 +723,7 @@ local function update_card(update, index)
           small = true,
           quiet = pinned,
           enabled = not pinned,
-          action = ui.action(pinned and "store.unpin" or "store.update", { id = update.id, digest = update.digest }),
+          action = ui.action(pinned and "store-unpin" or "store-update", { id = update.id, digest = update.digest }),
         }),
       } }),
     },
@@ -552,7 +758,7 @@ local function updates(view)
       } }),
       ui.row({ id = "store-updates-actions", gap = "sm", align = "end", children = {
         ui.button("Update all that can", { id = "store-update-all",
-          action = ui.action("store.update_all", {}) }),
+          action = ui.action("store-update-all", {}) }),
       } }),
     } }),
     banner,

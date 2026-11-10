@@ -71,14 +71,18 @@ assert(drawn.rects > 25, "expected storefront surfaces, drew " .. drawn.rects)
 assert(#drawn.texts > 30, "expected storefront text, drew " .. #drawn.texts)
 assert(has_text("Spore Store"), "store title missing")
 assert(has_text("All Spores"), "category heading missing")
+assert(has_text("Discover"), "discover heading missing")
+assert(has_text("Featured"), "featured section missing")
+assert(has_text("EDITOR'S CHOICE"), "editor's choice kicker missing")
+assert(has_text("See all 7"), "see-all control missing")
 assert(has_text("markdown") and has_text("terminal") and has_text("gallery"),
   "listing rows missing")
 assert(has_text_matching("4.7 · 212"), "rating text missing")
 assert(has_text_matching("Updates · 5"), "updates badge missing")
 assert(has_text_matching("verified"), "source verification missing")
-assert(count_buttons("store.category") == 16,
-  "15 category controls plus the Updates button")
-assert(count_buttons("store.select") >= 3, "row and card selection controls missing")
+assert(count_buttons("store-category") == 17,
+  "15 category controls, the Updates button, and See all")
+assert(count_buttons("store-select") >= 3, "row and card selection controls missing")
 
 -- An empty snapshot still draws the shell rather than erroring: the host may
 -- open the store before the first index fetch lands.
@@ -115,9 +119,9 @@ local function five_star_count()
   end
 end
 assert(five_star_count() == "148", "histogram buckets are reversed: " .. tostring(five_star_count()))
-assert(count_buttons("store.install") == 1, "install control missing")
-assert(count_buttons("store.review") == 1, "review control missing")
-assert(count_buttons("store.back") == 1, "back control missing")
+assert(count_buttons("store-install") == 1, "install control missing")
+assert(count_buttons("store-review") == 1, "review control missing")
+assert(count_buttons("store-back") == 1, "back control missing")
 
 -- ---- updates -----------------------------------------------------------
 
@@ -127,9 +131,9 @@ assert(has_text("Waiting on you"), "pending banner missing")
 assert(has_text("live") and has_text("held") and has_text("consent"),
   "update classes missing")
 assert(has_text_matching("view only · applies now"), "class explanation missing")
-assert(count_buttons("store.update") == 4,
+assert(count_buttons("store-update") == 4,
   "every class except held offers an apply control")
-assert(count_buttons("store.unpin") == 1, "held row should offer unpin")
-assert(count_buttons("store.update_all") == 1, "update-all control missing")
+assert(count_buttons("store-unpin") == 1, "held row should offer unpin")
+assert(count_buttons("store-update-all") == 1, "update-all control missing")
 
 print("store ui: ok")
