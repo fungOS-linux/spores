@@ -244,6 +244,13 @@ fn handle(
             PAGE,
             &[("cache-control", "no-store")],
         ),
+        // The bench reports to the host it came from, so the numbers a browser
+        // computes are readable without anyone copying them out of a page.
+        path if path.starts_with("/probe-report/") => {
+            let said = &path["/probe-report/".len()..];
+            eprintln!("probe-report: {said}");
+            respond(&mut stream, 204, "text/plain", "", &[])
+        }
         "/probe" => respond(
             &mut stream,
             200,

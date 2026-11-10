@@ -16,7 +16,13 @@
 // theme, and shipping that to the page shipped a grey screen twice. This page is
 // the bench. It runs two documents — one rect covering the surface, then the
 // real served scene — and prints what came back for each.
-const log = (line) => { document.getElementById('log').textContent += `\n${line}`; };
+const log = (line) => {
+  document.getElementById('log').textContent += `\n${line}`;
+  // And to the host that served this page: a browser's own numbers are the only
+  // evidence about a browser, and copying them out by hand is a round trip the
+  // host can take instead.
+  fetch(`probe-report/${encodeURIComponent(line)}`).catch(() => {});
+};
 const out = document.getElementById('out');
 const ctx = out.getContext('2d');
 
