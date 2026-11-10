@@ -16,7 +16,7 @@
 //! scroll, sessions, events — to the process that owns the state. The renderer
 //! is stateless: it holds a socket and a view, and nothing else.
 
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
@@ -53,11 +53,16 @@ struct Config {
     proxy: Option<String>,
     title: String,
     hub: Arc<Hub>,
+    pool: Arc<Pool>,
 }
 
 enum SnapshotSource {
     File(PathBuf),
     Command(String),
+    /// `http://` only, and only because this is a loopback producer: a URL here
+    /// saves a `sh -c curl` per frame, which is most of the cost of a small
+    /// snapshot.
+    Url(String),
 }
 
 fn run() -> Result<(), String> {
@@ -66,6 +71,7 @@ fn run() -> Result<(), String> {
     let mut view = None;
     let mut snapshot_file = None;
     let mut snapshot_cmd = None;
+    let mut snapshot_url = None;
     let mut theme = None;
     let mut sdk = std::env::var("FUNGOS_SDK").ok().map(PathBuf::from);
     let mut lua = std::env::var("TEND_LUA").unwrap_or_else(|_| "lua".to_string());
@@ -97,6 +103,9 @@ fn run() -> Result<(), String> {
             "--view" => view = Some(PathBuf::from(value()?)),
             "--snapshot" => snapshot_file = Some(PathBuf::from(value()?)),
             "--snapshot-cmd" => snapshot_cmd = Some(value()?),
+            // `http://host:port/path?{query}`: the same producer, without a
+            // shell process per frame.
+            "--snapshot-url" => snapshot_url = Some(value()?),
             "--theme" => theme = Some(PathBuf::from(value()?)),
             "--sdk" => sdk = Some(PathBuf::from(value()?)),
             "--lua" => lua = value()?,
@@ -109,7 +118,7 @@ fn run() -> Result<(), String> {
             "--help" | "-h" => {
                 println!(
                     "spore-serve --root <spore> [--view ui/x.lua] \
-                     (--snapshot file.lua | --snapshot-cmd 'cmd') \
+                     (--snapshot file.lua | --snapshot-cmd 'cmd' | --snapshot-url url) \
                      [--theme f.lua] [--sdk dir] [--lua lua] [--renderer shot.lua] \
                      [--width 1200] [--height 900] [--proxy url] [--bind host:port]"
                 );
@@ -126,10 +135,13 @@ fn run() -> Result<(), String> {
     let theme = theme.unwrap_or_else(|| root.join("../../spores/themes/graphite.lua"));
     let renderer = renderer.unwrap_or_else(|| root.join("../../tools/shot.lua"));
     let sdk = sdk.ok_or("no SDK: pass --sdk or set FUNGOS_SDK")?;
-    let snapshot = match (snapshot_cmd, snapshot_file) {
-        (Some(command), _) => SnapshotSource::Command(command),
-        (None, Some(path)) => SnapshotSource::File(path),
-        (None, None) => return Err("one of --snapshot or --snapshot-cmd is required".into()),
+    let snapshot = match (snapshot_url, snapshot_cmd, snapshot_file) {
+        (Some(url), _, _) => SnapshotSource::Url(url),
+        (None, Some(command), _) => SnapshotSource::Command(command),
+        (None, None, Some(path)) => SnapshotSource::File(path),
+        (None, None, None) => {
+            return Err("one of --snapshot, --snapshot-cmd or --snapshot-url is required".into())
+        }
     };
 
     let config = Arc::new(Config {
@@ -147,6 +159,7 @@ fn run() -> Result<(), String> {
         height,
         proxy,
         hub: Arc::new(Hub::new()),
+        pool: Arc::new(Pool::new()),
         title: title.unwrap_or_else(|| {
             let stem = view_file
                 .file_stem()
@@ -154,6 +167,11 @@ fn run() -> Result<(), String> {
             stem.unwrap_or_else(|| "spore".to_string())
         }),
     });
+
+    // Load the view into the renderers before anyone is waiting on it. A cold
+    // pool would put the parse cost back on the first click, which is the thing
+    // this is for.
+    config.pool.warm(&config);
 
     let listener = TcpListener::bind(&bind).map_err(|error| format!("bind {bind}: {error}"))?;
     println!("spore-serve: {} at http://{bind}/", config.view.display());
@@ -287,10 +305,226 @@ fn snapshot(config: &Config, query: &str) -> Result<String, String> {
             String::from_utf8(output.stdout)
                 .map_err(|error| format!("snapshot is not utf-8: {error}"))
         }
+        SnapshotSource::Url(template) => {
+            let url = template.replace("{query}", query);
+            http_get(&url)
+        }
+    }
+}
+
+/// A loopback HTTP GET.
+///
+/// Deliberately not a general client: `http://` only, no redirects, no
+/// chunked encoding — it exists so a producer on this machine can be asked for
+/// a snapshot without a `sh` and a `curl` process in the way of every frame.
+fn http_get(url: &str) -> Result<String, String> {
+    let rest = url
+        .strip_prefix("http://")
+        .ok_or_else(|| format!("snapshot url must start with http://: {url}"))?;
+    let (authority, path) = match rest.find('/') {
+        Some(index) => (&rest[..index], &rest[index..]),
+        None => (rest, "/"),
+    };
+    let address = if authority.contains(':') {
+        authority.to_string()
+    } else {
+        format!("{authority}:80")
+    };
+    let mut stream = TcpStream::connect(&address)
+        .map_err(|error| format!("snapshot url: connect {address}: {error}"))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {authority}\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| format!("snapshot url: send: {error}"))?;
+    let mut raw = Vec::new();
+    stream
+        .read_to_end(&mut raw)
+        .map_err(|error| format!("snapshot url: read: {error}"))?;
+    let split = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or_else(|| "snapshot url: response has no headers".to_string())?;
+    let head = String::from_utf8_lossy(&raw[..split]);
+    let status = head.lines().next().unwrap_or("");
+    if !status.contains(" 200") {
+        return Err(format!("snapshot url: {status}"));
+    }
+    String::from_utf8(raw[split + 4..].to_vec())
+        .map_err(|error| format!("snapshot is not utf-8: {error}"))
+}
+
+/// A `shot.lua --serve` process: the view and the SDK are already loaded, and it
+/// waits on stdin for one frame at a time.
+struct Renderer {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+}
+
+impl Renderer {
+    fn spawn(config: &Config) -> Result<Self, String> {
+        let mut child = Command::new(&config.lua)
+            .env("FUNGOS_SDK", &config.sdk)
+            .arg(&config.renderer)
+            .arg("--serve")
+            .arg(&config.view)
+            .arg(&config.theme)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            // A view that fails to load should say so in this host's log rather
+            // than into a pipe nobody reads.
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|error| format!("start renderer {}: {error}", config.lua))?;
+        let stdin = child.stdin.take().ok_or("renderer has no stdin")?;
+        let stdout = child.stdout.take().ok_or("renderer has no stdout")?;
+        Ok(Self {
+            child,
+            stdin,
+            stdout: std::io::BufReader::new(stdout),
+        })
+    }
+
+    fn render(
+        &mut self,
+        snapshot: &str,
+        width: u32,
+        height: u32,
+        sidebar: u32,
+    ) -> Result<String, String> {
+        writeln!(self.stdin, "{width} {height} {sidebar} {}", snapshot.len())
+            .map_err(|error| format!("renderer: send header: {error}"))?;
+        self.stdin
+            .write_all(snapshot.as_bytes())
+            .and_then(|_| self.stdin.flush())
+            .map_err(|error| format!("renderer: send snapshot: {error}"))?;
+        let mut header = String::new();
+        self.stdout
+            .read_line(&mut header)
+            .map_err(|error| format!("renderer: read header: {error}"))?;
+        let length: usize = header
+            .trim()
+            .parse()
+            .map_err(|_| format!("renderer: bad reply {header:?}"))?;
+        if length == 0 {
+            let mut message = String::new();
+            let _ = self.stdout.read_line(&mut message);
+            return Err(format!("render failed: {}", message.trim()));
+        }
+        let mut body = vec![0u8; length];
+        self.stdout
+            .read_exact(&mut body)
+            .map_err(|error| format!("renderer: read scene: {error}"))?;
+        String::from_utf8(body).map_err(|error| format!("scene is not utf-8: {error}"))
+    }
+}
+
+impl Drop for Renderer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Idle renderers, shared by every channel.
+///
+/// Rendering used to be a process per frame, which is why a first visit felt
+/// slow however fast the render itself was. These are started at boot and kept
+/// warm; a frame is a write and a read.
+struct Pool {
+    idle: Mutex<Vec<Renderer>>,
+    live: AtomicUsize,
+}
+
+/// Enough to render several channels at once without hoarding Lua images.
+const MAX_RENDERERS: usize = 4;
+
+impl Pool {
+    fn new() -> Self {
+        Self {
+            idle: Mutex::new(Vec::new()),
+            live: AtomicUsize::new(0),
+        }
+    }
+
+    fn take(&self, config: &Config) -> Option<Renderer> {
+        if let Ok(mut idle) = self.idle.lock() {
+            if let Some(renderer) = idle.pop() {
+                return Some(renderer);
+            }
+        }
+        if self.live.load(Ordering::Acquire) >= MAX_RENDERERS {
+            return None;
+        }
+        self.live.fetch_add(1, Ordering::AcqRel);
+        match Renderer::spawn(config) {
+            Ok(renderer) => Some(renderer),
+            Err(error) => {
+                self.live.fetch_sub(1, Ordering::AcqRel);
+                eprintln!("spore-serve: {error}");
+                None
+            }
+        }
+    }
+
+    fn put(&self, renderer: Renderer) {
+        if let Ok(mut idle) = self.idle.lock() {
+            idle.push(renderer);
+        }
+    }
+
+    fn discard(&self, renderer: Renderer) {
+        drop(renderer);
+        self.live.fetch_sub(1, Ordering::AcqRel);
+    }
+
+    /// Start the pool before the first viewer asks for a frame. A cold pool is
+    /// the exact cost this exists to remove.
+    fn warm(self: &Arc<Self>, config: &Arc<Config>) {
+        for _ in 0..MAX_RENDERERS {
+            match self.take(config) {
+                Some(renderer) => self.put(renderer),
+                None => break,
+            }
+        }
     }
 }
 
 /// Render one snapshot through the Spore's view.
+///
+/// Render one snapshot, through whichever renderer is free.
+///
+/// A warm renderer is a write and a read; a cold one is a `lua` process plus
+/// parsing the SDK and the view. The pool exists so that the first visit to a
+/// session is a write and a read too.
+fn render(
+    config: &Config,
+    snapshot: &str,
+    width: u32,
+    height: u32,
+    sidebar: u32,
+) -> Result<String, String> {
+    if let Some(mut renderer) = config.pool.take(config) {
+        match renderer.render(snapshot, width, height, sidebar) {
+            Ok(body) => {
+                config.pool.put(renderer);
+                return Ok(body);
+            }
+            Err(error) => {
+                // A renderer that cannot answer is not reusable, and keeping it
+                // would fail every frame after it.
+                config.pool.discard(renderer);
+                return Err(error);
+            }
+        }
+    }
+    render_once(config, snapshot, width, height, sidebar)
+}
+
+/// The one-shot path: a process per frame, used when the pool is at its cap.
 ///
 /// The snapshot goes in on stdin and the scene comes back on stdout. It used to
 /// go through two files in `std::env::temp_dir()`, which is the wrong place on a
@@ -298,7 +532,7 @@ fn snapshot(config: &Config, query: &str) -> Result<String, String> {
 /// would fail mid-render with "cannot open .../spore-serve-snapshot-*.lua" and
 /// the page would sit on its last scene. Pipes cannot be swept out from under a
 /// process, and they save four syscalls a frame.
-fn render(
+fn render_once(
     config: &Config,
     snapshot: &str,
     width: u32,

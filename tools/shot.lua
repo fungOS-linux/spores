@@ -2,6 +2,17 @@
 --
 --   lua tools/shot.lua <view.lua> <snapshot.lua> <theme.lua> <out.json> [w] [h]
 --                     [--query=<text>] [--scroll=<px>] [--sidebar=<n>] [--hover=<id>]
+--   lua tools/shot.lua --serve <view.lua> <theme.lua>
+--
+-- Serve mode is the same renderer without a process per frame: the SDK and the
+-- view are loaded once, and each frame is read from stdin as
+--
+--   "<width> <height> <sidebar> <length>\n" followed by `length` bytes of Lua
+--   source (the snapshot)
+--
+-- and answered on stdout as "<length>\n" followed by the scene document, or
+-- "0\n<message>\n" when the view raised. A host that renders on every
+-- keystroke should not pay to parse the view every time.
 --
 -- A preview tool, not a host: it provides the same `canvas` ABI Canvas does,
 -- resolves `require` for the SDK, and nothing else. A view paints itself through
@@ -12,19 +23,28 @@
 -- The flags are the host state a view is allowed to read — a query, a scroll
 -- offset, the control under the pointer — so the picture a page shows can be
 -- asked for from a shell.
-local positional, flags = {}, {}
+local positional, flags, serve = {}, {}, false
 for index = 1, #arg do
   local key, value = arg[index]:match("^%-%-([%w_]+)=(.*)$")
-  if key then flags[key] = value else positional[#positional + 1] = arg[index] end
+  if arg[index] == "--serve" then serve = true
+  elseif key then flags[key] = value
+  else positional[#positional + 1] = arg[index] end
 end
 
-local view_path, snapshot_path, theme_path, out_path =
-  positional[1], positional[2], positional[3], positional[4]
-local width, height = tonumber(positional[5]) or 1200, tonumber(positional[6]) or 900
-
-assert(view_path and snapshot_path and theme_path and out_path,
-  "usage: lua tools/shot.lua <view.lua> <snapshot.lua> <theme.lua> <out.json> [w] [h]"
-  .. " [--query=<text>] [--scroll=<px>] [--sidebar=<n>] [--hover=<id>]")
+local view_path, snapshot_path, theme_path, out_path, width, height
+if serve then
+  view_path, theme_path = positional[1], positional[2]
+  assert(view_path and theme_path,
+    "usage: lua tools/shot.lua --serve <view.lua> <theme.lua>")
+else
+  view_path, snapshot_path, theme_path, out_path =
+    positional[1], positional[2], positional[3], positional[4]
+  width, height = tonumber(positional[5]) or 1200, tonumber(positional[6]) or 900
+  assert(view_path and snapshot_path and theme_path and out_path,
+    "usage: lua tools/shot.lua <view.lua> <snapshot.lua> <theme.lua> <out.json> [w] [h]"
+    .. " [--query=<text>] [--scroll=<px>] [--sidebar=<n>] [--hover=<id>]")
+end
+width, height = width or 1200, height or 900
 
 local theme = dofile(theme_path)
 local inks = theme.inks or {}
@@ -42,6 +62,11 @@ end
 
 local prims = {}
 local hits, presses = {}, 0
+-- One frame's worth of recording. Serve mode renders many frames from one
+-- process, so everything a frame accumulates has to be dropped before the next.
+local function reset()
+  prims, hits, presses = {}, {}, 0
+end
 -- Press regions travel with the scene. Canvas owns hit-testing, so a view states
 -- a rectangle and an intent; a host that can route the intent draws nothing for
 -- it. `tools/shot.lua` used to drop these, which is why a preview could not
@@ -77,24 +102,28 @@ _G.widget = {
     record_hit(spec)
   end,
 }
-_G.module = {
-  viewport = { width = width, height = height },
-  inputs = { width = width, height = height },
-  -- The complete type scale, not the four sizes the worklog happens to use: a
-  -- dashboard stat draws at `title`, and a theme without it fails at the first
-  -- number instead of rendering one size too small.
-  theme = { micro = TYPE.micro, small = TYPE.small, body = TYPE.body,
-    large = TYPE.large, title = TYPE.title or TYPE.large,
-    display = TYPE.display or TYPE.title or TYPE.large,
-    radius = theme.radius or 10 },
-}
-if flags.query then _G.module.query = flags.query end
-if flags.scroll then _G.module.scroll = { offset = tonumber(flags.scroll) or 0 } end
--- A panel's own scroll offset. Same shape as `scroll`: the host says how far,
--- the view decides what moves. The terminal's scrollback and its device list
--- are two different lists, so they are two different offsets.
-if flags.sidebar then _G.module.sidebar = { offset = tonumber(flags.sidebar) or 0 } end
-if flags.hover then _G.module.hover = flags.hover end
+-- The host context a view reads. It is rebuilt per frame because a pooled
+-- renderer serves frames of different sizes and scroll offsets from one image.
+local function set_module(w, h, sidebar)
+  _G.module = {
+    viewport = { width = w, height = h },
+    inputs = { width = w, height = h },
+    -- The complete type scale, not the four sizes the worklog happens to use:
+    -- a dashboard stat draws at `title`, and a theme without it fails at the
+    -- first number instead of rendering one size too small.
+    theme = { micro = TYPE.micro, small = TYPE.small, body = TYPE.body,
+      large = TYPE.large, title = TYPE.title or TYPE.large,
+      display = TYPE.display or TYPE.title or TYPE.large,
+      radius = theme.radius or 10 },
+  }
+  if flags.query then _G.module.query = flags.query end
+  if flags.scroll then _G.module.scroll = { offset = tonumber(flags.scroll) or 0 } end
+  -- A panel's own scroll offset. Same shape as `scroll`: the host says how far,
+  -- the view decides what moves. The terminal's scrollback and its device list
+  -- are two different lists, so they are two different offsets.
+  if sidebar and sidebar > 0 then _G.module.sidebar = { offset = sidebar } end
+  if flags.hover then _G.module.hover = flags.hover end
+end
 
 -- The SDK is a build-time import in a package; here it is a checkout. Two
 -- layouts are in flight at once: `fungos-sdk/lua/fungos/ui.lua` is the surface
@@ -119,24 +148,23 @@ package.preload["fungos.ui"] = function()
 end
 
 local view = assert(loadfile(view_path))()
--- `-` is stdin: a host that already has the snapshot in memory should not have
--- to write it to a file to hand it over, and a file in a temp directory can be
--- swept away between the write and the read.
-local snapshot
-if snapshot_path == "-" then
-  local source = io.read("*a")
-  snapshot = assert(load(source, "@stdin"))()
-else
-  snapshot = assert(loadfile(snapshot_path))()
-end
--- One argument, like every host: `tend`, `chrome-host` and Canvas all call
--- `render(snapshot)`. A view that also wants the host context reads it from the
--- `module` global, which is what the kit's own accessors do.
-view.render(snapshot)
+
+-- One frame of this view, from its snapshot to a scene document. The theme, the
+-- SDK and the view are loaded once above; this is the whole of the work a
+-- pooled renderer repeats, which is why it is a function and not the tail of
+-- the file.
+local themed = 0
+local function render_frame(snapshot, w, h, sidebar)
+  set_module(w, h, sidebar)
+  reset()
+  -- One argument, like every host: `tend`, `chrome-host` and Canvas all call
+  -- `render(snapshot)`. A view that also wants the host context reads it from
+  -- the `module` global, which is what the kit's own accessors do.
+  view.render(snapshot)
 
 -- A theme maps semantic ink to colour. Resolving it here is what keeps a view
 -- free of colour, and lets one file restyle every Spore at once.
-local themed = 0
+themed = 0
 for _, node in ipairs(prims) do
   -- A literal colour wins: a terminal cell names its own ink, and a theme role
   -- cannot express sixteen ANSI colours without sixteen roles.
@@ -301,20 +329,61 @@ local function meta_value(value)
   end
   return nil
 end
-local meta = meta_value(meta_table)
+  local meta = meta_value(meta_table)
+  return '{"kind":"scene","schema":1,"nodes":[' .. table.concat(parts, ",") ..
+    '],"hits":[' .. table.concat(hit_parts, ",") .. '],"meta":' .. meta .. "}"
+end
 
-if out_path == "-" then
-  io.write('{"kind":"scene","schema":1,"nodes":[', table.concat(parts, ","),
-    '],"hits":[', table.concat(hit_parts, ","), '],"meta":', meta, "}")
-  io.stdout:flush()
-  -- stdout is the document; the human-readable summary has to go elsewhere.
-  io.stderr:write(string.format("%s: %d primitives, %d themed, %d hit(s) -> stdout\n",
-    theme.name or "theme", #prims, themed, #hits))
+local function report(destination)
+  local summary = string.format("%s: %d primitives, %d themed, %d hit(s) -> %s",
+    theme.name or "theme", #prims, themed, #hits, destination)
+  if destination == "stdout" then io.stderr:write(summary .. "\n") else print(summary) end
+end
+
+if not serve then
+  -- One frame, one process: how a preview, a test and an editor run this.
+  local snapshot
+  if snapshot_path == "-" then
+    -- `-` is stdin: a host that already has the snapshot in memory should not
+    -- have to write it to a file to hand it over, and a file in a temp
+    -- directory can be swept away between the write and the read.
+    snapshot = assert(load(io.read("*a"), "@stdin"))()
+  else
+    snapshot = assert(loadfile(snapshot_path))()
+  end
+  local document = render_frame(snapshot, width, height, tonumber(flags.sidebar) or 0)
+  if out_path == "-" then
+    io.write(document)
+    io.stdout:flush()
+    -- stdout is the document; the human-readable summary has to go elsewhere.
+    report("stdout")
+  else
+    local file = assert(io.open(out_path, "wb"))
+    file:write(document)
+    file:close()
+    report(out_path)
+  end
 else
-  local file = assert(io.open(out_path, "wb"))
-  file:write('{"kind":"scene","schema":1,"nodes":[', table.concat(parts, ","),
-    '],"hits":[', table.concat(hit_parts, ","), '],"meta":', meta, "}")
-  file:close()
-  print(string.format("%s: %d primitives, %d themed, %d hit(s) -> %s",
-    theme.name or "theme", #prims, themed, #hits, out_path))
+  -- Serve mode: one process, many frames. A frame is a line of numbers naming
+  -- what it draws and how long its source is, then the source itself.
+  while true do
+    local header = io.read("*l")
+    if not header then break end
+    local w, h, sidebar, length = header:match("^(%d+) (%d+) (%d+) (%d+)$")
+    if not w then
+      io.write("0\nshot: bad frame header " .. tostring(header) .. "\n")
+      io.stdout:flush()
+    else
+      local source = io.read(tonumber(length))
+      local ok, document = pcall(function()
+        return render_frame(assert(load(source, "@frame"))(), tonumber(w), tonumber(h), tonumber(sidebar))
+      end)
+      if ok then
+        io.write(tostring(#document) .. "\n" .. document)
+      else
+        io.write("0\n" .. (tostring(document):gsub("[\r\n]+", " ")) .. "\n")
+      end
+      io.stdout:flush()
+    end
+  end
 end
