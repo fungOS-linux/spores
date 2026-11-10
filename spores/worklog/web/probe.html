@@ -26,6 +26,17 @@ const log = (line) => {
 const out = document.getElementById('out');
 const ctx = out.getContext('2d');
 
+// wgpu reports a validation failure through the console, not through an
+// exception, and a console nobody is reading is how a dropped render pass became
+// a grey page. These lines go to the host with the rest of the report.
+for (const level of ['error', 'warn']) {
+  const original = console[level].bind(console);
+  console[level] = (...args) => {
+    original(...args);
+    log(`console.${level}: ${args.map((value) => String(value)).join(' ').slice(0, 400)}`);
+  };
+}
+
 function census(rgba) {
   let lit = 0, low = 255, high = 0;
   for (let i = 0; i < rgba.length; i += 4) {
