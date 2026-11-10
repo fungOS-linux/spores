@@ -213,7 +213,10 @@
   }
 
   function resize() {
-    const cols = Math.max(20, Math.floor(window.innerWidth / CELL_W));
+    // The sidebar is part of the scene, so the grid gets what is left of the
+    // window, not the whole window.
+    const sidebar = meta.sidebar ? meta.sidebar.width : 0;
+    const cols = Math.max(20, Math.floor((window.innerWidth - sidebar) / CELL_W));
     const rows = Math.max(6, Math.floor(window.innerHeight / CELL_H));
     const key = cols + 'x' + rows;
     if (key === sentSize) return;
@@ -330,6 +333,9 @@
       };
 
       filter.addEventListener('input', () => draw(filter.value.trim().toLowerCase()));
+      // `parts` has to reach the overlay: without this the picker stays on the
+      // "loading…" heading forever while the lists sit in a detached div.
+      picker.replaceChildren(...parts);
       draw('');
       requestAnimationFrame(() => filter.focus());
     } catch (error) {
@@ -371,6 +377,35 @@
     if (!text) return;
     event.preventDefault();
     post('/input', new TextEncoder().encode(text));
+  });
+
+  // A click in the sidebar is a device or a session. The view published where
+  // each row landed, so this is a lookup, not a second copy of the layout.
+  function sidebarHit(x, y) {
+    const sidebar = meta.sidebar;
+    if (!sidebar || x > sidebar.width) return null;
+    for (const item of Object.values(sidebar.items || {})) {
+      if (y >= item.y && y < item.y + item.height) return item;
+    }
+    return null;
+  }
+
+  window.addEventListener('mousedown', async (event) => {
+    const item = sidebarHit(event.clientX, event.clientY);
+    if (!item) return;
+    event.preventDefault();
+    if (item.kind === 'session') {
+      location.search = '?session=' + item.id;
+      return;
+    }
+    const response = await fetch('/sessions' + qs(), {
+      method: 'POST',
+      body: JSON.stringify({ target: item.name }),
+    }).catch(() => null);
+    if (response && response.ok) {
+      const opened = await response.json();
+      location.search = '?session=' + opened.id;
+    }
   });
 
   window.addEventListener('resize', resize);

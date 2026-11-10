@@ -251,13 +251,18 @@ local function meta_value(value)
   if kind == "boolean" then return value and "true" or "false" end
   if kind == "number" then return string.format("%.6g", value) end
   if kind == "table" then
-    local keys = {}
-    for key in pairs(value) do keys[#keys + 1] = tostring(key) end
-    table.sort(keys)
+    -- Keep the real key beside its printed form: looking the value up by the
+    -- string after sorting (`value["1"]` on an array) returns nil, and a list of
+    -- objects serialises as `{}` — present, empty, and wrong.
+    local entries = {}
+    for key, item in pairs(value) do
+      entries[#entries + 1] = { key = tostring(key), value = item }
+    end
+    table.sort(entries, function(left, right) return left.key < right.key end)
     local out = {}
-    for _, key in ipairs(keys) do
-      local encoded = meta_value(value[key])
-      if encoded then out[#out + 1] = quote(key) .. ":" .. encoded end
+    for _, entry in ipairs(entries) do
+      local encoded = meta_value(entry.value)
+      if encoded then out[#out + 1] = quote(entry.key) .. ":" .. encoded end
     end
     return "{" .. table.concat(out, ",") .. "}"
   end

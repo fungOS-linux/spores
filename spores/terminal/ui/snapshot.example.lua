@@ -6,6 +6,17 @@ return {
   rows = 24,
   title = "avery@agora-one: ~",
   cursor = { x = 21, y = 3, visible = true },
+  active = 1,
+  sessions = {
+    { id = 1, label = "studio", target = "studio", exited = false },
+    { id = 2, label = "personal", target = "personal", exited = true },
+  },
+  fleet = {
+    { name = "studio", label = "studio", kind = "shell", detail = "zsh -l" },
+    { name = "neo", label = "neo", kind = "ssh", detail = "ssh averys-macbook-neo" },
+    { name = "agora-one", label = "agora-one", kind = "fleet", detail = "mycelium ssh agora-one" },
+    { name = "acme", label = "acme", kind = "mush", detail = "mush · desktop acme" },
+  },
   scroll = { offset = 0, total = 24, len = 24 },
   lines = {
     { y = 0, runs = { { "avery@agora-one ~ % ", "#7dd3a8", nil, 1 } } },
