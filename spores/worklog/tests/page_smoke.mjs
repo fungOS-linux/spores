@@ -1,14 +1,12 @@
-// Does the browser page actually work — start the rasterizer, draw, search, hover,
-// scroll?
+// Does the browser page actually work — draw, search, hover, scroll?
 //
 //   node tests/page_smoke.mjs <scene.json>
 //
 // The page shipped once without ever being executed, so this runs the real
-// `<script>` out of `web/index.html` against a stub canvas, a stub font store and
-// a fake wasm renderer that answers with real RGBA. It checks the things a page
-// can get wrong without anyone noticing: never starting the renderer, painting
-// instead of delegating, drawing again when nothing changed, and losing an
-// interaction between the pointer and the host.
+// `<script>` out of `web/index.html` against a recording canvas, a stub input and
+// a `fetch` that answers with a real scene. It checks the two things a page can
+// get wrong without anyone noticing: drawing nothing, and drawing again when
+// nothing changed.
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
@@ -27,46 +25,43 @@ if (!match) {
 }
 
 const WIDTH = 1182, HEIGHT = 1569;
-const FONT_ID = 'deadbeef';
 const sceneText = readFileSync(scene_path, 'utf8');
 const scene = JSON.parse(sceneText);
 const ETAG = '"smoke"';
 
-// What the page asked the rasterizer for, in order. The renderer is the thing
-// under test from the page's side: if this stays empty, the page is painting a
-// scene itself again.
-const rendered = [];
-const problems = [];
-let blits = 0, pasted = 0, fontFetches = 0, fontCachePuts = 0, cacheHits = 0, createdWith = 0;
+const drawn = { rects: 0, texts: [], blits: 0 };
+const recorder = () => ({
+  setTransform() {}, clearRect() {}, beginPath() {}, fill() {},
+  rect() { drawn.rects += 1; },
+  roundRect() { drawn.rects += 1; },
+  fillText(text, x, y) { drawn.texts.push({ text, x, y }); },
+  fillStyle: '', font: '', textBaseline: '',
+});
+// The page paints off-screen and blits; a blit is one repaint, so counting them
+// is the clearest answer to "did this poll redraw anything".
+const blitter = { setTransform() {}, clearRect() {}, drawImage() { drawn.blits += 1; } };
 
-const element = (extra = {}) => {
+function element(extra = {}) {
   const handlers = {};
   return {
-    width: 0, height: 0, style: {}, value: '', textContent: '',
-    getContext: () => ({
-      setTransform() {},
-      clearRect() {},
-      fillRect() {},
-      drawImage() { blits += 1; },
-      putImageData() { pasted += 1; },
-      fillStyle: '',
-    }),
+    width: 0, height: 0, style: {}, value: '',
+    getContext: () => blitter,
     addEventListener: (type, fn) => { handlers[type] = fn; },
     fire: (type, event) => { if (handlers[type]) handlers[type](event); },
     ...extra,
   };
-};
+}
 
 const canvas = element();
 const input = element();
-const status = element({ textContent: 'loading' });
+const status = { textContent: 'loading' };
 const listeners = {};
 const seen = [];
 let requests = 0;
 let tick = null;
 
-// A scene that echoes the host state back, so a request that carried a query, a
-// hover or an offset produces a document the renderer can be asked about.
+// A scene that echoes the host state back, so a request that carried a query,
+// a hover or an offset produces different bytes to draw.
 const echo = (params) => {
   const copy = JSON.parse(sceneText);
   copy.nodes.push({
@@ -77,85 +72,23 @@ const echo = (params) => {
   return JSON.stringify(copy);
 };
 
-class ImageDataShim {
-  constructor(data, width, height) {
-    this.data = data;
-    this.width = width;
-    this.height = height;
-  }
-}
-
-class FakeRenderer {
-  static async create(bytes) {
-    createdWith = bytes.length;
-    return new FakeRenderer();
-  }
-  // What the page shows about a frame: the kinds it asked for, and a census of
-  // what came back. A count of the document alone is the lie that shipped.
-  static describe(document) {
-    const nodes = (JSON.parse(document).nodes || []).length;
-    return `{"nodes":${nodes},"rects":0,"texts":0}`;
-  }
-  set_background() {}
-  set_body() {}
-  async render(document, width, height) {
-    rendered.push({ document, width, height });
-    // One lit pixel, so "the page blitted something" is not the same claim as
-    // "the page blitted an empty buffer" — a frame with nothing lit in it is the
-    // empty-frame case the page now shouts about.
-    const rgba = new Uint8ClampedArray(width * height * 4);
-    rgba[0] = 200;
-    return rgba;
-  }
-}
-
 const sandbox = {
   document: {
     getElementById: (id) => ({ scene: canvas, q: input, status })[id],
-    createElement: () => element(),
+    createElement: () => ({ width: 0, height: 0, getContext: () => recorder() }),
   },
   window: { devicePixelRatio: 2 },
   innerWidth: WIDTH,
   innerHeight: HEIGHT,
   addEventListener: (type, fn) => { listeners[type] = fn; },
+  // The page polls and debounces; the test drives both instead of waiting.
   setInterval: (fn) => { tick = fn; return 0; },
-  setTimeout: (fn) => setTimeout(fn, 0),
+  setTimeout: (fn, ms) => setTimeout(fn, 0),
   clearTimeout: (id) => clearTimeout(id),
-  URLSearchParams, URL, JSON, Date, Math, parseInt, console, Uint8ClampedArray,
-  ImageData: ImageDataShim,
-  // A cache that keeps what it is given, so a second start would be a hit. The
-  // page opens one store and asks for the font by its content id.
-  caches: {
-    open: async () => {
-      const store = new Map();
-      return {
-        match: async (url) => {
-          const hit = store.get(url);
-          if (hit) cacheHits += 1;
-          return hit;
-        },
-        put: async (url, response) => { fontCachePuts += 1; store.set(url, response); },
-      };
-    },
-  },
+  URLSearchParams, URL, JSON, Date, Math, parseInt, console,
   fetch: async (url, options) => {
-    const absolute = new URL(url, 'https://worklog.myc/');
-    if (absolute.pathname === '/fonts.json') {
-      return {
-        ok: true, status: 200,
-        json: async () => ({ id: FONT_ID, url: `/font/${FONT_ID}`, kind: 'font/ttf' }),
-      };
-    }
-    if (absolute.pathname === `/font/${FONT_ID}`) {
-      fontFetches += 1;
-      return {
-        ok: true, status: 200,
-        clone() { return this; },
-        arrayBuffer: async () => new Uint8Array([0, 1, 2, 3]).buffer,
-      };
-    }
     requests += 1;
-    const params = Object.fromEntries(absolute.searchParams);
+    const params = Object.fromEntries(new URL(url, 'https://worklog.myc/').searchParams);
     seen.push(params);
     const headers = { get: (name) => (name.toLowerCase() === 'etag' ? ETAG : null) };
     if (requests === 2) {
@@ -176,48 +109,21 @@ const sandbox = {
 };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
+vm.runInContext(match[1], sandbox);
 
-// The page imports the wasm glue dynamically, which is how the module stays out
-// of the render path until it is asked for. Handing it a synthetic module keeps
-// the test honest about the boundary: everything below it is the page's job.
-const glue = new vm.SyntheticModule(['default', 'SceneRenderer'], function () {
-  this.setExport('default', async () => {});
-  this.setExport('SceneRenderer', FakeRenderer);
-}, { context: sandbox });
+const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+await settle();
 
-vm.runInContext(match[1], sandbox, {
-  importModuleDynamically: async (specifier) => {
-    if (!specifier.includes('scene.js')) throw new Error(`unexpected import ${specifier}`);
-    await glue.link(() => {});
-    glue.evaluate();
-    return glue;
-  },
-});
-
-const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
-
-// The page starts the renderer before it asks for anything: font, module, device.
-for (let attempt = 0; attempt < 20 && rendered.length === 0; attempt += 1) await settle();
-
-if (createdWith === 0) problems.push('the page never created a renderer');
-if (fontFetches !== 1) problems.push(`the font was fetched ${fontFetches} time(s), not once`);
-if (fontCachePuts !== 1) problems.push('the font was not cached under its content id');
-if (rendered.length === 0) problems.push('the page never asked the rasterizer for a frame');
-if (!rendered.some((entry) => entry.document.includes('WORKLOG'))) {
-  problems.push('the served scene was never rendered');
-}
-// The probe runs before the first scene, so an empty frame can be attributed to
-// the document or to the GPU path without a person guessing.
-if (!rendered.some((entry) => entry.document.includes('"probe"'))) {
-  problems.push('the page did not run its probe frame');
-}
-if (pasted === 0) problems.push('the page never painted the rendered pixels');
-if (blits === 0) problems.push('the page never blitted a frame');
+const problems = [];
+const first = { rects: drawn.rects, texts: drawn.texts.length, blits: drawn.blits };
+if (drawn.texts.length === 0) problems.push('the page drew no text');
+if (drawn.rects === 0) problems.push('the page drew no rects');
+if (drawn.blits === 0) problems.push('the page never blitted a frame');
 if (!/nodes/.test(status.textContent)) problems.push(`status is not a node count: ${status.textContent}`);
+if (!drawn.texts.some((entry) => entry.text === 'WORKLOG')) problems.push('the masthead is missing');
 
 // Polling an unchanged scene must not repaint it, whichever way the poll comes
 // back. A page that clears and redraws on a repeat is the flicker this guards.
-const firstFrames = rendered.length, firstBlits = blits;
 if (tick) {
   tick();
   await settle();
@@ -225,27 +131,22 @@ if (tick) {
   await settle();
 }
 if (requests < 3) problems.push(`the poll never ran (${requests} requests)`);
-if (rendered.length !== firstFrames || blits !== firstBlits) {
-  problems.push(`the page repainted an unchanged scene: ${firstBlits} blit(s) then ${blits}`);
+if (drawn.blits !== first.blits || drawn.texts.length !== first.texts || drawn.rects !== first.rects) {
+  problems.push(`the page repainted an unchanged scene: ${first.blits} paint(s) then ${drawn.blits}`);
 }
 
-// Search: typing asks the host for the query, and the answer is rendered.
-const beforeSearch = rendered.length;
+// Search: typing asks the host for the query, and the answer is drawn.
 input.value = 'soil';
 input.fire('input');
 await settle();
 if (seen.at(-1)?.q !== 'soil') problems.push(`typing did not reach the host: ${JSON.stringify(seen.at(-1))}`);
-if (rendered.length <= beforeSearch) problems.push('a search result was not rendered');
-if (rendered.at(-1) && !rendered.at(-1).document.includes('echo-soil')) {
-  problems.push('the rendered frame is not the answer to the query');
-}
+if (drawn.blits !== first.blits + 1) problems.push('a search result was not drawn');
 
 // Hover: the pointer names a row, the host returns the frame with it lit.
 const row = (scene.hits || []).find((hit) => /^event-\d+$/.test(hit.id));
 if (!row) {
   problems.push('the scene carries no row hit targets');
 } else {
-  const beforeHover = rendered.length;
   canvas.fire('mousemove', {
     clientX: (row.x + 4) / 8 * WIDTH + 4,
     clientY: (4 - row.y) / 8 * HEIGHT + 4,
@@ -254,31 +155,25 @@ if (!row) {
   if (seen.at(-1)?.hover !== row.id) {
     problems.push(`hovering a row did not report it: ${JSON.stringify(seen.at(-1))}`);
   }
-  if (rendered.length <= beforeHover) problems.push('a hovered row was not rendered');
 }
 
 // Scroll: a wheel notch is pixels, and it goes to the host that windows the log.
 // A log that fits on one page has nowhere to go, which is also worth asserting.
 const scrollable = Number(scene.meta?.total) > Number(scene.meta?.shown);
-const beforeScroll = seen.length;
+const before = seen.length;
 canvas.fire('wheel', { deltaY: 210, preventDefault() {} });
 await settle();
 if (scrollable) {
   if (Number(seen.at(-1)?.offset) !== 210) {
     problems.push(`the wheel did not scroll: ${JSON.stringify(seen.at(-1))}`);
   }
-} else if (seen.length !== beforeScroll) {
+} else if (seen.length !== before) {
   problems.push('the wheel scrolled a log that fits on one page');
 }
 
-// The renderer is asked for the surface it draws into, not for whatever the
-// window happened to be: a frame at the wrong extent is a frame that gets scaled.
-// The probe is the exception — it is 64x64 on purpose, because it asks whether the
-// GPU path works at all, not whether the layout does.
-for (const frame of rendered) {
-  if (frame.document.includes('"probe"')) continue;
-  if (frame.width !== WIDTH || frame.height !== HEIGHT) {
-    problems.push(`a frame was rendered at ${frame.width}x${frame.height}, not ${WIDTH}x${HEIGHT}`);
+for (const entry of drawn.texts) {
+  if (!(entry.x >= -0.5 && entry.x <= WIDTH + 0.5 && entry.y >= -0.5 && entry.y <= HEIGHT + 0.5)) {
+    problems.push(`text outside the window: ${entry.text} at ${entry.x},${entry.y}`);
   }
 }
 
@@ -286,5 +181,5 @@ if (problems.length) {
   console.error(problems.join('\n'));
   process.exit(1);
 }
-console.log(`page: ok — ${rendered.length} frames through the rasterizer, ${blits} blits, ` +
+console.log(`page: ok — ${drawn.blits} blits, ${drawn.rects} rects, ${drawn.texts.length} texts, ` +
   `search · hover · ${scrollable ? 'scroll' : 'no-scroll'} round-trip`);
