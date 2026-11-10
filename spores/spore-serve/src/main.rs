@@ -20,7 +20,9 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 const INDEX_HTML: &str = include_str!("page.html");
@@ -46,6 +48,7 @@ struct Config {
     height: u32,
     proxy: Option<String>,
     title: String,
+    hub: Arc<Hub>,
 }
 
 enum SnapshotSource {
@@ -139,6 +142,7 @@ fn run() -> Result<(), String> {
         width,
         height,
         proxy,
+        hub: Arc::new(Hub::new()),
         title: title.unwrap_or_else(|| {
             let stem = view_file
                 .file_stem()
@@ -169,7 +173,7 @@ struct Request {
     body: Vec<u8>,
 }
 
-fn handle(mut stream: TcpStream, config: &Config) -> Result<(), String> {
+fn handle(mut stream: TcpStream, config: &Arc<Config>) -> Result<(), String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .map_err(|error| error.to_string())?;
@@ -305,14 +309,93 @@ fn scene(config: &Config, width: u32, height: u32, query: &str) -> Result<String
 /// every tick pay for a render whether or not anything had happened. This is the
 /// same work, driven by the producer instead of a clock: read the snapshot (a
 /// few kilobytes), compare, render only on change, push.
-fn events(stream: &mut TcpStream, config: &Config, target: &str) -> Result<(), String> {
-    let width = query_number(target, "w")
-        .unwrap_or(config.width)
-        .clamp(200, 4000);
-    let height = query_number(target, "h")
-        .unwrap_or(config.height)
-        .clamp(200, 4000);
+/// One renderer per (view, surface, producer query), shared by every viewer.
+///
+/// A render is the expensive part of a frame. Without this, two browsers on one
+/// session mean two `lua` processes per change, and a third means three; with it
+/// the second viewer costs a socket. The key is what the scene depends on: the
+/// view, the surface size, and the producer query (a session id). Anything else
+/// would serve a frame drawn for one surface to another.
+struct Hub {
+    channels: Mutex<HashMap<String, Arc<Channel>>>,
+}
+
+struct Channel {
+    generation: Mutex<u64>,
+    scene: Mutex<String>,
+    wake: Condvar,
+    subscribers: AtomicUsize,
+    stopped: AtomicBool,
+}
+
+impl Hub {
+    fn new() -> Self {
+        Self { channels: Mutex::new(HashMap::new()) }
+    }
+
+    fn subscribe(&self, key: String) -> Arc<Channel> {
+        let mut channels = self.channels.lock().unwrap();
+        if let Some(channel) = channels.get(&key) {
+            channel.subscribers.fetch_add(1, Ordering::AcqRel);
+            return Arc::clone(channel);
+        }
+        let channel = Arc::new(Channel {
+            generation: Mutex::new(0),
+            scene: Mutex::new(String::new()),
+            wake: Condvar::new(),
+            subscribers: AtomicUsize::new(1),
+            stopped: AtomicBool::new(false),
+        });
+        channels.insert(key, Arc::clone(&channel));
+        channel
+    }
+
+    fn unsubscribe(&self, key: &str, channel: &Arc<Channel>) {
+        let left = channel.subscribers.fetch_sub(1, Ordering::AcqRel).saturating_sub(1);
+        if left == 0 {
+            channel.stopped.store(true, Ordering::Release);
+            channel.wake.notify_all();
+            if let Ok(mut channels) = self.channels.lock() {
+                channels.remove(key);
+            }
+        }
+    }
+}
+
+/// The loop that owns this channel's renders.
+fn pump(config: Arc<Config>, channel: Arc<Channel>, width: u32, height: u32, query: String) {
+    let mut last: Option<String> = None;
+    while !channel.stopped.load(Ordering::Acquire) {
+        if let Ok(current) = snapshot(&config, &query)
+            && last.as_deref() != Some(current.as_str())
+        {
+            match render(&config, &current, width, height) {
+                Ok(body) => {
+                    if let Ok(mut scene) = channel.scene.lock() {
+                        *scene = body;
+                    }
+                    if let Ok(mut generation) = channel.generation.lock() {
+                        *generation += 1;
+                    }
+                    channel.wake.notify_all();
+                    last = Some(current);
+                }
+                Err(error) => eprintln!("spore-serve: render failed: {error}"),
+            }
+        }
+        std::thread::sleep(Duration::from_millis(15));
+    }
+}
+
+fn events(
+    stream: &mut TcpStream,
+    config: &Arc<Config>,
+    target: &str,
+) -> Result<(), String> {
+    let width = query_number(target, "w").unwrap_or(config.width).clamp(200, 4000);
+    let height = query_number(target, "h").unwrap_or(config.height).clamp(200, 4000);
     let passthrough = query_without(target, &["w", "h"]);
+    let key = format!("{}|{width}x{height}|{passthrough}", config.view.display());
 
     stream
         .write_all(
@@ -321,57 +404,39 @@ fn events(stream: &mut TcpStream, config: &Config, target: &str) -> Result<(), S
         .map_err(|error| error.to_string())?;
     stream.flush().map_err(|error| error.to_string())?;
 
-    let mut last: Option<String> = None;
-    let mut last_write = std::time::Instant::now();
+    let channel = config.hub.subscribe(key.clone());
+    let mut seen = 0u64;
+    if channel.subscribers.load(Ordering::Acquire) == 1 {
+        let config = Arc::clone(config);
+        let pump_channel = Arc::clone(&channel);
+        let query = passthrough.clone();
+        std::thread::spawn(move || pump(config, pump_channel, width, height, query));
+    }
+
     loop {
-        match snapshot(config, &passthrough) {
-            Ok(current) => {
-                if last.as_deref() != Some(current.as_str()) {
-                    match render(config, &current, width, height) {
-                        Ok(body) => {
-                            let message = format!("data: {body}\n\n");
-                            if stream.write_all(message.as_bytes()).is_err() {
-                                return Ok(());
-                            }
-                            if stream.flush().is_err() {
-                                return Ok(());
-                            }
-                            last = Some(current);
-                            last_write = std::time::Instant::now();
-                        }
-                        Err(error) => {
-                            let message =
-                                format!("event: error\ndata: {}\n\n", error.replace('\n', " "));
-                            if stream.write_all(message.as_bytes()).is_err() {
-                                return Ok(());
-                            }
-                            let _ = stream.flush();
-                            last = Some(current);
-                            last_write = std::time::Instant::now();
-                        }
-                    }
-                }
+        let (generation, scene) = {
+            let guard = channel.generation.lock().map_err(|error| error.to_string())?;
+            if *guard == seen {
+                let _ = channel
+                    .wake
+                    .wait_timeout(guard, Duration::from_secs(15))
+                    .map_err(|error| error.to_string())?;
+                continue;
             }
-            Err(error) => {
-                let message = format!("event: error\ndata: {}\n\n", error.replace('\n', " "));
-                if stream.write_all(message.as_bytes()).is_err() {
-                    return Ok(());
-                }
-                let _ = stream.flush();
-                last_write = std::time::Instant::now();
-            }
+            let generation = *guard;
+            drop(guard);
+            let scene = channel.scene.lock().map(|scene| scene.clone()).unwrap_or_default();
+            (generation, scene)
+        };
+        if scene.is_empty() {
+            continue;
         }
-        if last_write.elapsed() > std::time::Duration::from_secs(15) {
-            if stream.write_all(b": keepalive\n\n").is_err() {
-                return Ok(());
-            }
-            let _ = stream.flush();
-            last_write = std::time::Instant::now();
+        seen = generation;
+        let message = format!("data: {scene}\n\n");
+        if stream.write_all(message.as_bytes()).is_err() || stream.flush().is_err() {
+            config.hub.unsubscribe(&key, &channel);
+            return Ok(());
         }
-        // The snapshot read is a few kilobytes; the render is the expensive part
-        // and only runs on change. Polling the producer this often is what makes
-        // a keystroke reach the screen in one frame.
-        std::thread::sleep(std::time::Duration::from_millis(15));
     }
 }
 
