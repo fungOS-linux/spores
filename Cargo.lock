@@ -2175,7 +2175,7 @@ dependencies = [
 [[package]]
 name = "soil-spore"
 version = "0.1.0"
-source = "git+https://github.com/fungOS-linux/soil.git?rev=697be58c0ed9fc57d5cd9e642b89b3d88e129500#697be58c0ed9fc57d5cd9e642b89b3d88e129500"
+source = "git+https://github.com/fungOS-linux/soil.git?rev=5305bc0bcff09c386dfeb7ca4e9324157b4fac35#5305bc0bcff09c386dfeb7ca4e9324157b4fac35"
 dependencies = [
  "ed25519-dalek",
  "serde",
