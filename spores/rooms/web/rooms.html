@@ -367,6 +367,7 @@ const state = {
   camOn: false,
   screenOn: false,
   participants: new Map(),
+  transport: "http",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -402,15 +403,22 @@ function connect() {
   state.socket = socket;
 
   socket.addEventListener("open", () => {
+    state.transport = "socket";
     setBrand("online");
   });
   socket.addEventListener("close", () => {
+    // A proxy that rewrites HTTP happily drops the hop-by-hop headers a
+    // WebSocket needs, so not every host in front of this answers an upgrade.
+    // The request plane is the same calls one at a time; use it and keep trying
+    // the socket so a fixed gateway upgrades on its own.
+    state.transport = "http";
     setBrand("degraded");
-    // A page that silently stops answering is worse than one that says so; try
-    // again, and leave the call alone — it does not run over this socket.
-    setTimeout(connect, 1500);
+    setTimeout(connect, 5000);
   });
-  socket.addEventListener("error", () => setBrand("degraded"));
+  socket.addEventListener("error", () => {
+    state.transport = "http";
+    setBrand("degraded");
+  });
   socket.addEventListener("message", (event) => {
     let frame;
     try { frame = JSON.parse(event.data); } catch { return; }
@@ -435,22 +443,35 @@ function setBrand(mode) {
   brand.classList.toggle("degraded", mode === "degraded");
 }
 
+function settle(result, resolve, reject) {
+  if (result && result.ok !== undefined) resolve(result.ok);
+  else reject(new Error((result && result.err && result.err.message) || "the call failed"));
+}
+
 function call(interfaceName, functionName, params) {
+  const open = state.socket && state.socket.readyState === WebSocket.OPEN;
+  if (!open) return callOverHttp(interfaceName, functionName, params);
   return new Promise((resolve, reject) => {
-    if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
-      reject(new Error("the room service is not connected"));
-      return;
-    }
     const id = String(++state.sequence);
-    state.waiters.set(id, (result) => {
-      if (result && result.ok !== undefined) resolve(result.ok);
-      else reject(new Error((result && result.err && result.err.message) || "the call failed"));
-    });
+    state.waiters.set(id, (result) => settle(result, resolve, reject));
     state.socket.send(JSON.stringify({ v: 1, call: { id, interface: interfaceName, function: functionName, params } }));
     setTimeout(() => {
       if (state.waiters.delete(id)) reject(new Error("the room service did not answer"));
     }, 8000);
   });
+}
+
+/// One call, one request. Same envelope, same grants, same errors.
+async function callOverHttp(interfaceName, functionName, params) {
+  const id = String(++state.sequence);
+  const response = await fetch("/v1/call", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ v: 1, call: { id, interface: interfaceName, function: functionName, params } }),
+  });
+  if (!response.ok) throw new Error(`the room service answered ${response.status}`);
+  const frame = await response.json();
+  return new Promise((resolve, reject) => settle(frame.result, resolve, reject));
 }
 
 // ---------------------------------------------------------------------------
@@ -563,6 +584,7 @@ async function join() {
       name: state.name,
     });
   } catch (error) {
+    console.error("rooms: could not get a grant", error);
     toast(`Could not join: ${error.message}`, true);
     $("tiles").hidden = true;
     $("controls").hidden = true;
@@ -582,13 +604,15 @@ async function join() {
   try {
     await client.connect(grant.url, grant.token);
   } catch (error) {
+    console.error("rooms: LiveKit refused the connection", error);
     toast(`LiveKit refused the connection: ${error.message}`, true);
     state.client = null;
     return;
   }
 
   state.room_handle = client;
-  $("side-transport").textContent = `${new URL(grant.url).host} · ${client.localParticipant.identity}`;
+  const plane = state.transport === "socket" ? "session" : "requests";
+  $("side-transport").textContent = `${new URL(grant.url).host} · ${client.localParticipant.identity} · ${plane}`;
   await client.localParticipant.setMicrophoneEnabled(true).catch(() => setMic(false));
   if (state.camOn) await client.localParticipant.setCameraEnabled(true).catch(() => setCam(false));
 }
