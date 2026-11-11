@@ -1,0 +1,42 @@
+# Elmers runs board. Read-only: it lists what ran and what came back.
+#
+# There is no [ui] entry on purpose — this Spore draws its own view through
+# GPUI rather than handing a Lua module to Canvas. Editing or starting a
+# workflow is a different grant and a different review, so it is not asked for.
+schema = 1
+
+[spore]
+id = "dev.fungos.elmers-ui"
+name = "elmers-ui"
+version = "0.1.0"
+license = "MIT"
+summary = "Read-only board of Elmers workflow runs"
+description = "Lists the sidecar's runs — workflow, status, time, result or error — and shows one in detail. Cannot start, stop, or edit a workflow, and holds no Lua."
+homepage = "https://github.com/fungOS-linux/spores"
+
+[catalog]
+categories = ["developer-tools"]
+keywords = ["elmers", "runs", "workflows", "observability"]
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { present = "0.1.0", canvas = "1.0.0" }
+
+[module]
+path = "module.wasm"
+
+[launch]
+default = "canvas"
+surfaces = ["canvas"]
+
+[grants]
+"soil:http" = "fetch the read-only run list from the sidecar"
+"soil:present" = "draw and present its own surface"
+
+[denied]
+"soil:records" = ["no local store; the run log belongs to the sidecar"]
+
+[presentation]
+badge = "E"
+color = "#f0a26b"
