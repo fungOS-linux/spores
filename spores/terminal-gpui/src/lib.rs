@@ -360,14 +360,18 @@ fn render_frame() -> anyhow::Result<()> {
     })?;
     let any: AnyWindowHandle = window.into();
 
+    let mut dirty = true;
     loop {
-        // `capture_screenshot` renders the last drawn frame; a notify only
-        // marks the view dirty. Draw explicitly so a key update is visible.
-        cx.update_window(any, |_, window, app| {
-            let _ = window.draw(app);
-        })?;
-        let image = cx.capture_screenshot(any)?;
-        present_frame(&context, image.width(), image.height(), image.as_raw())?;
+        if dirty {
+            // `capture_screenshot` renders the last drawn frame; a notify only
+            // marks the view dirty. Draw explicitly so a key update is visible.
+            cx.update_window(any, |_, window, app| {
+                let _ = window.draw(app);
+            })?;
+            let image = cx.capture_screenshot(any)?;
+            present_frame(&context, image.width(), image.height(), image.as_raw())?;
+            dirty = false;
+        }
 
         if !input::interactive() {
             break;
@@ -382,6 +386,7 @@ fn render_frame() -> anyhow::Result<()> {
                     view.last_key = SharedString::from(label);
                     cx.notify();
                 })?;
+                dirty = true;
             }
             None => {}
         }

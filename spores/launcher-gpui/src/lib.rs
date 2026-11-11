@@ -305,12 +305,16 @@ fn run_launcher() -> anyhow::Result<()> {
     })?;
     let any: AnyWindowHandle = window.into();
 
+    let mut dirty = true;
     loop {
-        cx.update_window(any, |_, window, app| {
-            let _ = window.draw(app);
-        })?;
-        let image = cx.capture_screenshot(any)?;
-        present_frame(&context, image.width(), image.height(), image.as_raw())?;
+        if dirty {
+            cx.update_window(any, |_, window, app| {
+                let _ = window.draw(app);
+            })?;
+            let image = cx.capture_screenshot(any)?;
+            present_frame(&context, image.width(), image.height(), image.as_raw())?;
+            dirty = false;
+        }
 
         if !input::interactive() {
             break;
@@ -342,7 +346,9 @@ fn run_launcher() -> anyhow::Result<()> {
                     })?,
                     _ => false,
                 };
-                let _ = changed;
+                if changed {
+                    dirty = true;
+                }
             }
             None => {}
         }
