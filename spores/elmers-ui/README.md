@@ -14,19 +14,45 @@ Two read-only views of Elmers, drawn by GPUI inside a Spore: **runs** and
 
 ## The brain view
 
-`GET /graph` is the same document the dashboard's d3-force brain draws: every
-workflow, the function that owns it, and what it calls. Here it is laid out as
-one column per function — deterministic, no simulation, so the picture only
-changes when the graph does — and selecting a workflow (j/k) lights up the
-workflows it calls, wherever they sit.
+`GET /graph` is the same document the dashboard's d3-force brain draws, and this
+view is a port of that layout rather than a second design. In
+[`src/brain.rs`](src/brain.rs):
 
-Edges are not drawn as lines: the GPUI fork's headless renderer has no rotate or
-path primitive yet, so a graph is expressed by grouping and emphasis rather than
-by a line per link. When the fork grows a line, the layout does not change.
+- one **station per domain** on an ellipse, ordered by owning department so the
+  departments read as arcs, with alternating bands so neighbouring clusters
+  overlap into the gap rather than into each other;
+- every workflow pulled to its station, every **capability** clustered in the
+  core, and a link from a workflow to each capability its steps call;
+- d3's forces — link, local many-body charge, collide, and a pull to the
+  station — integrated 300 times **once**, on load, from a deterministic seed.
+  d3 animates because it has a timer; a picture people learn should not
+  reshuffle on a refresh.
+
+The layout is settled in its own 1280×900 space and fitted to the window, so
+resizing magnifies the picture instead of rearranging it.
+
+| Gesture | Effect |
+|---|---|
+| hover | that node's name, and its links lit |
+| click | opens the panel: owner, steps, spend, gate, calls, and its recent runs |
+| click a run in the panel | jumps to the runs view, on that run |
+| drag | pan |
+| scroll / pinch | zoom about the pointer |
+| `0` | fit the whole graph again |
+| `j`/`k` | next/previous node |
+
+**Edges are drawn as lines.** The earlier note here said the fork could not do
+this; that was wrong. GPUI's `div` has no position or rotation primitives, but
+`canvas` is not a `div`: it hands paint a `Bounds` and a `Window`, and
+`Window::paint_path` strokes a real path — `gpui_apple` (Metal) and `gpui_wgpu`
+(the headless renderer the Spore presents through) both have path pipelines.
+Labels are glyphs shaped with `WindowTextSystem` and painted at a point. The
+graph is therefore painted, not laid out: nodes, bowed edges, halos and station
+names in one canvas pass.
 
 One thing the picture does show: an owner column is whatever `/graph` calls an
 owner, verbatim. A workflow whose frontmatter annotation was parsed with the
-surrounding prose shows up as its own column of one, which is how
+surrounding prose shows up as its own station of one, which is how
 `lib/exec/serves` (owners `['`', 'is', 'deliberately', …]`) was found.
 
 ## Scope

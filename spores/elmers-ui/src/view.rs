@@ -5,7 +5,8 @@
 //! the same code the Spore runs.
 
 use gpui::{
-    AnyElement, Context, IntoElement, Render, SharedString, Window, div, prelude::*, px, rgb,
+    AnyElement, Context, IntoElement, Render, SharedString, Window, canvas, div, prelude::*, px,
+    rgb,
 };
 
 const BG: u32 = 0x0b0f14;
@@ -16,9 +17,6 @@ const MUTED: u32 = 0x6d7b8c;
 const OK: u32 = 0x4f9e5a;
 const BAD: u32 = 0xd14b4b;
 const WAIT: u32 = 0xc9a227;
-const SPEND: u32 = 0xf0a26b;
-const PICKED: u32 = 0x2c3a4c;
-const LINKED: u32 = 0x1e2a37;
 
 pub(crate) const HEADER_H: f32 = 44.0;
 const FOOTER_H: f32 = 26.0;
@@ -113,13 +111,18 @@ pub enum View {
 }
 
 /// One workflow as `GET /graph` describes it: identity, owner, and what it
-/// calls. Everything the brain view draws is in here.
+/// calls. Everything the brain draws is in here.
 pub struct Workflow {
-    name: String,
-    owner: String,
-    links: Vec<String>,
-    model_spend: String,
-    gated: bool,
+    pub(crate) name: String,
+    pub(crate) owner: String,
+    /// Workflows this one runs — the graph's hand-offs.
+    pub(crate) links: Vec<String>,
+    /// Capabilities its steps call, deduplicated: an edge to each, once.
+    pub(crate) calls: Vec<String>,
+    /// Every step, called or not: the node's size is how much is behind it.
+    pub(crate) steps: usize,
+    pub(crate) model_spend: String,
+    pub(crate) gated: bool,
 }
 
 pub(crate) fn parse_graph(body: &[u8]) -> Result<Vec<Workflow>, String> {
@@ -156,10 +159,27 @@ pub(crate) fn parse_graph(body: &[u8]) -> Result<Vec<Workflow>, String> {
                     .collect()
             })
             .unwrap_or_default();
+        let steps = entry
+            .get("steps")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut calls: Vec<String> = Vec::new();
+        for step in &steps {
+            let called = step.get("kind").and_then(serde_json::Value::as_str) == Some("call");
+            let name = step.get("name").and_then(serde_json::Value::as_str);
+            if let (true, Some(name)) = (called, name)
+                && !calls.iter().any(|seen| seen == name)
+            {
+                calls.push(name.to_string());
+            }
+        }
         workflows.push(Workflow {
             name: text("name"),
             owner,
             links,
+            calls,
+            steps: steps.len(),
             model_spend: text("model_spend"),
             gated: entry
                 .get("gated")
@@ -173,7 +193,24 @@ pub(crate) fn parse_graph(body: &[u8]) -> Result<Vec<Workflow>, String> {
 pub struct Board {
     pub view: View,
     workflows: Vec<Workflow>,
+    /// The picked node. The runs list has its own cursor (`selected`); this one
+    /// indexes the brain's nodes, workflows and capabilities alike.
     picked: usize,
+    /// The node under the pointer, if any.
+    hover: Option<usize>,
+    /// Where the graph is looking. Reset with `0`, which is the only way back
+    /// from a zoom someone got lost in.
+    camera: crate::brain::Camera,
+    /// A pan in progress: where the drag began, and the camera pan at that
+    /// moment. A release without movement is a click, not a drag.
+    drag: Option<(gpui::Point<gpui::Pixels>, (f32, f32))>,
+    /// The settled graph. Built when the graph arrives rather than when the tab
+    /// is opened: the forces run once, and an unanswered tab is a blank canvas.
+    brain: Option<std::rc::Rc<crate::brain::Brain>>,
+    /// Where the graph was last painted, in window coordinates. Hit-testing
+    /// needs it and only the paint callback knows it; a cell is cheaper than
+    /// threading bounds through the element tree.
+    graph_bounds: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     graph_error: Option<SharedString>,
     pub graph_at: Option<std::time::Instant>,
     pub runs: Vec<Run>,
@@ -194,6 +231,11 @@ impl Board {
             view: View::Runs,
             workflows: Vec::new(),
             picked: 0,
+            hover: None,
+            camera: Default::default(),
+            drag: None,
+            brain: None,
+            graph_bounds: Default::default(),
             graph_error: None,
             graph_at: None,
             runs: Vec::new(),
@@ -224,9 +266,11 @@ impl Board {
     pub fn apply_graph(&mut self, result: Result<Vec<Workflow>, String>) {
         match result {
             Ok(workflows) => {
-                let keep = self.picked.min(workflows.len().saturating_sub(1));
+                let brain = std::rc::Rc::new(crate::brain::Brain::build(&workflows));
+                self.picked = self.picked.min(brain.node_count().saturating_sub(1));
+                self.hover = None;
+                self.brain = Some(brain);
                 self.workflows = workflows;
-                self.picked = keep;
                 self.graph_error = None;
             }
             Err(error) => self.graph_error = Some(SharedString::from(error)),
@@ -234,11 +278,29 @@ impl Board {
         self.graph_at = Some(std::time::Instant::now());
     }
 
+    /// Back to the whole graph. The one key that recovers from a zoom someone
+    /// got lost in, so it is advertised next to the zoom hint.
+    pub fn fit_graph(&mut self) {
+        self.camera = Default::default();
+    }
+
+    /// Open the graph at a given magnification. The preview uses it to prove
+    /// the zoom renders, and it is the seam a host would use if it ever wanted
+    /// to remember where someone was looking.
+    pub fn zoom_to(&mut self, zoom: f32) {
+        self.camera.zoom = zoom.clamp(crate::brain::Camera::MIN, crate::brain::Camera::MAX);
+    }
+
     pub fn move_picked(&mut self, delta: i32) {
-        if self.workflows.is_empty() {
+        let count = self
+            .brain
+            .as_ref()
+            .map(|brain| brain.node_count())
+            .unwrap_or(0);
+        if count == 0 {
             return;
         }
-        let max = self.workflows.len() as i32 - 1;
+        let max = count as i32 - 1;
         self.picked = (self.picked as i32 + delta).clamp(0, max) as usize;
     }
 
@@ -300,8 +362,8 @@ impl Board {
                     .child(self.tab("runs", View::Runs, "1"))
                     .child(self.tab("brain", View::Brain, "2")),
             )
-            .child(
-                div()
+            .child(match (self.view, &self.brain) {
+                (View::Runs, _) => div()
                     .flex()
                     .items_center()
                     .gap(px(10.0))
@@ -322,8 +384,36 @@ impl Board {
                             .text_size(px(11.0))
                             .text_color(rgb(WAIT))
                             .child(format!("{other} other")),
-                    ),
-            )
+                    )
+                    .into_any_element(),
+                (View::Brain, Some(brain)) => {
+                    let (workflows, capabilities) = brain.summary();
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.0))
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(rgb(WAIT))
+                                .child(format!("{} domains", brain.station_count())),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(rgb(TEXT))
+                                .child(format!("{workflows} workflows")),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(rgb(MUTED))
+                                .child(format!("{capabilities} capabilities")),
+                        )
+                        .into_any_element()
+                }
+                (View::Brain, None) => div().into_any_element(),
+            })
     }
 
     fn list(&self) -> impl IntoElement {
@@ -439,93 +529,276 @@ impl Board {
         panel
     }
 
-    /// The brain: one column per owning function, every workflow a card.
+    /// The brain: the force layout from `brain.rs`, painted by a canvas, with a
+    /// panel that a click opens.
     ///
-    /// The fork has no line or path primitive in the headless renderer, so the
-    /// graph is drawn by grouping and emphasis rather than by edges: selecting
-    /// a workflow lights up the ones it calls, wherever they sit.
-    fn brain_body(&self) -> AnyElement {
-        let mut owners: Vec<&str> = Vec::new();
-        for workflow in &self.workflows {
-            if !owners.contains(&workflow.owner.as_str()) {
-                owners.push(&workflow.owner);
-            }
-        }
-        let picked = self.workflows.get(self.picked);
-        let linked: Vec<&str> = picked
-            .map(|workflow| workflow.links.iter().map(String::as_str).collect())
-            .unwrap_or_default();
+    /// `brain.rs` owns the layout, the colours, the labels and the hit test; this
+    /// function only translates pointer events into a picked node and gives the
+    /// detail panel a place to stand.
+    fn brain_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(brain) = &self.brain else {
+            return div()
+                .flex_1()
+                .p(px(12.0))
+                .child(div().text_size(px(12.0)).text_color(rgb(MUTED)).child(
+                    match &self.graph_error {
+                        Some(error) => error.clone(),
+                        None => SharedString::from("loading the graph…"),
+                    },
+                ))
+                .into_any_element();
+        };
 
-        let mut body = div()
+        // The paint callback is the only place the graph's bounds are known, so
+        // it records them for the hit test that the next mouse event runs.
+        let bounds = self.graph_bounds.clone();
+        let graph = brain.clone();
+        let picked = self.picked.min(brain.node_count().saturating_sub(1));
+        let hover = self.hover;
+        let camera = self.camera;
+        let canvas_element = div()
+            .id("brain")
+            .size_full()
+            .on_scroll(cx.listener(|this, event: &gpui::ScrollEvent, _window, cx| {
+                let Some(bounds) = this.graph_bounds.get() else {
+                    return;
+                };
+                // Lines for a wheel, pixels for a trackpad: both become the same
+                // multiplicative step, so the two devices zoom alike.
+                let step = match event.delta {
+                    gpui::ScrollDelta::Lines(delta) => delta.y,
+                    gpui::ScrollDelta::Pixels(delta) => f32::from(delta.y) / 20.0,
+                };
+                if step == 0.0 {
+                    return;
+                }
+                this.camera = this
+                    .camera
+                    .zoomed(1.12_f32.powf(step), event.position, bounds);
+                cx.notify();
+            }))
+            .on_pinch(cx.listener(|this, event: &gpui::PinchEvent, _window, cx| {
+                if let Some(bounds) = this.graph_bounds.get() {
+                    this.camera = this
+                        .camera
+                        .zoomed(1.0 + event.delta, event.position, bounds);
+                    cx.notify();
+                }
+            }))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                    this.drag = Some((event.position, this.camera.pan));
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(
+                cx.listener(|this, event: &gpui::MouseMoveEvent, _window, cx| {
+                    // Dragging pans; merely moving hovers. A press that has not
+                    // travelled far is still a click waiting to happen.
+                    if let Some((start, pan)) = this.drag {
+                        let dx = f32::from(event.position.x - start.x);
+                        let dy = f32::from(event.position.y - start.y);
+                        if dx.abs() + dy.abs() > 2.0 {
+                            this.camera.pan = (pan.0 + dx, pan.1 + dy);
+                            this.hover = None;
+                            cx.notify();
+                        }
+                        return;
+                    }
+                    let hovered = match (this.brain.as_ref(), this.graph_bounds.get()) {
+                        (Some(brain), Some(bounds)) => {
+                            brain.hit(bounds, this.camera, event.position)
+                        }
+                        _ => None,
+                    };
+                    if this.hover != hovered {
+                        this.hover = hovered;
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_up(
+                gpui::MouseButton::Left,
+                cx.listener(|this, event: &gpui::MouseUpEvent, _window, cx| {
+                    let dragged = this.drag.take().filter(|(start, _)| {
+                        f32::from(event.position.x - start.x).abs()
+                            + f32::from(event.position.y - start.y).abs()
+                            > 2.0
+                    });
+                    if dragged.is_some() {
+                        cx.notify();
+                        return;
+                    }
+                    let clicked = match (this.brain.as_ref(), this.graph_bounds.get()) {
+                        (Some(brain), Some(bounds)) => {
+                            brain.hit(bounds, this.camera, event.position)
+                        }
+                        _ => None,
+                    };
+                    if let Some(node) = clicked {
+                        this.picked = node;
+                    }
+                    cx.notify();
+                }),
+            )
+            .child(
+                canvas(
+                    move |bounds_in, _, _| {
+                        bounds.set(Some(bounds_in));
+                    },
+                    move |bounds_in, _, window, cx| {
+                        graph.paint(bounds_in, camera, Some(picked), hover, window, cx)
+                    },
+                )
+                .size_full(),
+            );
+
+        div()
             .flex_1()
-            .p(px(12.0))
             .flex()
             .flex_row()
-            .gap(px(10.0))
-            .overflow_hidden();
-        if self.workflows.is_empty() {
-            body = body.child(div().text_size(px(12.0)).text_color(rgb(MUTED)).child(
-                match &self.graph_error {
-                    Some(error) => error.clone(),
-                    None => SharedString::from("loading the graph…"),
-                },
-            ));
-            return body.into_any_element();
+            .overflow_hidden()
+            .child(div().flex_1().overflow_hidden().child(canvas_element))
+            .child(self.brain_detail(cx))
+            .into_any_element()
+    }
+
+    /// The panel a click opens: what the node is, and — for a workflow — the
+    /// runs of it the board already has. A run row is a door back into the
+    /// runs view, opened on that run.
+    fn brain_detail(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(detail) = self
+            .brain
+            .as_ref()
+            .and_then(|brain| brain.detail(self.picked))
+        else {
+            return div().into_any_element();
+        };
+        let mut panel = div()
+            .w(px(320.0))
+            .flex_shrink_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .p(px(14.0))
+            .bg(rgb(PANEL))
+            .border_l(px(1.0))
+            .border_color(rgb(0x1f2933))
+            .overflow_hidden()
+            .child(
+                div()
+                    .text_size(px(13.0))
+                    .text_color(rgb(TEXT))
+                    .child(SharedString::from(detail.name.clone())),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(rgb(WAIT))
+                            .child(SharedString::from(detail.kind)),
+                    )
+                    .child(div().text_size(px(10.0)).text_color(rgb(MUTED)).child(
+                        SharedString::from(detail.station.clone().unwrap_or_default()),
+                    )),
+            );
+        for (label, value) in &detail.rows {
+            panel = panel.child(
+                div()
+                    .flex()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .w(px(78.0))
+                            .flex_shrink_0()
+                            .text_size(px(10.0))
+                            .text_color(rgb(MUTED))
+                            .child(SharedString::from(*label)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(10.0))
+                            .text_color(rgb(0xb9c4d1))
+                            .child(SharedString::from(value.clone())),
+                    ),
+            );
         }
-        body.children(owners.iter().map(|owner| {
-            let cards: Vec<&Workflow> = self
-                .workflows
-                .iter()
-                .filter(|workflow| workflow.owner == *owner)
-                .collect();
-            div()
-                .w(px(196.0))
-                .flex()
-                .flex_col()
-                .gap(px(3.0))
-                .overflow_hidden()
+
+        let runs: Vec<(usize, &Run)> = self
+            .runs
+            .iter()
+            .enumerate()
+            .filter(|(_, run)| run.workflow == detail.name)
+            .take(8)
+            .collect();
+        if !runs.is_empty() {
+            panel = panel.child(
+                div()
+                    .mt(px(6.0))
+                    .text_size(px(10.0))
+                    .text_color(rgb(MUTED))
+                    .child(format!("recent runs · {}", runs.len())),
+            );
+            panel = panel.children(runs.into_iter().map(|(index, run)| {
+                div()
+                    .id(("run", index))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |this, _: &gpui::MouseDownEvent, _window, cx| {
+                            this.selected = index;
+                            this.view = View::Runs;
+                            cx.notify();
+                        }),
+                    )
+                    .child(
+                        div()
+                            .w(px(5.0))
+                            .h(px(5.0))
+                            .rounded(px(3.0))
+                            .bg(rgb(run.status_color())),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(10.0))
+                            .text_color(rgb(0xb9c4d1))
+                            .child(SharedString::from(run.when.clone())),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(rgb(MUTED))
+                            .child(SharedString::from(run.status.clone())),
+                    )
+            }));
+        }
+        if !detail.callers.is_empty() {
+            panel = panel
                 .child(
                     div()
-                        .text_size(px(11.0))
-                        .text_color(rgb(WAIT))
-                        .child(SharedString::from(format!("{owner} · {}", cards.len()))),
+                        .mt(px(6.0))
+                        .text_size(px(10.0))
+                        .text_color(rgb(MUTED))
+                        .child(format!("called by · {}", detail.callers.len())),
                 )
-                .children(cards.into_iter().map(|workflow| {
-                    let is_picked = picked.map(|p| p.name == workflow.name).unwrap_or(false);
-                    let is_linked = linked.contains(&workflow.name.as_str());
-                    let fill = if is_picked {
-                        PICKED
-                    } else if is_linked {
-                        LINKED
-                    } else {
-                        PANEL
-                    };
-                    let dot = if workflow.gated {
-                        BAD
-                    } else if workflow.model_spend != "none" && !workflow.model_spend.is_empty() {
-                        SPEND
-                    } else {
-                        MUTED
-                    };
+                .children(detail.callers.iter().take(20).map(|caller| {
                     div()
-                        .px(px(6.0))
-                        .py(px(3.0))
-                        .bg(rgb(fill))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(6.0))
-                        .child(div().w(px(5.0)).h(px(5.0)).rounded(px(3.0)).bg(rgb(dot)))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_size(px(10.0))
-                                .text_color(rgb(if is_picked { TEXT } else { 0xb9c4d1 }))
-                                .child(SharedString::from(workflow.name.clone())),
-                        )
-                }))
-        }))
-        .into_any_element()
+                        .text_size(px(10.0))
+                        .text_color(rgb(0xb9c4d1))
+                        .child(SharedString::from(caller.clone()))
+                }));
+        }
+        panel.into_any_element()
     }
 
     fn footer(&self) -> impl IntoElement {
@@ -542,27 +815,43 @@ impl Board {
                     .text_color(rgb(MUTED))
                     .child(match self.view {
                         View::Runs => "j/k move   r refresh   1 runs   2 brain   q quit",
-                        View::Brain => "j/k pick   r reload graph   1 runs   2 brain   q quit",
+                        View::Brain => {
+                            "drag pan   scroll zoom   0 fit   j/k pick   r reload   1 runs   2 brain   q quit"
+                        }
                     }),
             )
             .child(
                 div()
                     .text_size(px(10.0))
                     .text_color(rgb(MUTED))
-                    .child(SharedString::from(match self.fetched_at {
-                        Some(at) => format!(
-                            "{} runs · refreshed {:.0}s ago",
-                            self.runs.len(),
-                            at.elapsed().as_secs_f32()
-                        ),
-                        None => format!("{} runs", self.runs.len()),
+                    .child(SharedString::from(match (self.view, &self.brain) {
+                        (View::Brain, Some(brain)) => {
+                            match (
+                                brain.name_of(self.picked),
+                                brain.station_of(self.picked),
+                            ) {
+                                (Some(name), Some(station)) => {
+                                    format!("{name} · {}", station.name)
+                                }
+                                (Some(name), None) => name.to_string(),
+                                _ => format!("{} domains", brain.station_count()),
+                            }
+                        }
+                        _ => match self.fetched_at {
+                            Some(at) => format!(
+                                "{} runs · refreshed {:.0}s ago",
+                                self.runs.len(),
+                                at.elapsed().as_secs_f32()
+                            ),
+                            None => format!("{} runs", self.runs.len()),
+                        },
                     })),
             )
     }
 }
 
 impl Render for Board {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .flex()
@@ -579,7 +868,7 @@ impl Render for Board {
                     .child(self.list())
                     .child(self.detail())
                     .into_any_element(),
-                View::Brain => self.brain_body(),
+                View::Brain => self.brain_body(cx),
             })
             .child(self.footer())
     }
@@ -645,5 +934,85 @@ mod tests {
         assert_eq!(workflows[0].owner, "unowned");
         assert!(workflows[0].links.is_empty());
         assert!(!workflows[0].gated);
+    }
+
+    #[test]
+    fn a_pointer_over_a_dot_picks_that_dot_and_nowhere_else_does() {
+        let body = br#"{"workflows":[
+            {"name":"dev/a","owners":["cto"],"steps":[{"kind":"call","name":"agent"}]},
+            {"name":"dev/b","owners":["cto"]},
+            {"name":"ops/c","owners":["coo"]}
+        ]}"#;
+        let workflows = parse_graph(body).expect("a small graph parses");
+        let brain = crate::brain::Brain::build(&workflows);
+        let bounds = gpui::Bounds {
+            origin: gpui::point(gpui::px(0.0), gpui::px(0.0)),
+            size: gpui::size(
+                gpui::px(crate::brain::SPACE.0),
+                gpui::px(crate::brain::SPACE.1),
+            ),
+        };
+        // Far from every node: nothing is picked, so a click on blank canvas
+        // does not silently open whichever node happens to be first.
+        let camera = crate::brain::Camera::default();
+        assert_eq!(
+            brain.hit(bounds, camera, gpui::point(gpui::px(2.0), gpui::px(2.0))),
+            None
+        );
+
+        let mut seen = 0;
+        while let Some(node) = brain.workflow_at(seen) {
+            let centre = brain.centre_of(node).expect("a placed node has a centre");
+            assert_eq!(
+                brain.hit(bounds, camera, centre),
+                Some(node),
+                "a pointer on a node's centre must pick that node"
+            );
+            seen += 1;
+        }
+        assert_eq!(
+            seen,
+            workflows.len(),
+            "every workflow is reachable by pointer"
+        );
+    }
+
+    #[test]
+    fn zooming_keeps_the_node_under_the_pointer_and_panning_moves_it() {
+        let body = br#"{"workflows":[
+            {"name":"dev/a","owners":["cto"],"steps":[{"kind":"call","name":"agent"}]},
+            {"name":"ops/c","owners":["coo"]}
+        ]}"#;
+        let workflows = parse_graph(body).expect("a small graph parses");
+        let brain = crate::brain::Brain::build(&workflows);
+        let bounds = gpui::Bounds {
+            origin: gpui::point(gpui::px(0.0), gpui::px(0.0)),
+            size: gpui::size(
+                gpui::px(crate::brain::SPACE.0),
+                gpui::px(crate::brain::SPACE.1),
+            ),
+        };
+        let node = brain.workflow_at(0).expect("the first workflow is a node");
+        let centre = brain.centre_of(node).expect("a placed node has a centre");
+
+        // Zooming about a point is only worth having if that point stays put.
+        let zoomed = crate::brain::Camera::default().zoomed(3.0, centre, bounds);
+        assert_eq!(
+            brain.hit(bounds, zoomed, centre),
+            Some(node),
+            "the node under the pointer must not slide out from under it"
+        );
+
+        // Panning by a drag moves the picture by exactly that drag.
+        let panned = crate::brain::Camera {
+            zoom: 1.0,
+            pan: (40.0, -25.0),
+        };
+        let moved = gpui::point(centre.x + gpui::px(40.0), centre.y - gpui::px(25.0));
+        assert_eq!(
+            brain.hit(bounds, panned, moved),
+            Some(node),
+            "a pan shifts the picture by exactly the drag"
+        );
     }
 }

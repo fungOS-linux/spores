@@ -34,6 +34,7 @@ const GRAPH_URL: &str = "http://127.0.0.1:8792/graph";
 const MAX_BODY: u32 = 512 * 1024;
 const TIMEOUT_MS: u32 = 5_000;
 
+pub mod brain;
 pub mod view;
 
 use view::{Board, HEADER_H, LIST_W, ROW_H, View, parse_graph, parse_runs};
@@ -231,6 +232,13 @@ fn render_frame() -> anyhow::Result<()> {
                                 if stale {
                                     board.apply_graph(fetch_graph(GRAPH_URL));
                                 }
+                                cx.notify();
+                            })?;
+                            dirty = true;
+                        }
+                        "0" => {
+                            window.update(&mut cx, |board, _, cx| {
+                                board.fit_graph();
                                 cx.notify();
                             })?;
                             dirty = true;

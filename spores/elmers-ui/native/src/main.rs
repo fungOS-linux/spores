@@ -9,10 +9,13 @@
 //! ```text
 //! cargo run -- --runs /tmp/elmers-runs.json --graph /tmp/elmers-graph.json
 //! cargo run -- --runs … --graph … --brain    # open on the graph
+//! cargo run -- --brain --zoom 2.5            # …at a magnification
 //! ```
 //!
 //! Keys are the Spore's: `1` runs, `2` brain, `j`/`k` move, `r` reload, `q` quit.
 
+#[path = "../../src/brain.rs"]
+mod brain;
 #[path = "../../src/view.rs"]
 mod view;
 
@@ -65,6 +68,7 @@ fn main() {
         graph: PathBuf::from("/tmp/elmers-graph.json"),
     };
     let mut start = View::Runs;
+    let mut zoom: Option<f32> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -78,6 +82,10 @@ fn main() {
                 None => fail("--graph needs a path"),
             },
             "--brain" => start = View::Brain,
+            "--zoom" => match args.next().map(|value| value.parse::<f32>()) {
+                Some(Ok(value)) => zoom = Some(value),
+                _ => fail("--zoom needs a number"),
+            },
             other => fail(&format!("unknown argument {other}")),
         }
     }
@@ -95,6 +103,9 @@ fn main() {
         let board = cx.new(|_| {
             let mut board = Board::new();
             board.view = start;
+            if let Some(zoom) = zoom {
+                board.zoom_to(zoom);
+            }
             board.apply_runs(source.runs());
             board.apply_graph(source.graph());
             board
@@ -158,6 +169,10 @@ fn bind_keys(cx: &mut App, board: gpui::Entity<Board>, source: Source) {
                     View::Runs => board.move_selection(-1),
                     View::Brain => board.move_picked(-1),
                 }
+                cx.notify();
+            }),
+            "0" => keys.update(cx, |board, cx| {
+                board.fit_graph();
                 cx.notify();
             }),
             "r" => keys.update(cx, |board, cx| {
