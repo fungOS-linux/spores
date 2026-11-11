@@ -77,6 +77,13 @@ reader/editor that proves the split:
   hot-reloads it, so an agent can restyle a running app without a rebuild.
 - **Canvas** lays out and renders all three surfaces.
 
+A Spore can also own its drawing when it needs GPUI semantics: it lays out an
+offscreen GPUI window, renders through `wasi:webgpu`, and presents the texture
+through `soil:canvas-gpu`. The host still owns the window, compositor, input,
+and capture; no native surface enters the guest. [`spores/vitals-view`](spores/vitals-view)
+is the working example. The Lua path above remains the renderer-independent
+option; the GPU path trades host portability for GPUI layout and text.
+
 The hosts are still landing. What already holds is the contract: the snapshot
 shape, the Lua entry point, and the rule that a Spore cannot tell which host is
 drawing it. See [`docs/host-contract.md`](docs/host-contract.md).
@@ -103,6 +110,7 @@ spores/files               VFS browser + storage census (files.myc)
 spores/unibus              read-only inbox (dev.fungos.inbox)
 spores/worklog             cross-tool timeline (dev.fungos.worklog)
 spores/vitals              cross-device health fusion (dev.fungos.vitals)
+spores/vitals-view         GPUI vitals cards over wasi:webgpu + soil:canvas-gpu
 spores/terminal            terminal Spore
 spores/terminal-core       terminal semantics shared by the tmux and host front ends
 spores/terminal-host       native terminal host
