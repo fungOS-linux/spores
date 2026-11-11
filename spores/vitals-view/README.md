@@ -10,8 +10,8 @@ A **Spore UI**, not a native companion app. The guest:
 
 Canvas owns the window, compositor, input, and capture. The Spore owns the UI
 structure, labels, values, units, sources, freshness, and the no-total rule. The
-rings are display scales, not a second health policy: Move uses the highest
-fresh per-device step estimate and never a sum. No window, swapchain, or native handle
+rings are display scales, not a second health policy: Move uses the fused
+per-bucket step estimate and never a sum. No window, swapchain, or native handle
 enters the guest.
 
 ![vitals-view rendered through soil:canvas-gpu](assets/vitals-view.png)

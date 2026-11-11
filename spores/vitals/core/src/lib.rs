@@ -56,6 +56,51 @@ impl Default for Policy {
     }
 }
 
+/// Step deltas are compared in five-minute buckets. Devices that have no
+/// sample in a bucket cannot contribute to it.
+pub const STEP_BUCKET_MS: u64 = 5 * 60 * 1_000;
+const DAY_MS: u64 = 24 * 60 * 60 * 1_000;
+
+/// Windowed step estimate built from cumulative per-device counters.
+///
+/// A counter decrease is treated as a reset; each delta is attributed to the
+/// five-minute bucket containing the later sample. The first sample seeds its
+/// bucket with the count accumulated before observation. The day starts at UTC
+/// midnight; local timezone is a future profile input. `confidence` is the
+/// fraction of day buckets covered by any device, not a claim about step
+/// accuracy.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepEstimate {
+    pub value: Option<u64>,
+    pub source_device: Option<String>,
+    pub policy: &'static str,
+    pub confidence: f64,
+    pub buckets_covered: u32,
+    pub buckets_total: u32,
+    pub contributors: BTreeMap<String, u64>,
+    pub window_start: u64,
+    pub window_end: u64,
+}
+
+impl StepEstimate {
+    #[must_use]
+    pub fn to_json(&self) -> Value {
+        json!({
+            "value": self.value,
+            "source_device": self.source_device,
+            "policy": self.policy,
+            "confidence": self.confidence,
+            "coverage": {
+                "covered_buckets": self.buckets_covered,
+                "total_buckets": self.buckets_total,
+                "bucket_ms": STEP_BUCKET_MS,
+            },
+            "contributors": self.contributors,
+            "window": {"start": self.window_start, "end": self.window_end},
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Signal {
     pub signal_id: String,
@@ -148,6 +193,7 @@ pub struct Vitals {
     pub temperature_c: Option<Reading>,
     pub sleep: Option<Reading>,
     pub steps: BTreeMap<String, u64>,
+    pub step_estimate: StepEstimate,
     pub motion: Option<Reading>,
     pub primary_motion_device: Option<String>,
     pub devices: BTreeSet<String>,
@@ -155,52 +201,12 @@ pub struct Vitals {
 }
 
 impl Vitals {
-    /// The highest fresh per-device step total, with its source.
-    ///
-    /// Devices observe the same steps, so summing them double-counts. Taking
-    /// the highest total is the conservative first cut: it uses the device
-    /// with the most coverage, but still assumes the devices cover the same
-    /// window. A per-bucket max is the next step when independent coverage
-    /// windows are available.
-    #[must_use]
-    pub fn step_estimate(&self) -> (Option<&str>, Option<u64>) {
-        let primary = self.primary_motion_device.as_deref();
-        let mut best: Option<(&str, u64)> = None;
-        for (device, count) in &self.steps {
-            let better = match best {
-                None => true,
-                Some((best_device, best_count)) => {
-                    *count > best_count
-                        || (*count == best_count
-                            && primary == Some(device.as_str())
-                            && primary != Some(best_device))
-                }
-            };
-            if better {
-                best = Some((device.as_str(), *count));
-            }
-        }
-        match best {
-            Some((device, count)) => (Some(device), Some(count)),
-            None => (None, None),
-        }
-    }
-
-    fn step_estimate_json(&self) -> Value {
-        let (source_device, value) = self.step_estimate();
-        json!({
-            "value": value,
-            "source_device": source_device,
-            "policy": "max-fresh-device",
-        })
-    }
-
     #[must_use]
     pub fn to_json(&self) -> Value {
         let steps = json!({
             "by_device": self.steps,
             "primary_device": self.primary_motion_device,
-            "estimate": self.step_estimate_json(),
+            "estimate": self.step_estimate.to_json(),
         });
         json!({
             "schema": SCHEMA,
@@ -222,7 +228,7 @@ impl Vitals {
     #[must_use]
     pub fn to_view(&self) -> Value {
         let rings = activity_rings(self);
-        let step_estimate = self.step_estimate_json();
+        let step_estimate = self.step_estimate.to_json();
         let cards = vec![
             card("heart_rate", "Heart rate", self.heart_rate.as_ref(), "bpm"),
             card("hrv", "HRV", self.hrv.as_ref(), "ms"),
@@ -265,7 +271,8 @@ impl Vitals {
 }
 
 fn activity_rings(vitals: &Vitals) -> Vec<Value> {
-    let (move_source, move_value) = vitals.step_estimate();
+    let move_value = vitals.step_estimate.value;
+    let move_source = vitals.step_estimate.source_device.as_deref();
     let move_ring = json!({
         "id": "move",
         "label": "Move",
@@ -278,7 +285,7 @@ fn activity_rings(vitals: &Vitals) -> Vec<Value> {
         } else {
             "unknown"
         },
-        "detail": "highest fresh device",
+        "detail": vitals.step_estimate.policy,
     });
 
     let heart_value = vitals
@@ -403,6 +410,7 @@ pub fn fuse(signals: &[Signal], wearer: &str, now: u64, policy: Policy) -> Vital
     let motion = motion.map(motion_reading);
 
     let steps = steps_by_device(&visible, now, policy);
+    let step_estimate = estimate_steps(&visible, now, &steps, primary_motion_device.as_deref());
     let window_start = visible
         .iter()
         .map(|signal| signal.observed_at)
@@ -419,6 +427,7 @@ pub fn fuse(signals: &[Signal], wearer: &str, now: u64, policy: Policy) -> Vital
         temperature_c,
         sleep,
         steps,
+        step_estimate,
         motion,
         primary_motion_device,
         devices,
@@ -489,6 +498,181 @@ pub fn steps_by_device(signals: &[&Signal], now: u64, policy: Policy) -> BTreeMa
         .into_iter()
         .map(|(device, (_, count))| (device, count))
         .collect()
+}
+
+fn estimate_steps(
+    signals: &[&Signal],
+    now: u64,
+    latest: &BTreeMap<String, u64>,
+    primary: Option<&str>,
+) -> StepEstimate {
+    let day_start = now - now % DAY_MS;
+    let buckets_total = ((now - day_start) / STEP_BUCKET_MS + 1) as u32;
+
+    let mut samples: BTreeMap<String, Vec<(u64, u64)>> = BTreeMap::new();
+    for signal in signals {
+        if signal.kind != "body.steps.v1" || signal.observed_at > now {
+            continue;
+        }
+        let Some(count) = signal.value.get("count").and_then(Value::as_u64) else {
+            continue;
+        };
+        samples
+            .entry(signal.source_device.clone())
+            .or_default()
+            .push((signal.observed_at, count));
+    }
+
+    let mut buckets: BTreeMap<u64, BTreeMap<String, u64>> = BTreeMap::new();
+    for (device, mut points) in samples {
+        points.sort_by_key(|(at, _)| *at);
+        points.dedup_by_key(|(at, _)| *at);
+        let Some(first) = points.first().copied() else {
+            continue;
+        };
+
+        // A cumulative counter's first sample already contains steps since the
+        // day boundary. Seed that bucket so the estimate does not start at zero
+        // just because the first sample arrived late.
+        if first.0 >= day_start && first.1 > 0 {
+            let bucket = first.0 - first.0 % STEP_BUCKET_MS;
+            if bucket >= day_start {
+                buckets
+                    .entry(bucket)
+                    .or_default()
+                    .entry(device.clone())
+                    .and_modify(|total| *total += first.1)
+                    .or_insert(first.1);
+            }
+        }
+
+        let mut previous = first;
+        for current in points.into_iter().skip(1) {
+            if current.0 <= previous.0 || current.0 > now {
+                continue;
+            }
+            let delta = if current.1 >= previous.1 {
+                current.1 - previous.1
+            } else {
+                // A counter reset is new steps since the reset, not a negative
+                // delta. The bucket is still attributable to the later sample.
+                current.1
+            };
+            if delta > 0 && current.0 >= day_start {
+                let bucket = current.0 - current.0 % STEP_BUCKET_MS;
+                if bucket >= day_start {
+                    buckets
+                        .entry(bucket)
+                        .or_default()
+                        .entry(device.clone())
+                        .and_modify(|total| *total += delta)
+                        .or_insert(delta);
+                }
+            }
+            previous = current;
+        }
+    }
+
+    let mut value = 0u64;
+    let mut contributors = BTreeMap::new();
+    let mut covered = 0u32;
+    for deltas in buckets.values() {
+        let Some((device, delta)) = best_bucket(deltas, primary) else {
+            continue;
+        };
+        if delta == 0 {
+            continue;
+        }
+        covered += 1;
+        value = value.saturating_add(delta);
+        *contributors.entry(device.to_string()).or_insert(0) += delta;
+    }
+
+    if covered > 0 {
+        return StepEstimate {
+            value: Some(value),
+            source_device: Some("fused".to_string()),
+            policy: "per-bucket-max",
+            confidence: f64::from(covered) / f64::from(buckets_total.max(1)),
+            buckets_covered: covered,
+            buckets_total,
+            contributors,
+            window_start: day_start,
+            window_end: now,
+        };
+    }
+
+    if let Some((device, value)) = best_step_total(latest, primary) {
+        let mut contributors = BTreeMap::new();
+        contributors.insert(device.to_string(), value);
+        return StepEstimate {
+            value: Some(value),
+            source_device: Some(device.to_string()),
+            policy: "max-fresh-device",
+            confidence: 1.0,
+            buckets_covered: 0,
+            buckets_total,
+            contributors,
+            window_start: day_start,
+            window_end: now,
+        };
+    }
+
+    StepEstimate {
+        value: None,
+        source_device: None,
+        policy: "max-fresh-device",
+        confidence: 0.0,
+        buckets_covered: 0,
+        buckets_total,
+        contributors: BTreeMap::new(),
+        window_start: day_start,
+        window_end: now,
+    }
+}
+
+fn best_bucket<'a>(
+    deltas: &'a BTreeMap<String, u64>,
+    primary: Option<&str>,
+) -> Option<(&'a str, u64)> {
+    let mut best: Option<(&str, u64)> = None;
+    for (device, delta) in deltas {
+        let better = match best {
+            None => true,
+            Some((best_device, best_delta)) => {
+                *delta > best_delta
+                    || (*delta == best_delta
+                        && primary == Some(device.as_str())
+                        && primary != Some(best_device))
+            }
+        };
+        if better {
+            best = Some((device.as_str(), *delta));
+        }
+    }
+    best
+}
+
+fn best_step_total<'a>(
+    latest: &'a BTreeMap<String, u64>,
+    primary: Option<&str>,
+) -> Option<(&'a str, u64)> {
+    let mut best: Option<(&str, u64)> = None;
+    for (device, count) in latest {
+        let better = match best {
+            None => true,
+            Some((best_device, best_count)) => {
+                *count > best_count
+                    || (*count == best_count
+                        && primary == Some(device.as_str())
+                        && primary != Some(best_device))
+            }
+        };
+        if better {
+            best = Some((device.as_str(), *count));
+        }
+    }
+    best
 }
 
 fn freshness_name(freshness: Freshness) -> &'static str {
@@ -754,7 +938,8 @@ mod tests {
         assert_eq!(json["wearer"], "owner");
         assert_eq!(json["steps"]["by_device"]["sim-ring"], 9_000);
         assert_eq!(json["steps"]["estimate"]["value"], 9_000);
-        assert_eq!(json["steps"]["estimate"]["source_device"], "sim-ring");
+        assert_eq!(json["steps"]["estimate"]["source_device"], "fused");
+        assert_eq!(json["steps"]["estimate"]["policy"], "per-bucket-max");
     }
 
     #[test]
@@ -763,12 +948,42 @@ mod tests {
     }
 
     #[test]
-    fn step_estimate_prefers_the_motion_primary_on_a_tie() {
-        let now = 10_000;
-        let mut vitals = fuse(&seeded(now), "owner", now, Policy::default());
-        vitals.steps.insert("sim-pinetime".into(), 5_000);
-        vitals.steps.insert("sim-ring".into(), 5_000);
-        assert_eq!(vitals.step_estimate(), (Some("sim-pinetime"), Some(5_000)));
+    fn per_bucket_max_uses_historical_steps_and_not_a_total() {
+        let now = 3_600_000;
+        let mut signals = Vec::new();
+        let mut push = |device: &str, at: u64, count: u64| {
+            signals.push(Signal {
+                signal_id: format!("{device}:{at}"),
+                kind: "body.steps.v1".into(),
+                source_device: device.into(),
+                source_spore: "test".into(),
+                wearer: Some("owner".into()),
+                observed_at: at,
+                quality: 1.0,
+                value: json!({"count": count}),
+            });
+        };
+        for (at, watch, ring) in [
+            (1_500_000, 200, 120),
+            (1_800_000, 400, 300),
+            (2_100_000, 600, 500),
+            (2_400_000, 800, 700),
+        ] {
+            push("sim-pinetime", at, watch);
+            push("sim-ring", at, ring);
+        }
+
+        let vitals = fuse(&signals, "owner", now, Policy::default());
+        assert!(vitals.steps.is_empty(), "samples are intentionally stale");
+        assert_eq!(vitals.step_estimate.value, Some(800));
+        assert_eq!(vitals.step_estimate.policy, "per-bucket-max");
+        assert_eq!(vitals.step_estimate.source_device.as_deref(), Some("fused"));
+        assert_eq!(vitals.step_estimate.buckets_covered, 4);
+        assert_eq!(
+            vitals.step_estimate.contributors.get("sim-pinetime"),
+            Some(&800)
+        );
+        assert_ne!(vitals.step_estimate.value, Some(1_500));
     }
 
     #[test]
@@ -792,12 +1007,13 @@ mod tests {
         let rings = view["rings"].as_array().expect("rings");
         let move_ring = rings.iter().find(|ring| ring["id"] == "move").unwrap();
         assert_eq!(move_ring["value"], 9_000);
-        assert_eq!(move_ring["source_device"], "sim-ring");
+        assert_eq!(move_ring["source_device"], "fused");
         assert!(move_ring.get("total").is_none());
 
         assert_eq!(view["steps"]["estimate"]["value"], 9_000);
-        assert_eq!(view["steps"]["estimate"]["source_device"], "sim-ring");
-        assert_eq!(view["steps"]["estimate"]["policy"], "max-fresh-device");
+        assert_eq!(view["steps"]["estimate"]["source_device"], "fused");
+        assert_eq!(view["steps"]["estimate"]["policy"], "per-bucket-max");
+        assert_eq!(view["steps"]["estimate"]["contributors"]["sim-ring"], 9_000);
         assert_ne!(view["steps"]["estimate"]["value"], 4_231 + 9_000);
 
         let heart_ring = rings.iter().find(|ring| ring["id"] == "heart").unwrap();

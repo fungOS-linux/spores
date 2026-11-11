@@ -46,22 +46,25 @@ vitals loop [--wearer W] [--iterations N] [--interval-ms N]
   "title": "Vitals",
   "wearer": "owner",
   "rings": [
-    {"id":"move","label":"Move","value":9000,"max":10000,"unit":"steps","source_device":"sim-ring","freshness":"fresh","detail":"highest fresh device"},
+    {"id":"move","label":"Move","value":9000,"max":10000,"unit":"steps","source_device":"fused","freshness":"fresh","detail":"per-bucket-max"},
     {"id":"heart","label":"Heart","value":58,"max":180,"unit":"bpm","source_device":"sim-ring","freshness":"fresh"},
     {"id":"oxygen","label":"Oxygen","value":97,"max":100,"unit":"%","source_device":"sim-ring","freshness":"fresh"}
   ],
   "cards": [{"id":"heart_rate","label":"Heart rate","value":58,"unit":"bpm","source_device":"sim-ring","freshness":"fresh"}],
-  "steps": {"rows":[{"device":"sim-pinetime","count":4231},{"device":"sim-ring","count":9000}],"primary_device":"sim-pinetime","estimate":{"value":9000,"source_device":"sim-ring","policy":"max-fresh-device"}},
+  "steps": {"rows":[{"device":"sim-pinetime","count":4231},{"device":"sim-ring","count":9000}],"primary_device":"sim-pinetime","estimate":{"value":9000,"source_device":"fused","policy":"per-bucket-max","contributors":{"sim-ring":9000}}},
   "empty": false
 }
 ```
 
 The rings are display scales for the current readings, not a second fusion
-policy. Move uses the highest fresh per-device step total (`steps.estimate`),
-breaking ties toward the motion-primary device; there is deliberately no step
-`total` field. This is the conservative first cut: devices usually see the same
-steps, so summing double-counts, but max-of-totals still assumes they cover the
-same window. A per-bucket max is the next step when coverage windows differ.
+policy. Move uses `steps.estimate`: per-device cumulative step signals are
+turned into deltas, a counter decrease is treated as a reset, each delta lands
+in the five-minute bucket containing the later sample, and the estimate is the
+sum of the per-bucket maxima. There is deliberately no step `total` field.
+`source_device` is `fused`; `contributors` records which device won which
+buckets, and `confidence` is the fraction of UTC-day buckets covered. Sparse
+sampling lowers coverage, and the current implementation attributes a delta to
+the later sample's bucket rather than interpolating at bucket boundaries.
 A GPUI host composes the rings and cards into the actual window; the Spore owns
 the labels, values, units, sources, freshness, and the no-sum rule.
 
