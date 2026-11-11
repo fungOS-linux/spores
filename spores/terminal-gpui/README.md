@@ -48,3 +48,8 @@ resize are still in `spores/terminal`, which links libghostty-vt and imports
 `soil:mycelium`. Moving those into this component is the next step; it needs a
 host that provides both `wasi:webgpu`/`soil:present` and the Mycelium session
 imports.
+
+## See also
+
+[`docs/gpui-spores.md`](../../docs/gpui-spores.md) is the path every new
+GPUI Spore starts from. This crate is its reference implementation.

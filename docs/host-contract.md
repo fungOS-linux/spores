@@ -10,10 +10,22 @@ if it looks fine on one surface.
 | Canvas | rendering on web, native, and in-window; layout; input normalization; asset resolution | document semantics |
 | Soil | which host to launch, grant enforcement, module lifecycle | view content |
 
-**Rule:** one scene pipeline. The Spore does not ship an HTML renderer, a
-terminal renderer, or a Canvas renderer. Canvas renders all three surfaces from
-the same Lua-produced scene. A Spore that branches on host identity will
-eventually behave differently on one of them.
+The "never owns" column describes the Lua scene pipeline. A GPUI Spore owns
+layout, typography and pixels; it still never owns a window, a device handle,
+or an input device.
+
+**Rule (scene spores):** one scene pipeline. A scene Spore does not ship an
+HTML renderer, a terminal renderer, or a Canvas renderer. Canvas renders all
+three surfaces from the same Lua-produced scene. A Spore that branches on host
+identity will eventually behave differently on one of them.
+
+**GPUI spores are the second, deliberate model.** A new Spore that draws its
+own interface renders it with GPUI inside the Spore and hands the host a
+texture; the host still owns the WebGPU device and the compositor. The
+boundary is the same one — no window, swapchain, or native handle — but
+layout, typography and pixels belong to the Spore. See
+[`gpui-spores.md`](gpui-spores.md). The scene path above remains the contract
+for existing Lua spores and for views that should inherit Canvas chrome.
 
 ## Launch
 
