@@ -37,6 +37,7 @@ surfaces = ["canvas", "web"]
 "soil:mic" = "capture speech while you are in a call"
 "soil:voice" = "carry speech to the other participants"
 "wasi:audio" = "play what the other participants say"
+"soil:room-media" = "mint a room-scoped media token for this browser"
 
 # Media is host-owned, and the Spore composes it: capture through soil:mic,
 # carry speech with soil:voice, play it through wasi:audio. A browser joins the

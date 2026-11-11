@@ -1,0 +1,797 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Rooms</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230b0d10'/><circle cx='16' cy='16' r='6' fill='%237cc4e8'/></svg>">
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #11141a;
+    --panel-2: #161a22;
+    --line: #212734;
+    --line-soft: #1a1f29;
+    --text: #e8edf5;
+    --muted: #8a96a8;
+    --faint: #5d6878;
+    --accent: #7cc4e8;
+    --accent-ink: #06141c;
+    --danger: #e2787c;
+    --ok: #7fd8a4;
+    --radius: 14px;
+    --radius-sm: 9px;
+    --shadow: 0 18px 45px rgba(0,0,0,.45);
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+  input { font: inherit; color: inherit; }
+
+  #app {
+    display: grid;
+    grid-template-columns: 248px minmax(0, 1fr) 300px;
+    grid-template-rows: 56px minmax(0, 1fr);
+    grid-template-areas: "top top top" "rail stage side";
+    height: 100%;
+  }
+
+  /* top */
+  .top {
+    grid-area: top;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 16px;
+    background: linear-gradient(180deg, #0e1116, #0b0d10);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 600; letter-spacing: .2px; }
+  .brand .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--faint);
+    box-shadow: 0 0 0 3px rgba(138,150,168,.12);
+    transition: background .2s, box-shadow .2s;
+  }
+  .brand.online .dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(127,216,164,.16); }
+  .brand.degraded .dot { background: var(--danger); box-shadow: 0 0 0 3px rgba(226,120,124,.16); }
+  .brand small { color: var(--faint); font-weight: 500; letter-spacing: .3px; }
+
+  .room-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+  .room-head h1 {
+    margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .1px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .room-head code {
+    font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--muted);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    padding: 4px 7px;
+    border-radius: 7px;
+  }
+  .top .spacer { flex: 1; }
+  .ghost {
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--text);
+    padding: 7px 12px;
+    border-radius: 9px;
+    font-size: 13px;
+    transition: border-color .15s, background .15s;
+  }
+  .ghost:hover { border-color: #33405280; background: var(--panel-2); }
+  .ghost:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* rail */
+  .rail {
+    grid-area: rail;
+    border-right: 1px solid var(--line-soft);
+    background: #0a0c10;
+    padding: 14px 10px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .rail .label {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .9px; text-transform: uppercase;
+    color: var(--faint); padding: 4px 8px 6px;
+  }
+  .room-item {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; text-align: left;
+    padding: 9px 10px; border-radius: 10px;
+    color: var(--muted);
+    transition: background .12s, color .12s;
+  }
+  .room-item:hover { background: #12161d; color: var(--text); }
+  .room-item.active { background: var(--panel-2); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
+  .room-item .glyph {
+    width: 26px; height: 26px; border-radius: 8px; flex: none;
+    display: grid; place-items: center;
+    background: #1b222e; color: var(--accent);
+    font-size: 11px; font-weight: 700; letter-spacing: .4px;
+  }
+  .room-item .name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rail .join { margin-top: 10px; display: grid; gap: 8px; padding: 10px 8px; border-top: 1px solid var(--line-soft); }
+  .rail .join input {
+    width: 100%; padding: 9px 10px; border-radius: 9px;
+    background: var(--panel); border: 1px solid var(--line);
+    font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    outline: none;
+  }
+  .rail .join input:focus { border-color: #3a4a5f; }
+  .rail .join button {
+    padding: 9px 10px; border-radius: 9px; font-size: 13px; font-weight: 550;
+    background: var(--accent); color: var(--accent-ink);
+    transition: filter .15s;
+  }
+  .rail .join button:hover { filter: brightness(1.07); }
+
+  /* stage */
+  .stage {
+    grid-area: stage;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background:
+      radial-gradient(1200px 600px at 50% -10%, #131a24 0%, transparent 60%),
+      var(--bg);
+  }
+  .stage-body { flex: 1; min-height: 0; padding: 18px; overflow: auto; }
+  .empty {
+    height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; text-align: center; color: var(--muted);
+  }
+  .empty h2 { margin: 0; font-size: 19px; font-weight: 600; color: var(--text); letter-spacing: .1px; }
+  .empty p { margin: 0; max-width: 42ch; line-height: 1.6; }
+  .empty .primary {
+    margin-top: 6px; padding: 11px 20px; border-radius: 11px; font-weight: 600;
+    background: var(--accent); color: var(--accent-ink);
+  }
+  .empty .primary:hover { filter: brightness(1.07); }
+
+  /* How many tiles there are decides the columns: one person fills the stage,
+     two sit side by side, and a full room wraps before it shrinks. */
+  .tiles {
+    display: grid; gap: 12px;
+    height: 100%; padding: 2px;
+    align-content: center; justify-items: center;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .tiles[data-count="1"] { grid-template-columns: minmax(0, 880px); justify-content: center; }
+  .tiles[data-count="5"], .tiles[data-count="6"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .tiles[data-count="7"], .tiles[data-count="8"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .tile {
+    position: relative; overflow: hidden; border-radius: var(--radius);
+    background: #0e1218; border: 1px solid var(--line-soft);
+    width: 100%; max-width: 720px; min-width: 0;
+    aspect-ratio: 16 / 9;
+    box-shadow: 0 8px 24px rgba(0,0,0,.25);
+    transition: box-shadow .2s, border-color .2s, transform .2s;
+  }
+  .tile video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile.mirror video { transform: scaleX(-1); }
+  .tile.screen { grid-column: 1 / -1; max-width: none; aspect-ratio: auto; height: min(62vh, 100%); }
+  .tile.screen video { object-fit: contain; background: #05070a; }
+  .tile.audio-only { display: grid; place-items: center; }
+  .tile .avatar {
+    width: 74px; height: 74px; border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 25px; font-weight: 600; letter-spacing: .5px;
+    color: #dfe9f5;
+    background: radial-gradient(circle at 35% 30%, #2b3646, #151a23 70%);
+    border: 1px solid #2a3444;
+  }
+  .tile.speaking { border-color: rgba(124,196,232,.75); box-shadow: 0 0 0 2px rgba(124,196,232,.5), 0 12px 32px rgba(0,0,0,.35); }
+  .tile .badge {
+    position: absolute; left: 10px; bottom: 10px;
+    display: flex; align-items: center; gap: 7px;
+    padding: 5px 9px; border-radius: 999px;
+    background: rgba(8,10,14,.72); backdrop-filter: blur(8px);
+    font-size: 12px; color: #dbe4ef;
+    max-width: calc(100% - 20px);
+  }
+  .tile .badge .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tile .badge svg { flex: none; opacity: .8; }
+  .tile .badge.muted svg { color: var(--danger); opacity: 1; }
+
+  /* controls */
+  .controls {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    padding: 12px 16px 20px;
+  }
+  .ctl {
+    width: 46px; height: 46px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--panel-2); border: 1px solid var(--line);
+    color: var(--text);
+    transition: background .15s, border-color .15s, transform .08s;
+  }
+  .ctl:hover { background: #1c222c; border-color: #2e3a4b; }
+  .ctl:active { transform: scale(.96); }
+  .ctl.off { background: #2a1a1d; border-color: #43262b; color: var(--danger); }
+  .ctl.leave { background: #34191c; border-color: #4b2429; color: var(--danger); }
+  .ctl.leave:hover { background: #402024; }
+  .ctl svg { width: 20px; height: 20px; }
+
+  /* side */
+  .side {
+    grid-area: side;
+    border-left: 1px solid var(--line-soft);
+    background: #0a0c10;
+    display: flex; flex-direction: column;
+    min-width: 0;
+  }
+  .side .section { padding: 14px 14px 10px; border-bottom: 1px solid var(--line-soft); }
+  .side .label {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .9px; text-transform: uppercase;
+    color: var(--faint); margin-bottom: 10px;
+  }
+  .people { display: flex; flex-direction: column; gap: 2px; }
+  .person {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 6px; border-radius: 9px;
+  }
+  .person:hover { background: #10141b; }
+  .person .avatar {
+    width: 26px; height: 26px; border-radius: 50%; flex: none;
+    display: grid; place-items: center; font-size: 11px; font-weight: 600;
+    background: #1d2430; color: #cfdcea;
+  }
+  .person .who { min-width: 0; }
+  .person .who div { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .person .who span { font-size: 11.5px; color: var(--faint); }
+  .person .state { margin-left: auto; color: var(--faint); }
+  .person .state.muted { color: var(--danger); }
+
+  .side .info { padding: 14px; display: grid; gap: 12px; }
+  .kv { display: grid; gap: 2px; }
+  .kv span { font-size: 11px; color: var(--faint); letter-spacing: .3px; }
+  .kv code {
+    font: 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--muted); word-break: break-all;
+  }
+  .hint { color: var(--faint); font-size: 12px; line-height: 1.6; }
+
+  /* toast */
+  .toast {
+    position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 12px);
+    padding: 10px 16px; border-radius: 11px;
+    background: #1b222c; border: 1px solid var(--line);
+    box-shadow: var(--shadow); font-size: 13px;
+    opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s;
+    z-index: 50; max-width: min(560px, 90vw);
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .toast.error { border-color: #4a2a2e; background: #241a1c; color: #f2d6d8; }
+
+  @media (max-width: 1020px) {
+    #app { grid-template-columns: 76px minmax(0, 1fr); grid-template-areas: "top top" "rail stage"; }
+    .side { display: none; }
+    .rail .label, .room-item .name, .rail .join { display: none; }
+    .room-item { justify-content: center; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <div class="brand" id="brand"><span class="dot"></span>rooms <small>myc</small></div>
+    <div class="room-head">
+      <h1 id="room-title">No room</h1>
+      <code id="room-code" hidden></code>
+    </div>
+    <div class="spacer"></div>
+    <button class="ghost" id="invite" disabled>Copy invite</button>
+  </header>
+
+  <aside class="rail">
+    <div class="label">Rooms</div>
+    <div id="room-list"></div>
+    <form class="join" id="join-form">
+      <input id="join-code" placeholder="room code" autocomplete="off" spellcheck="false">
+      <button type="submit">Open</button>
+    </form>
+  </aside>
+
+  <main class="stage">
+    <div class="stage-body" id="stage-body">
+      <div class="empty" id="empty">
+        <h2>Pick a room to join</h2>
+        <p>A room is one conversation with its own code. Audio and video go direct between the people in it.</p>
+        <button class="primary" id="start">Open a room</button>
+      </div>
+      <div class="tiles" id="tiles" hidden></div>
+    </div>
+    <div class="controls" id="controls" hidden>
+      <button class="ctl" id="mic" title="Mute microphone">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+      </button>
+      <button class="ctl off" id="cam" title="Turn camera on">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="12" height="12" rx="2.5"/><path d="m15 11 5-3v8l-5-3"/></svg>
+      </button>
+      <button class="ctl" id="screen" title="Share your screen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/><path d="M12 16v4"/></svg>
+      </button>
+      <button class="ctl leave" id="leave" title="Leave the call">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 8l-4 4 4 4"/><path d="M6 12h9"/></svg>
+      </button>
+    </div>
+  </main>
+
+  <aside class="side">
+    <div class="section">
+      <div class="label">In the room</div>
+      <div class="people" id="people"></div>
+    </div>
+    <div class="info">
+      <div class="kv"><span>Room code</span><code id="side-code">—</code></div>
+      <div class="kv"><span>Transport</span><code id="side-transport">not connected</code></div>
+      <p class="hint" id="side-hint">Joining asks the host for a room-scoped token; the media itself never passes through it.</p>
+    </div>
+  </aside>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+const state = {
+  socket: null,
+  waiters: new Map(),
+  sequence: 0,
+  room: null,
+  roomName: null,
+  session: sessionId(),
+  name: displayName(),
+  client: null,
+  room_handle: null,
+  micOn: true,
+  camOn: false,
+  screenOn: false,
+  participants: new Map(),
+};
+
+const $ = (id) => document.getElementById(id);
+
+// A tab is a participant, not a person: two tabs must see each other.
+function sessionId() {
+  const key = "rooms.session";
+  let id = sessionStorage.getItem(key);
+  if (!id) {
+    id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+    sessionStorage.setItem(key, id);
+  }
+  return id;
+}
+
+function displayName() {
+  const key = "rooms.name";
+  let name = localStorage.getItem(key);
+  if (!name) {
+    name = "Guest";
+    localStorage.setItem(key, name);
+  }
+  return name;
+}
+
+// ---------------------------------------------------------------------------
+// The bridge session: one WebSocket, correlated calls, pushed events.
+// ---------------------------------------------------------------------------
+
+function connect() {
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const socket = new WebSocket(`${scheme}://${location.host}/v1/session`);
+  state.socket = socket;
+
+  socket.addEventListener("open", () => {
+    setBrand("online");
+  });
+  socket.addEventListener("close", () => {
+    setBrand("degraded");
+    // A page that silently stops answering is worse than one that says so; try
+    // again, and leave the call alone — it does not run over this socket.
+    setTimeout(connect, 1500);
+  });
+  socket.addEventListener("error", () => setBrand("degraded"));
+  socket.addEventListener("message", (event) => {
+    let frame;
+    try { frame = JSON.parse(event.data); } catch { return; }
+    if (frame.id && state.waiters.has(frame.id)) {
+      const settle = state.waiters.get(frame.id);
+      state.waiters.delete(frame.id);
+      settle(frame.result);
+      return;
+    }
+    if (frame.event && frame.event.kind === "ready") {
+      listRooms(frame.event);
+    }
+    if (frame.event && frame.event.kind === "changed") {
+      listRooms();
+    }
+  });
+}
+
+function setBrand(mode) {
+  const brand = $("brand");
+  brand.classList.toggle("online", mode === "online");
+  brand.classList.toggle("degraded", mode === "degraded");
+}
+
+function call(interfaceName, functionName, params) {
+  return new Promise((resolve, reject) => {
+    if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
+      reject(new Error("the room service is not connected"));
+      return;
+    }
+    const id = String(++state.sequence);
+    state.waiters.set(id, (result) => {
+      if (result && result.ok !== undefined) resolve(result.ok);
+      else reject(new Error((result && result.err && result.err.message) || "the call failed"));
+    });
+    state.socket.send(JSON.stringify({ v: 1, call: { id, interface: interfaceName, function: functionName, params } }));
+    setTimeout(() => {
+      if (state.waiters.delete(id)) reject(new Error("the room service did not answer"));
+    }, 8000);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Rooms, from the Spore's own records.
+// ---------------------------------------------------------------------------
+
+const decoder = new TextDecoder();
+
+function bodyOf(entry) {
+  try {
+    const binary = atob(entry.body);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return JSON.parse(decoder.decode(bytes));
+  } catch {
+    return null;
+  }
+}
+
+async function listRooms() {
+  let page;
+  try {
+    page = await call("soil:records", "scan", { collection: "rooms", limit: 500 });
+  } catch {
+    return; // no book linked: the page still works by room code
+  }
+  const rooms = new Map();
+  for (const entry of page.entries || []) {
+    if (entry.deleted || entry.schema !== "fungos.room/room@1") continue;
+    const body = bodyOf(entry);
+    if (body && body.id) rooms.set(body.id, body);
+  }
+  renderRooms([...rooms.values()]);
+}
+
+function renderRooms(rooms) {
+  const list = $("room-list");
+  list.textContent = "";
+  if (!rooms.length) {
+    const empty = document.createElement("div");
+    empty.className = "hint";
+    empty.style.padding = "0 8px 6px";
+    empty.textContent = "No rooms yet — open one below.";
+    list.append(empty);
+    return;
+  }
+  rooms.sort((left, right) => String(left.name || left.id).localeCompare(String(right.name || right.id)));
+  for (const room of rooms) {
+    const button = document.createElement("button");
+    button.className = "room-item" + (room.id === state.room ? " active" : "");
+    button.type = "button";
+    button.append(glyph(room.name || room.id));
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = room.name || room.id;
+    button.append(name);
+    button.addEventListener("click", () => openRoom(room.id, room.name));
+    list.append(button);
+  }
+}
+
+function glyph(text) {
+  const span = document.createElement("span");
+  span.className = "glyph";
+  const words = String(text).trim().split(/[\s-]+/).filter(Boolean);
+  span.textContent = (words.length > 1 ? words[0][0] + words[1][0] : String(text).slice(0, 2)).toUpperCase();
+  return span;
+}
+
+function roomName(code) {
+  return String(code).split("-").map((part) => part ? part[0].toUpperCase() + part.slice(1) : part).join(" ");
+}
+
+// ---------------------------------------------------------------------------
+// The call
+// ---------------------------------------------------------------------------
+
+async function openRoom(code, name) {
+  if (!code) return;
+  if (state.room_handle) await leave();
+  state.room = code;
+  state.roomName = name || roomName(code);
+  $("room-title").textContent = state.roomName;
+  $("room-code").textContent = code;
+  $("room-code").hidden = false;
+  $("side-code").textContent = code;
+  $("invite").disabled = false;
+  const url = new URL(location.href);
+  url.searchParams.set("room", code);
+  history.replaceState(null, "", url);
+  renderRoomsFromCurrent();
+  await join();
+}
+
+function renderRoomsFromCurrent() {
+  for (const item of document.querySelectorAll(".room-item")) item.classList.remove("active");
+  listRooms();
+}
+
+async function join() {
+  const empty = $("empty");
+  empty.hidden = true;
+  $("tiles").hidden = false;
+  $("controls").hidden = false;
+
+  let grant;
+  try {
+    grant = await call("soil:room-media", "issue", {
+      room: state.room,
+      identity: `${state.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${state.session}`,
+      name: state.name,
+    });
+  } catch (error) {
+    toast(`Could not join: ${error.message}`, true);
+    $("tiles").hidden = true;
+    $("controls").hidden = true;
+    empty.hidden = false;
+    $("side-transport").textContent = "no token";
+    return;
+  }
+
+  const client = new LivekitClient.Room({
+    adaptiveStream: true,
+    dynacast: true,
+    disconnectOnPageLeave: true,
+  });
+  state.client = client;
+  wireRoomEvents(client);
+
+  try {
+    await client.connect(grant.url, grant.token);
+  } catch (error) {
+    toast(`LiveKit refused the connection: ${error.message}`, true);
+    state.client = null;
+    return;
+  }
+
+  state.room_handle = client;
+  $("side-transport").textContent = `${new URL(grant.url).host} · ${client.localParticipant.identity}`;
+  await client.localParticipant.setMicrophoneEnabled(true).catch(() => setMic(false));
+  if (state.camOn) await client.localParticipant.setCameraEnabled(true).catch(() => setCam(false));
+}
+
+function wireRoomEvents(client) {
+  client.on(LivekitClient.RoomEvent.ParticipantConnected, () => render());
+  client.on(LivekitClient.RoomEvent.ParticipantDisconnected, () => render());
+  client.on(LivekitClient.RoomEvent.TrackSubscribed, () => render());
+  client.on(LivekitClient.RoomEvent.TrackUnsubscribed, () => render());
+  client.on(LivekitClient.RoomEvent.TrackMuted, () => render());
+  client.on(LivekitClient.RoomEvent.TrackUnmuted, () => render());
+  client.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
+    const speaking = new Set(speakers.map((participant) => participant.identity));
+    for (const tile of document.querySelectorAll(".tile")) {
+      tile.classList.toggle("speaking", speaking.has(tile.dataset.identity));
+    }
+  });
+  client.on(LivekitClient.RoomEvent.LocalTrackPublished, () => render());
+  client.on(LivekitClient.RoomEvent.Disconnected, () => {
+    state.client = null;
+    state.room_handle = null;
+    render();
+  });
+  render();
+}
+
+function initials(name) {
+  const words = String(name || "Guest").trim().split(/\s+/).filter(Boolean);
+  return ((words[0] || "G")[0] + (words.length > 1 ? words[words.length - 1][0] : "")).toUpperCase();
+}
+
+function render() {
+  const client = state.room_handle;
+  const tiles = $("tiles");
+  const people = $("people");
+  if (!client) {
+    tiles.textContent = "";
+    people.textContent = "";
+    return;
+  }
+
+  const participants = [client.localParticipant, ...client.remoteParticipants.values()];
+  const seen = new Set();
+  for (const participant of participants) {
+    seen.add(participant.identity);
+    const tile = tileFor(participant);
+    tiles.append(tile);
+  }
+  tiles.dataset.count = String(participants.length);
+  for (const tile of [...tiles.children]) if (!seen.has(tile.dataset.identity)) tile.remove();
+
+  people.textContent = "";
+  for (const participant of participants) {
+    const row = document.createElement("div");
+    row.className = "person";
+    const avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.textContent = initials(participant.name || participant.identity);
+    const who = document.createElement("div");
+    who.className = "who";
+    const name = document.createElement("div");
+    name.textContent = participant.name || participant.identity;
+    const role = document.createElement("span");
+    role.textContent = participant === client.localParticipant ? "you" : "connected";
+    who.append(name, role);
+    const mic = document.createElement("div");
+    mic.className = "state" + (participant.isMicrophoneEnabled ? "" : " muted");
+    mic.innerHTML = participant.isMicrophoneEnabled
+      ? '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M5 11a7 7 0 0 0 14 0"/></svg>'
+      : '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 3a3 3 0 0 0-3 3v3"/><path d="M15 12a3 3 0 0 1-6 0V9"/><path d="M5 11a7 7 0 0 0 12 4.9"/><path d="m4 4 16 16"/></svg>';
+    row.append(avatar, who, mic);
+    people.append(row);
+  }
+}
+
+function tileFor(participant) {
+  const identity = participant.identity;
+  let tile = document.querySelector(`.tile[data-identity="${CSS.escape(identity)}"]`);
+  if (!tile) {
+    tile = document.createElement("div");
+    tile.className = "tile";
+    tile.dataset.identity = identity;
+    tile.append(document.createElement("video"));
+    tile.append(document.createElement("div"));
+  }
+  const local = state.room_handle && participant === state.room_handle.localParticipant;
+  tile.classList.toggle("mirror", local);
+
+  const video = tile.querySelector("video");
+  const camera = participant.getTrackPublication(LivekitClient.Track.Source.Camera);
+  const screen = participant.getTrackPublication(LivekitClient.Track.Source.ScreenShare);
+  const show = screen && screen.track ? screen : camera && camera.track && !camera.isMuted ? camera : null;
+
+  if (show && show.track) {
+    show.track.attach(video);
+    video.style.display = "block";
+    tile.classList.remove("audio-only");
+    tile.classList.toggle("screen", show.source === LivekitClient.Track.Source.ScreenShare);
+  } else {
+    video.style.display = "none";
+    tile.classList.add("audio-only");
+    tile.classList.remove("screen");
+    let avatar = tile.querySelector(".avatar");
+    if (!avatar) {
+      avatar = document.createElement("div");
+      avatar.className = "avatar";
+      tile.append(avatar);
+    }
+    avatar.textContent = initials(participant.name || identity);
+  }
+
+  const badge = tile.lastElementChild;
+  badge.className = "badge" + (participant.isMicrophoneEnabled ? "" : " muted");
+  const label = document.createElement("span");
+  label.className = "name";
+  label.textContent = (participant.name || identity) + (local ? " (you)" : "");
+  badge.textContent = "";
+  badge.append(label);
+  return tile;
+}
+
+async function setMic(on) {
+  state.micOn = on;
+  $("mic").classList.toggle("off", !on);
+  $("mic").title = on ? "Mute microphone" : "Unmute microphone";
+  if (state.room_handle) await state.room_handle.localParticipant.setMicrophoneEnabled(on).catch(() => {});
+}
+
+async function setCam(on) {
+  state.camOn = on;
+  $("cam").classList.toggle("off", !on);
+  $("cam").title = on ? "Turn camera off" : "Turn camera on";
+  if (state.room_handle) await state.room_handle.localParticipant.setCameraEnabled(on).catch(() => {});
+}
+
+async function toggleScreen() {
+  if (!state.room_handle) return;
+  state.screenOn = !state.screenOn;
+  $("screen").classList.toggle("off", !state.screenOn);
+  await state.room_handle.localParticipant.setScreenShareEnabled(state.screenOn).catch((error) => {
+    state.screenOn = false;
+    $("screen").classList.remove("off");
+    toast(error.message || "Could not share the screen", true);
+  });
+}
+
+async function leave() {
+  const client = state.room_handle;
+  state.room_handle = null;
+  state.client = null;
+  $("tiles").textContent = "";
+  $("people").textContent = "";
+  $("tiles").hidden = true;
+  $("controls").hidden = true;
+  $("empty").hidden = false;
+  $("side-transport").textContent = "not connected";
+  if (client) await client.disconnect().catch(() => {});
+}
+
+// ---------------------------------------------------------------------------
+// Chrome
+// ---------------------------------------------------------------------------
+
+let toastTimer = null;
+function toast(message, error = false) {
+  const element = $("toast");
+  element.textContent = message;
+  element.classList.toggle("error", error);
+  element.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => element.classList.remove("show"), 4200);
+}
+
+function randomCode() {
+  const words = ["fleet", "pebble", "amber", "harbor", "meadow", "signal", "canvas", "lantern"];
+  const pick = () => words[Math.floor(Math.random() * words.length)];
+  return `${pick()}-${pick()}-${Math.floor(1000 + Math.random() * 9000)}`;
+}
+
+$("start").addEventListener("click", () => openRoom(randomCode()));
+$("join-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const code = $("join-code").value.trim();
+  if (code) openRoom(code);
+});
+$("mic").addEventListener("click", () => setMic(!state.micOn));
+$("cam").addEventListener("click", () => setCam(!state.camOn));
+$("screen").addEventListener("click", toggleScreen);
+$("leave").addEventListener("click", leave);
+$("invite").addEventListener("click", async () => {
+  const url = new URL(location.href);
+  url.searchParams.set("room", state.room);
+  try {
+    await navigator.clipboard.writeText(url.toString());
+    toast("Invite copied");
+  } catch {
+    toast(url.toString());
+  }
+});
+
+connect();
+const wanted = new URL(location.href).searchParams.get("room");
+if (wanted) openRoom(wanted);
+</script>
+</body>
+</html>
