@@ -24,6 +24,9 @@ surfaces = ["native"]
 [grants]
 "soil:http" = "call the Spotify Web API through the host's allowlisted origin"
 
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
 [denied]
 transport = ["socket", "quic", "iroh"]
 host = ["process", "secrets", "environment", "raw-filesystem", "clock"]

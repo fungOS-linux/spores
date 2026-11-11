@@ -35,3 +35,7 @@ surfaces = ["native", "canvas"]
 
 [grants]
 "soil:surface-import" = "open the host-reviewed fixture surface and send normalized input"
+"soil:input" = "read normalized input events"
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"

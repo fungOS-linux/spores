@@ -1,0 +1,8 @@
+spore-lock 1
+spore dev.fungos.git
+version 0.1.0
+file d2553a9209cb03ed99124a20429f9c86dbbdff21e1a30843aded8c82c43e2dc3 648 docs/man.md
+file 8094aeacaa283ea88b153c6fb86768732bbb54b67f4273d0b016372b04c2760d 1488 spore.toml
+file b40c1054f6aae16fb9cabb4734a76d273930c970478b547a73fa8683acc9631e 5630 ui/review.lua
+file 05f9a71e242f0b5cd24eaeb965303553d42fc16492db8b546d6656eada8529b5 3212 ui/view.example.lua
+digest a2b71d150363a95de4a130411c51123b3e0a2417cb1c57dd3d8cfbe1daaddeb2

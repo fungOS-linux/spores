@@ -36,6 +36,9 @@ surfaces = ["canvas", "native", "web"]
 [grants]
 "soil:records" = "read/write the granted CRM, calls and messages namespaces; read contacts"
 
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
 [denied]
 "soil:http" = ["the CRM Spore has no network authority"]
 "wasi:filesystem" = ["the host maps namespaces to books"]

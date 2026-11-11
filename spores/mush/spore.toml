@@ -38,3 +38,6 @@ surfaces = ["native", "canvas", "web"]
 "soil:index" = "search the workspace and browse directories"
 "soil:vfs-mut" = "write, rename, unlink, mkdir, and rmdir in the workspace"
 "soil:command" = "run installed wasm commands with explicit args and no host PATH"
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"

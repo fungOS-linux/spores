@@ -36,3 +36,6 @@ surfaces = ["native", "canvas"]
 [grants]
 "soil:media" = "open host-reviewed fixture playback and image sources"
 "soil:media-encoded" = "read fixture encoded chunks for the ABI test"
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"

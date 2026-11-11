@@ -26,6 +26,9 @@ surfaces = ["native"]
 [grants]
 "soil:http" = "talk to the Hue bridge the host allowlists"
 
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
 [denied]
 # The bridge key is a secret the host owns; the Spore receives an opaque
 # credential handle, never the bytes.

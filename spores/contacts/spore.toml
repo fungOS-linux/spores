@@ -36,6 +36,9 @@ surfaces = ["canvas", "native", "web"]
 [grants]
 "soil:records" = "read/write personal contacts and write explicit CRM projections"
 
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
 [denied]
 "soil:http" = ["contact data has no network authority"]
 "wasi:filesystem" = ["the host maps namespaces to books"]

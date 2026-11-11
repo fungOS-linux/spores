@@ -27,10 +27,12 @@ default = "canvas"
 surfaces = ["canvas", "web", "native"]
 
 [grants]
-"soil:spore.catalog" = "list installed Spore packages"
-"soil:spore.launch" = "launch a declared Spore surface"
+"soil:spore" = "list installed Spore packages; launch a declared Spore surface"
 "soil:canvas" = "present the launcher"
 
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
 [denied]
 transport = ["socket", "quic", "iroh"]
 host = ["process", "secrets", "environment", "raw-filesystem", "clock"]

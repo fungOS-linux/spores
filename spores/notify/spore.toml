@@ -40,6 +40,10 @@ surfaces = ["canvas", "native", "web"]
 "soil:notify/cleanup" = "clear scoped notification sets"
 "soil:notify/ringer" = "receive and answer calls, doorbells, alarms and pages"
 
+"soil:notify" = "post a notification through the host tray"
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
 [denied]
 "soil:notify/publisher" = ["the tray does not publish notifications"]
 "soil:http" = ["network access is a separate explicit grant"]
