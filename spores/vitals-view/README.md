@@ -28,9 +28,11 @@ read-only, links `wasi:webgpu` + `soil:canvas-gpu` + `soil:records`, and writes
 the captured frame as the same BGR24 format `soil-webgpu` already uses:
 
 ```sh
+# from the soil checkout; SPORES names this checkout
 cargo run -q -p soil-webgpu --bin soil-webgpu -- \
   --records-dir .soil-dev/records \
-  --frame /tmp/vitals.bgr --size 1280x900 module.wasm
+  --frame /tmp/vitals.bgr --size 1280x900 \
+  "$SPORES/spores/vitals-view/module.wasm"
 ```
 
 `vitals.view` is keyed by wearer and written by `vitals once`. This renderer
