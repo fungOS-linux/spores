@@ -126,11 +126,21 @@ physical size the host reports.
   live Spore needs a long-lived host with a frame sink and session/input
   imports. That is the next host change.
 
+## Hosts today
+
+- `crates/soil-webgpu` — one-shot CLI presenter used by the fixtures and by
+  `--capture` checks.
+- `crates/canvas-winit` (soil) — a winit window that presents a GPUI Spore
+  frame natively. It is a presenter, not a scene host: the Spore is unchanged.
+  One frame per run today; the long-lived loop and input are next.
+- Canvas's external-surface path is the compositor-side host; the web bridge is
+  still deferred.
+
 ## What is deferred
 
-- **Native live host.** A long-lived host that feeds a Mycelium session into
-  the Spore and streams frames to the compositor. This is the path to
-  `term.myc`.
+- **Native live host.** `canvas-winit` presents one frame today. It needs a
+  long-lived guest loop, `soil:surface` input, and the launcher/catalog before
+  it can replace `term.myc`.
 - **HTTP/SSE bridge in the host.** Frames out, pointer/key in, carried by the
   same WIT shapes. Deferred, but it belongs in the soil/spore host rather than
   in each page.
