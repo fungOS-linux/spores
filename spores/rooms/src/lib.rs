@@ -653,7 +653,10 @@ fn call_tick(args: &[String]) -> Result<String, String> {
     CALL.with(|call| {
         let mut call = call.borrow_mut();
         let Some(call) = call.as_mut() else {
-            return Err("no call is open".to_string());
+            // A tick with nobody in a call is the normal state of a Spore that
+            // was started before anyone joined, not a fault: the host ticks
+            // from the moment it boots and must not stop on the first one.
+            return Ok(json!({"state": "idle"}).to_string());
         };
         for _ in 0..ticks {
             if call.muted {
@@ -886,6 +889,14 @@ mod tests {
         assert_eq!(snapshot["access"]["waiting"][0]["name"], "Guest");
         assert_eq!(snapshot["access"]["room"]["status"], "closed");
         assert_eq!(snapshot["rooms"][0]["members"], 1);
+    }
+
+    #[test]
+    fn an_idle_tick_is_a_state_not_a_fault() {
+        // The host ticks from the moment it boots, so the first ticks arrive
+        // before anyone joins a call. An error there would stop the host loop.
+        let status = call_tick(&[]).unwrap();
+        assert_eq!(json!({"state": "idle"}).to_string(), status);
     }
 
     #[test]
