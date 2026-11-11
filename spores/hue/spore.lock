@@ -1,0 +1,6 @@
+spore-lock 1
+spore dev.fungos.hue
+version 0.1.0
+file d55a9b950407e418451305feb7eead427d4a8f6161dd2d301e1f4b932d80ac64 277728 module.wasm
+file 610111fd1b3a27c8ac967d638f8ce41bb153c20a2beab237360762810a7bb059 1105 spore.toml
+digest 7e0ade20edf4c2bbae05d62544c6d324927c76361e968a0179f30d13846b4cf4

@@ -31,6 +31,8 @@ pub fn run(args: &[String], http: &mut dyn Http) -> Result<String, String> {
 struct Command {
     bridge: String,
     key: String,
+    credential: Option<String>,
+    device: String,
     json: bool,
     target: Target,
     action: Action,
@@ -56,6 +58,7 @@ enum Action {
     Brightness(u8),
     Color(u8, u8, u8),
     Scene(String),
+    Pair,
     Help,
 }
 
@@ -63,6 +66,8 @@ impl Command {
     fn parse(args: &[String]) -> Result<Self, String> {
         let mut bridge = None;
         let mut key = None;
+        let mut credential = None;
+        let mut device = None;
         let mut json = false;
         let mut group = None;
         let mut light = None;
@@ -73,6 +78,8 @@ impl Command {
             match arg.as_str() {
                 "--bridge" => bridge = iter.next().cloned(),
                 "--key" => key = iter.next().cloned(),
+                "--credential" => credential = iter.next().cloned(),
+                "--device" => device = iter.next().cloned(),
                 "--group" => group = iter.next().cloned(),
                 "--light" => light = iter.next().cloned(),
                 "--json" => json = true,
@@ -80,6 +87,8 @@ impl Command {
                     return Ok(Self {
                         bridge: String::new(),
                         key: String::new(),
+                        credential: None,
+                        device: "spores#hue".into(),
                         json,
                         target: Target::Group("0".into()),
                         action: Action::Help,
@@ -90,7 +99,7 @@ impl Command {
         }
 
         let Some(verb) = words.first().map(String::as_str) else {
-            return Err("usage: hue --bridge URL --key KEY <status|on|off|toggle|bri N|color #RRGGBB|scene NAME|lights|groups|scenes>".into());
+            return Err("usage: hue --bridge URL (--key KEY | --credential HANDLE) <status|on|off|toggle|bri N|color #RRGGBB|scene NAME|lights|groups|scenes|pair>".into());
         };
         let operand = words.get(1).cloned();
         if words.len() > 2 {
@@ -105,31 +114,22 @@ impl Command {
             "on" => Action::On,
             "off" => Action::Off,
             "toggle" => Action::Toggle,
+            "pair" => Action::Pair,
             "bri" | "brightness" => {
-                let value = operand.ok_or("bri: expected 0-254")?;
+                let value = operand.clone().ok_or("bri: expected 0-254")?;
                 let value: u8 = value
                     .parse()
                     .map_err(|_| format!("bri: {value:?} is not 0-254"))?;
                 Action::Brightness(value)
             }
             "color" | "colour" => {
-                let value = operand.ok_or("color: expected #RRGGBB")?;
+                let value = operand.clone().ok_or("color: expected #RRGGBB")?;
                 let (r, g, b) = parse_hex(&value)?;
                 Action::Color(r, g, b)
             }
-            "scene" => Action::Scene(operand.ok_or("scene: expected a scene name")?),
+            "scene" => Action::Scene(operand.clone().ok_or("scene: expected a scene name")?),
             other => return Err(format!("unknown command: {other}")),
         };
-
-        if action == Action::Help {
-            return Ok(Self {
-                bridge: String::new(),
-                key: String::new(),
-                json,
-                target: Target::Group("0".into()),
-                action,
-            });
-        }
 
         let bridge =
             bridge.ok_or("--bridge is required, for example --bridge http://192.168.1.10")?;
@@ -137,7 +137,34 @@ impl Command {
             return Err("bridge must be an absolute http(s) URL".into());
         }
         let bridge = bridge.trim_end_matches('/').to_owned();
-        let key = key.ok_or("--key is required (the bridge application key)")?;
+
+        if action == Action::Pair {
+            if key.is_some() || credential.is_some() {
+                return Err("pair does not take --key or --credential".into());
+            }
+            return Ok(Self {
+                bridge,
+                key: String::new(),
+                credential: None,
+                device: device.or(operand).unwrap_or_else(|| "spores#hue".into()),
+                json,
+                target: Target::Group("0".into()),
+                action,
+            });
+        }
+
+        let (key, credential) = match (key, credential) {
+            (Some(key), None) if !key.is_empty() => (key, None),
+            (None, Some(credential)) if !credential.is_empty() => (String::new(), Some(credential)),
+            (Some(_), Some(_)) => {
+                return Err("--key and --credential are mutually exclusive".into());
+            }
+            _ => {
+                return Err(
+                    "--key or --credential is required (the bridge application key)".into(),
+                );
+            }
+        };
         let target = match (light, group) {
             (Some(_), Some(_)) => return Err("--light and --group are mutually exclusive".into()),
             (Some(light), None) => Target::Light(light),
@@ -147,6 +174,8 @@ impl Command {
         Ok(Self {
             bridge,
             key,
+            credential,
+            device: device.unwrap_or_else(|| "spores#hue".into()),
             json,
             target,
             action,
@@ -166,11 +195,16 @@ impl Command {
             Action::Brightness(value) => self.set_brightness(http, *value),
             Action::Color(r, g, b) => self.set_color(http, *r, *g, *b),
             Action::Scene(name) => self.recall_scene(http, name),
+            Action::Pair => self.pair(http),
         }
     }
 
     fn url(&self, path: &str) -> String {
-        format!("{}/api/{}{path}", self.bridge, self.key)
+        if self.credential.is_some() {
+            format!("{}/api/__CREDENTIAL__{path}", self.bridge)
+        } else {
+            format!("{}/api/{}{path}", self.bridge, self.key)
+        }
     }
 
     fn get(&self, http: &mut dyn Http, path: &str) -> Result<Value, String> {
@@ -179,6 +213,7 @@ impl Command {
             method: Method::Get,
             headers: vec![("accept".into(), "application/json".into())],
             body: None,
+            credential: self.credential.clone(),
         })?;
         decode(response)
     }
@@ -193,8 +228,36 @@ impl Command {
                 ("content-type".into(), "application/json".into()),
             ],
             body: Some(bytes),
+            credential: self.credential.clone(),
         })?;
         decode(response)
+    }
+
+    fn pair(&self, http: &mut dyn Http) -> Result<String, String> {
+        let body = serde_json::to_vec(&json!({ "devicetype": self.device }))
+            .map_err(|error| error.to_string())?;
+        let response = http.fetch(Request {
+            url: format!("{}/api", self.bridge),
+            method: Method::Post,
+            headers: vec![("content-type".into(), "application/json".into())],
+            body: Some(body),
+            credential: None,
+        })?;
+        let value = decode(response)?;
+        if self.json {
+            return Ok(pretty(&value));
+        }
+        let key = value
+            .as_array()
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("success"))
+            .and_then(|success| success.get("username"))
+            .and_then(Value::as_str)
+            .ok_or("bridge did not return an application key")?;
+        Ok(format!(
+            "paired {}\napplication key: {key}\nstore it as geode://home/hue/bridge",
+            self.device
+        ))
     }
 
     fn status(&self, http: &mut dyn Http) -> Result<String, String> {
@@ -372,9 +435,11 @@ impl Command {
 }
 
 const HELP: &str = "\
-usage: hue --bridge URL --key KEY [--group ID | --light ID] [--json] COMMAND
+usage: hue --bridge URL (--key KEY | --credential HANDLE) [--group ID | --light ID] [--json] COMMAND
+       hue --bridge URL pair [DEVICE]
 
 commands:
+  pair [DEVICE]       press the bridge link button, then mint an application key
   status              bridge name, light/group counts, all-lights state
   lights              list lights
   groups              list groups
@@ -386,7 +451,8 @@ commands:
   scene NAME          recall a scene by name (case-insensitive)
 
 examples:
-  hue --bridge http://192.168.1.10 --key $HUE_KEY on
+  hue --bridge http://192.168.1.10 pair
+  hue --bridge http://192.168.1.10 --credential geode://home/hue/bridge on
   hue --bridge http://192.168.1.10 --key $HUE_KEY --light 3 color #ff8800
   hue --bridge http://192.168.1.10 --key $HUE_KEY --group 1 scene Relax";
 
@@ -650,5 +716,58 @@ mod tests {
         assert!(error.contains("--bridge"), "{error}");
         let error = run(&args("--bridge http://b status"), &mut MockHttp::new([])).unwrap_err();
         assert!(error.contains("--key"), "{error}");
+    }
+
+    #[test]
+    fn pair_posts_the_device_type_and_returns_the_key() {
+        let mut http = MockHttp::new([json!([{
+            "success": { "username": "paired-key" }
+        }])]);
+        let output = run(
+            &args("--bridge http://bridge.local pair spores#hue"),
+            &mut http,
+        )
+        .unwrap();
+        assert!(output.contains("paired-key"), "{output}");
+        let request = &http.requests[0];
+        assert_eq!(request.method, Method::Post);
+        assert_eq!(request.url, "http://bridge.local/api");
+        assert_eq!(
+            request.body.as_deref(),
+            Some(br#"{"devicetype":"spores#hue"}"#.as_slice())
+        );
+        assert_eq!(request.credential, None);
+    }
+
+    #[test]
+    fn a_credential_handle_replaces_the_key_in_the_path() {
+        let mut http = MockHttp::new([
+            json!({ "config": { "name": "bridge" }, "lights": {}, "groups": {} }),
+            json!({ "action": { "on": false } }),
+        ]);
+        let output = run(
+            &args("--bridge http://bridge.local --credential geode://home/hue/bridge status"),
+            &mut http,
+        )
+        .unwrap();
+        assert!(output.contains("bridge"), "{output}");
+        assert_eq!(
+            http.requests[0].url,
+            "http://bridge.local/api/__CREDENTIAL__"
+        );
+        assert_eq!(
+            http.requests[0].credential.as_deref(),
+            Some("geode://home/hue/bridge")
+        );
+    }
+
+    #[test]
+    fn key_and_credential_are_mutually_exclusive() {
+        let error = run(
+            &args("--bridge http://bridge.local --key k --credential geode://home/hue/bridge on"),
+            &mut MockHttp::new([]),
+        )
+        .unwrap_err();
+        assert!(error.contains("mutually exclusive"), "{error}");
     }
 }

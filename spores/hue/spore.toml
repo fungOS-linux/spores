@@ -24,11 +24,13 @@ default = "native"
 surfaces = ["native"]
 
 [grants]
-"soil:http" = "talk to the Hue bridge the host allowlists"
+"soil:http" = "talk to the Hue bridge the host allowlists; the bridge key stays in Geode"
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "std monotonic timing for local logging latencies"
+"wasi:io" = "component-model async transport"
 
 [denied]
-# The bridge key is a secret the host owns; the Spore receives an opaque
-# credential handle, never the bytes.
+# The bridge key is a Geode credential; the Spore receives only an opaque handle.
 transport = ["socket", "quic", "iroh"]
 host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
 
