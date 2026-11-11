@@ -47,26 +47,25 @@ impl Guest for Component {
     }
 }
 
-fn load_view() -> Value {
+fn load_view() -> Result<Value, String> {
     let key = records::Key {
         collection: "vitals.view".to_string(),
         id: "owner".to_string(),
     };
     let entry = match records::get(&key) {
         Ok(entry) => entry,
-        Err(records::Error::NotFound) => return empty_view("owner"),
-        Err(error) => {
-            eprintln!("vitals-view: get vitals.view/owner: {error:?}");
-            return empty_view("owner");
-        }
+        Err(records::Error::NotFound) => return Ok(empty_view("owner")),
+        Err(error) => return Err(format!("get vitals.view/owner: {error:?}")),
     };
-    match serde_json::from_slice(&entry.body) {
-        Ok(view) => view,
-        Err(error) => {
-            eprintln!("vitals-view: parse vitals.view/owner: {error}");
-            empty_view("owner")
-        }
+    if entry.deleted {
+        return Ok(empty_view("owner"));
     }
+    let view: Value = serde_json::from_slice(&entry.body)
+        .map_err(|error| format!("parse vitals.view/owner: {error}"))?;
+    if view.get("schema").and_then(Value::as_str) != Some("vitals.view.v1") {
+        return Err("vitals.view/owner does not declare vitals.view.v1".to_string());
+    }
+    Ok(view)
 }
 
 fn empty_view(wearer: &str) -> Value {
@@ -83,7 +82,9 @@ fn empty_view(wearer: &str) -> Value {
 
 fn render() -> Result<(), String> {
     let (width, height) = surface::size();
-    let (width, height) = (width.max(1), height.max(1));
+    if width == 0 || height == 0 {
+        return Err("canvas surface has zero extent".to_string());
+    }
 
     let instance = wgpu_wasi_webgpu::instance();
     let adapter = wit_bindgen::block_on(instance.request_adapter(&Default::default()))
@@ -112,7 +113,7 @@ fn render() -> Result<(), String> {
         },
     );
 
-    let view = load_view();
+    let view = load_view()?;
     let window = app
         .open_window_scaled(
             gpui::size(px(width as f32), px(height as f32)),
@@ -258,7 +259,7 @@ fn card_element(card: &Value) -> impl IntoElement {
     let label = card["label"].as_str().unwrap_or("");
     let value = display_value(&card["value"]);
     let unit = card["unit"].as_str().unwrap_or("");
-    let display = total_display(&value, unit);
+    let display = value_with_unit(&value, unit);
     let source = card["source_device"].as_str().unwrap_or("no source");
     let freshness = card["freshness"].as_str().unwrap_or("unknown");
 
@@ -302,7 +303,7 @@ fn display_value(value: &Value) -> String {
     }
 }
 
-fn total_display(value: &str, unit: &str) -> String {
+fn value_with_unit(value: &str, unit: &str) -> String {
     match unit.trim() {
         "" => value.to_string(),
         "%" => format!("{value}%"),
