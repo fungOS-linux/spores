@@ -8,8 +8,9 @@
 # All three read the same catalog from the store service.
 #
 # The module reads that catalog with `soil:http`, which is why the grant is
-# declared rather than denied: the guest calls it. Installing stays the host's
-# authority and stays denied — the window names an intent, the host decides.
+# declared rather than denied: the guest calls it, and the host decides which
+# single origin it may reach. Installing stays the host's authority and stays
+# denied — the window names an intent, the host decides.
 
 schema = 1
 
@@ -75,6 +76,7 @@ role = "store"
 "wasi:webgpu" = "render the shopfront into one host-owned texture"
 "soil:present" = "hand the rendered frame to the presenter"
 "soil:spore" = "list the Spores this host has installed, through soil:spore.catalog"
+"soil:http" = "read the catalog from the one store origin the host allows"
 "wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
 "wasi:clocks" = "GPUI's scheduler needs monotonic timing"
 "wasi:filesystem" = "std and fontdb import the interface; the host grants no preopens"
@@ -82,7 +84,6 @@ role = "store"
 "wasi:random" = "GPUI's deterministic scheduler seed"
 
 [denied]
-"soil:http" = ["the signed index is fetched and verified by the host"]
 "soil:spore.install" = ["installing is the host's authority, not the window's"]
 
 [presentation]

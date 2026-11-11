@@ -28,7 +28,6 @@ use gpui::{
     ParentElement, PlatformTextSystem as _, Render, SharedString, Styled, Window,
 };
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
-use serde_json::Value;
 use soil::http::http;
 use soil::present::surface;
 use soil::spore::catalog;
@@ -52,7 +51,6 @@ const MUTED: u32 = 0x98a1b3;
 const ACCENT: u32 = 0x8b9dff;
 const GOOD: u32 = 0x7ad0a3;
 const WARN: u32 = 0xf2c14e;
-const STAR: u32 = 0xf2c14e;
 
 struct Component;
 export!(Component);
@@ -69,22 +67,36 @@ impl Guest for Component {
     }
 }
 
-struct Row {
-    name: String,
-    summary: String,
-    version: String,
-    state: String,
-    rating: Option<f64>,
-    publisher: String,
+/// The index the store service served: its name when one answered, whether
+/// its signature checked out, and how many packages it carries.
+struct Source {
+    name: Option<String>,
+    verified: bool,
+    total: usize,
 }
 
-/// The remote catalog, as the store service publishes it. A host that grants no
-/// origin answers nothing, and the view falls back to what is installed.
-fn remote() -> Option<serde_json::Value> {
+struct Row {
+    /// What a person reads. A listing's name when the index has one, the
+    /// installed package's own title when it does not, and the id's last
+    /// segment as the last resort.
+    title: String,
+    id: String,
+    summary: String,
+    version: String,
+    installed_version: Option<String>,
+    state: String,
+}
+
+/// One GET against the store service. The host owns the origin policy: a
+/// refusal or a transport failure is `None`, not an empty answer.
+fn get(path: &str) -> Option<serde_json::Value> {
     let request = http::Request {
-        url: format!("{ORIGIN}/api/catalog"),
+        url: format!("{ORIGIN}{path}"),
         method: http::Method::Get,
-        headers: vec![http::Header { name: "accept".to_string(), value: "application/json".to_string() }],
+        headers: vec![http::Header {
+            name: "accept".to_string(),
+            value: "application/json".to_string(),
+        }],
         body: None,
         credential: None,
         max_bytes: 1 << 20,
@@ -97,46 +109,99 @@ fn remote() -> Option<serde_json::Value> {
     serde_json::from_slice(&response.body).ok()
 }
 
-fn catalog_rows() -> Result<(Vec<Row>, String), String> {
+fn catalog_rows() -> Result<(Vec<Row>, Source), String> {
     let installed = catalog::entries().map_err(|error| format!("catalog: {error:?}"))?;
+    let known: std::collections::BTreeMap<String, (String, String)> = installed
+        .iter()
+        .map(|entry| (entry.id.clone(), (entry.title.clone(), entry.summary.clone())))
+        .collect();
+
+    let mut source = Source {
+        name: None,
+        verified: false,
+        total: 0,
+    };
     let mut rows: Vec<Row> = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    if let Some(remote) = remote() {
-        for entry in remote["entries"].as_array().cloned().unwrap_or_default() {
-            let id = entry["id"].as_str().unwrap_or("").to_string();
+    let mut listed = std::collections::BTreeSet::new();
+    if let Some(remote) = get("/api/catalog") {
+        source.name = remote["source"]["name"].as_str().map(str::to_string);
+        source.verified = remote["source"]["verified"].as_bool().unwrap_or(false);
+        let entries = remote["entries"].as_array().cloned().unwrap_or_default();
+        source.total = entries.len();
+        for entry in entries {
+            let id = entry["id"].as_str().unwrap_or_default().to_string();
+            if id.is_empty() {
+                continue;
+            }
             let document = &entry["document"];
-            seen.insert(id.clone());
+            // Until the index carries a listing, a package installed on this
+            // machine is the only honest source of a name and a sentence: it
+            // described itself when it was built. Nothing here is invented,
+            // and an absent summary stays absent.
+            let local = known.get(&id);
             rows.push(Row {
-                name: document["name"].as_str().or(entry["id"].as_str()).unwrap_or("?").to_string(),
-                summary: document["summary"].as_str().unwrap_or("").to_string(),
-                version: entry["version"].as_str().unwrap_or("").to_string(),
+                title: document["name"]
+                    .as_str()
+                    .map(str::to_string)
+                    .or_else(|| local.map(|entry| entry.0.clone()))
+                    .unwrap_or_else(|| title_of(&id)),
+                id: id.clone(),
+                summary: document["summary"]
+                    .as_str()
+                    .map(str::to_string)
+                    .or_else(|| local.map(|entry| entry.1.clone()))
+                    .unwrap_or_default(),
+                version: entry["version"].as_str().unwrap_or_default().to_string(),
+                installed_version: entry["installed_version"].as_str().map(str::to_string),
                 state: entry["state"].as_str().unwrap_or("available").to_string(),
-                rating: entry["ratings"]["current"]["weighted"].as_f64().filter(|value| *value > 0.0),
-                publisher: entry["publisher"].as_str().unwrap_or("unknown").to_string(),
             });
+            listed.insert(id);
         }
     }
     for entry in installed {
-        if seen.contains(&entry.id) {
+        if listed.contains(&entry.id) {
             continue;
         }
         rows.push(Row {
-            name: if entry.title.is_empty() { entry.name.clone() } else { entry.title.clone() },
-            summary: entry.summary.clone(),
-            version: entry.version.clone(),
+            title: entry.title,
+            id: entry.id,
+            summary: entry.summary,
+            version: entry.version,
+            installed_version: None,
             state: "installed".to_string(),
-            rating: None,
-            publisher: "installed".to_string(),
         });
     }
-    rows.sort_by_key(|row| row.name.to_lowercase());
-    Ok((rows, "store".to_string()))
+    rows.sort_by_key(|row| row.title.to_lowercase());
+    Ok((rows, source))
 }
 
-/// Who is asking. Without a gateway on this path the honest answer is the
-/// machine, not an invented account.
-fn account() -> String {
-    "local".to_string()
+/// Who is asking. A loopback request is the machine itself; a request through
+/// the Mycelium gateway names the principal it authenticated.
+struct Account {
+    name: String,
+    note: String,
+}
+
+fn account() -> Account {
+    if let Some(value) = get("/api/whoami") {
+        let principal = value["principal"].as_str().unwrap_or("local");
+        return Account {
+            name: principal
+                .strip_prefix("mycelium:")
+                .unwrap_or(principal)
+                .to_string(),
+            note: if value["through_gateway"].as_bool().unwrap_or(false) {
+                "signed in"
+            } else {
+                "this machine"
+            }
+            .to_string(),
+        };
+    }
+    Account {
+        name: "local".to_string(),
+        note: "this machine".to_string(),
+    }
 }
 
 fn render() -> Result<(), String> {
@@ -242,26 +307,30 @@ fn render() -> Result<(), String> {
     surface::present(&texture).map_err(|error| format!("canvas present: {error}"))
 }
 
+/// A window with no scrollbar has to be arithmetic: every section states the
+/// height it needs, and the view decides what fits before it draws anything.
+const HEADER_H: f32 = 56.0;
+const PAGE_PAD: f32 = 24.0;
+const STRIP_H: f32 = 48.0;
+const SECTION_GAP: f32 = 20.0;
+const HEAD_H: f32 = 22.0;
+const HEAD_GAP: f32 = 8.0;
+const ROW_H: f32 = 68.0;
+const ROW_GAP: f32 = 8.0;
+const CHIP_W: f32 = 188.0;
+const CHIP_H: f32 = 30.0;
+const CHIP_GAP: f32 = 8.0;
+
 struct StoreView {
     rows: Vec<Row>,
-    source: String,
-    account: String,
+    source: Source,
+    account: Account,
     width: f32,
     height: f32,
 }
 
 impl Render for StoreView {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        // Featured is the thing most worth doing: an update you already have,
-        // then something new, then anything at all. A shopfront with no
-        // recommendation is a filing cabinet.
-        let featured = self
-            .rows
-            .iter()
-            .find(|row| row.state == "update")
-            .or_else(|| self.rows.iter().find(|row| row.state == "available"))
-            .or_else(|| self.rows.first());
-
         let by_state = |state: &'static str| {
             self.rows
                 .iter()
@@ -272,283 +341,337 @@ impl Render for StoreView {
         let available = by_state("available");
         let installed = by_state("installed");
 
+        let budget = (self.height - HEADER_H - PAGE_PAD * 2.0 - STRIP_H - SECTION_GAP).max(0.0);
+        let (update_rows, available_rows, machine_space) =
+            fit_lists(updates.len(), available.len(), budget);
+
         let mut body = div()
             .flex()
             .flex_col()
-            .gap_6()
+            .gap_5()
             .p_6()
             .flex_1()
-            .overflow_hidden();
-        if let Some(row) = featured {
-            body = body.child(hero(row, self.width));
+            .overflow_hidden()
+            .child(status_strip(
+                updates.len(),
+                available.len(),
+                installed.len(),
+                &self.source,
+            ));
+        if update_rows > 0 {
+            body = body.child(action_section(
+                "Updates",
+                &updates[..update_rows],
+                updates.len(),
+                "Update",
+            ));
         }
-        if !updates.is_empty() {
-            body = body.child(shelf("Updates", &updates));
-        }
-        if !available.is_empty() {
-            body = body.child(shelf("On the store", &available));
+        if available_rows > 0 {
+            body = body.child(action_section(
+                "New in the store",
+                &available[..available_rows],
+                available.len(),
+                "Get",
+            ));
         }
         if !installed.is_empty() {
-            body = body.child(shelf("Installed on this machine", &installed));
+            body = body.child(machine_section(
+                &installed,
+                self.width,
+                machine_space,
+                self.source.name.is_none(),
+            ));
+        }
+        if self.rows.is_empty() {
+            body = body.child(nothing_to_show(&self.source));
         }
 
-        let _ = self.height;
         div()
             .flex()
             .flex_col()
             .size_full()
             .bg(rgb(BG))
             .text_color(rgb(TEXT))
-            .child(header(&self.account, &self.source, self.width))
+            .child(header(&self.account, &self.source))
             .child(body)
     }
 }
 
-/// The featured band: art, name, one sentence, and the state you would act on.
-fn hero(row: &Row, width: f32) -> impl IntoElement {
-    let tint = tint(&row.name);
-    let short = width < 760.0;
+/// What fits in the window before anything is cut off. Updates come first — a
+/// package you already own is worth more than one you have never met — and
+/// whatever is left over belongs to the machine list.
+fn fit_lists(updates: usize, available: usize, budget: f32) -> (usize, usize, f32) {
+    let head = HEAD_H + HEAD_GAP;
+    let mut space = budget;
+    let mut shown = [0usize; 2];
+    for (index, total) in [updates, available].into_iter().enumerate() {
+        if total == 0 {
+            continue;
+        }
+        let room = ((space - head + ROW_GAP) / (ROW_H + ROW_GAP)).floor().max(0.0) as usize;
+        let take = total.min(room);
+        shown[index] = take;
+        space = (space
+            - head
+            - take as f32 * ROW_H
+            - take.saturating_sub(1) as f32 * ROW_GAP
+            - SECTION_GAP)
+            .max(0.0);
+    }
+    (shown[0], shown[1], space)
+}
+
+/// One line that says what is waiting, instead of a billboard that says nothing.
+fn status_strip(
+    updates: usize,
+    available: usize,
+    installed: usize,
+    source: &Source,
+) -> impl IntoElement {
+    let headline = match (updates, available) {
+        (0, 0) if installed == 0 => "Nothing installed, nothing listed".to_string(),
+        (0, 0) => "Everything installed is current".to_string(),
+        (0, new) => format!("{new} new in the store"),
+        (1, 0) => "1 update ready".to_string(),
+        (ready, 0) => format!("{ready} updates ready"),
+        (1, new) => format!("1 update ready · {new} new in the store"),
+        (ready, new) => format!("{ready} updates ready · {new} new in the store"),
+    };
+    let index = match &source.name {
+        Some(name) => format!("{installed} installed · {} packages · {name}", source.total),
+        None => format!("{installed} installed · no store reached"),
+    };
     div()
         .flex()
+        .justify_between()
         .items_center()
-        .gap_6()
-        .p_6()
-        .h_72()
-        .rounded_2xl()
+        .h(px(STRIP_H))
+        .px_4()
+        .rounded_xl()
         .bg(rgb(PANEL_RAISED))
         .border_1()
         .border_color(rgb(EDGE))
         .child(
             div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .w(px(if short { 96.0 } else { 168.0 }))
-                .h(px(if short { 96.0 } else { 168.0 }))
-                .rounded_2xl()
-                .bg(rgb(tint))
-                .text_color(rgb(BG))
-                .text_3xl()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(SharedString::from(initial(&row.name))),
+                .text_base()
+                .font_weight(FontWeight::MEDIUM)
+                .child(SharedString::from(headline)),
         )
         .child(
             div()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .flex_1()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(ACCENT))
-                        .child(SharedString::from("FEATURED")),
-                )
-                .child(
-                    div()
-                        .text_3xl()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(SharedString::from(display_name(row))),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(MUTED))
-                        .child(SharedString::from(row.summary.clone())),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .child(state_pill(&row.state))
-                        .child(
-                            div()
-                                .px_4()
-                                .py_2()
-                                .rounded_full()
-                                .bg(rgb(ACCENT))
-                                .text_color(rgb(BG))
-                                .text_xs()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(SharedString::from(if row.state == "update" {
-                                    "Update"
-                                } else if row.state == "available" {
-                                    "Get"
-                                } else {
-                                    "Open"
-                                })),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(MUTED))
-                                .child(SharedString::from(format!("{} · {}", row.publisher, row.version))),
-                        ),
-                ),
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(SharedString::from(index)),
         )
 }
 
-fn shelf(title: &str, rows: &[&Row]) -> impl IntoElement {
-    let shown = rows.len().min(5);
-    let mut strip = div().flex().gap_4();
-    for row in rows.iter().take(shown) {
-        strip = strip.child(card(row));
+fn action_section(title: &str, rows: &[&Row], total: usize, action: &str) -> impl IntoElement {
+    let mut list = div().flex().flex_col().gap_2();
+    for row in rows {
+        list = list.child(package_row(row, Some(action)));
     }
-    let more = rows.len().saturating_sub(shown);
     div()
         .flex()
         .flex_col()
-        .gap_3()
-        .child(
-            div()
-                .flex()
-                .justify_between()
-                .items_end()
-                .child(
-                    div()
-                        .text_lg()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(SharedString::from(title.to_string())),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(MUTED))
-                        .child(SharedString::from(if more == 0 {
-                            format!("{}", rows.len())
-                        } else {
-                            format!("{} · {} more", rows.len(), more)
-                        })),
-                ),
-        )
-        .child(strip)
+        .gap_2()
+        .child(section_head(title, rows.len(), total))
+        .child(list)
 }
 
-fn card(row: &Row) -> impl IntoElement {
-    let tint = tint(&row.name);
+/// One package, in the shape a person reads it: what it is, why it might
+/// matter, where it is going, and — when the host can act — the one thing you
+/// can do about it.
+fn package_row(row: &Row, action: Option<&str>) -> impl IntoElement {
+    let secondary = if row.summary.is_empty() {
+        row.id.clone()
+    } else {
+        row.summary.clone()
+    };
+    // An update that keeps its version number is a rebuild: the digest moved,
+    // the label did not. Saying so is cheaper than looking broken.
+    let version = match &row.installed_version {
+        Some(installed) if installed != &row.version => format!("{installed} → {}", row.version),
+        Some(_) => format!("{} · rebuild", row.version),
+        None => row.version.clone(),
+    };
     div()
         .flex()
-        .flex_col()
-        .gap_3()
-        .p_4()
-        .w(px(228.0))
-        .rounded_xl()
+        .items_center()
+        .gap_4()
+        .h(px(ROW_H))
+        .px_4()
+        .rounded_lg()
         .bg(rgb(PANEL))
         .border_1()
         .border_color(rgb(EDGE))
         .child(
             div()
                 .flex()
-                .items_center()
-                .justify_center()
-                .w_12()
-                .h_12()
-                .rounded_xl()
-                .bg(rgb(tint))
-                .text_color(rgb(BG))
-                .text_lg()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(SharedString::from(initial(&row.name))),
+                .flex_col()
+                .gap_1()
+                .flex_1()
+                .child(
+                    div()
+                        .text_base()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(SharedString::from(row.title.clone())),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .child(SharedString::from(secondary)),
+                ),
         )
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(SharedString::from(version)),
+        )
+        .when_some(action, |row, label| row.child(button(label)))
+}
+
+fn button(label: &str) -> impl IntoElement {
+    div()
+        .px_3()
+        .py_1()
+        .rounded_full()
+        .bg(rgb(ACCENT))
+        .text_color(rgb(BG))
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .child(SharedString::from(label.to_string()))
+}
+
+/// An installed package is a fact, not an action.
+///
+/// With a store to compare against, what is installed is a footnote: a line of
+/// names under the things you can act on. When no store answers it is the whole
+/// page, and then it earns the room a description needs.
+fn machine_section(rows: &[&Row], width: f32, space: f32, detailed: bool) -> impl IntoElement {
+    if detailed {
+        let room = ((space - HEAD_H - HEAD_GAP + ROW_GAP) / (ROW_H + ROW_GAP))
+            .floor()
+            .max(0.0) as usize;
+        let shown = rows.len().min(room.max(1));
+        let mut list = div().flex().flex_col().gap_2();
+        for row in rows.iter().take(shown) {
+            list = list.child(package_row(row, None));
+        }
+        return div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(section_head("On this machine", shown, rows.len()))
+            .child(list);
+    }
+    let columns = chips_per_line(width);
+    let lines = ((space - HEAD_H - HEAD_GAP + CHIP_GAP) / (CHIP_H + CHIP_GAP))
+        .floor()
+        .max(0.0) as usize;
+    let shown = rows.len().min((lines * columns).max(1));
+    let mut grid = div().flex().flex_wrap().gap_2();
+    for row in rows.iter().take(shown) {
+        grid = grid.child(installed_chip(row));
+    }
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(section_head("On this machine", shown, rows.len()))
+        .child(grid)
+}
+
+fn installed_chip(row: &Row) -> impl IntoElement {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .w(px(CHIP_W))
+        .h(px(CHIP_H))
+        .px_3()
+        .rounded_md()
+        .bg(rgb(PANEL))
+        .border_1()
+        .border_color(rgb(EDGE))
+        .child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .child(SharedString::from(row.title.clone())),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(SharedString::from(row.version.clone())),
+        )
+}
+
+fn chips_per_line(width: f32) -> usize {
+    let usable = (width - PAGE_PAD * 2.0 + CHIP_GAP).max(CHIP_W);
+    (usable / (CHIP_W + CHIP_GAP)).floor().max(1.0) as usize
+}
+
+fn section_head(title: &str, shown: usize, total: usize) -> impl IntoElement {
+    let detail = if shown < total {
+        format!("{shown} of {total}")
+    } else {
+        total.to_string()
+    };
+    div()
+        .flex()
+        .justify_between()
+        .items_center()
+        .h(px(HEAD_H))
         .child(
             div()
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
-                .child(SharedString::from(display_name(row))),
+                .child(SharedString::from(title.to_string())),
         )
         .child(
             div()
-                .h(px(34.0))
                 .text_xs()
                 .text_color(rgb(MUTED))
-                .child(SharedString::from(row.summary.clone())),
-        )
-        .child(
-            div()
-                .flex()
-                .justify_between()
-                .items_center()
-                .child(state_pill(&row.state))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(STAR))
-                        .child(SharedString::from(rating(row))),
-                ),
+                .child(SharedString::from(detail)),
         )
 }
 
-fn state_pill(state: &str) -> impl IntoElement {
-    let color = match state {
-        "installed" => GOOD,
-        "update" => WARN,
-        _ => ACCENT,
+fn nothing_to_show(source: &Source) -> impl IntoElement {
+    let message = match &source.name {
+        Some(name) => format!("{name} listed no packages, and none are installed here."),
+        None => "No store answered and nothing is installed here.".to_string(),
     };
     div()
-        .px_2()
-        .py_1()
-        .rounded_full()
-        .bg(rgb(EDGE))
-        .text_color(rgb(color))
-        .text_xs()
-        .child(SharedString::from(state.to_string()))
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_1()
+        .child(
+            div()
+                .text_sm()
+                .text_color(rgb(MUTED))
+                .child(SharedString::from(message)),
+        )
 }
 
-fn rating(row: &Row) -> String {
-    row.rating
-        .map(|value| format!("★ {value:.1}"))
-        .unwrap_or_else(|| "—".to_string())
-}
-
-/// A name a person reads: `dev.fungos.gallery` is the id, `Gallery` is the app.
-fn display_name(row: &Row) -> String {
-    if row.name.contains('.') {
-        let last = row.name.rsplit('.').next().unwrap_or(&row.name);
-        let mut characters = last.chars();
-        return match characters.next() {
-            Some(first) => first.to_uppercase().chain(characters).collect(),
-            None => row.name.clone(),
-        };
-    }
-    row.name.clone()
-}
-
-fn initial(name: &str) -> String {
-    display_name(&Row {
-        name: name.to_string(),
-        summary: String::new(),
-        version: String::new(),
-        state: String::new(),
-        rating: None,
-        publisher: String::new(),
-    })
-    .chars()
-    .next()
-    .map(|value| value.to_uppercase().to_string())
-    .unwrap_or_else(|| "?".to_string())
-}
-
-/// Generated art: a stable tint per Spore, so a shelf reads as distinct things
-/// before any listing artwork exists. A real icon, when the store has one,
-/// replaces this.
-fn tint(seed: &str) -> u32 {
-    const PALETTE: [u32; 6] = [0x8b9dff, 0x5ee0c0, 0xffb86c, 0xff8fab, 0x9d7bff, 0x6fd3ff];
-    let mut hash: u32 = 2_166_136_261;
-    for byte in seed.bytes() {
-        hash ^= u32::from(byte);
-        hash = hash.wrapping_mul(16_777_619);
-    }
-    PALETTE[(hash as usize) % PALETTE.len()]
-}
-
-fn header(account: &str, source: &str, width: f32) -> impl IntoElement {
-    let mut bar = div()
+fn header(account: &Account, source: &Source) -> impl IntoElement {
+    let mark = match (&source.name, source.verified) {
+        (None, _) => ("no store reached", MUTED),
+        (Some(_), true) => ("signature verified", GOOD),
+        (Some(_), false) => ("index unsigned", WARN),
+    };
+    div()
         .flex()
         .items_center()
         .gap_4()
         .px_6()
-        .py_3()
+        .h(px(HEADER_H))
         .bg(rgb(PANEL))
         .border_b_1()
         .border_color(rgb(EDGE))
@@ -566,33 +689,19 @@ fn header(account: &str, source: &str, width: f32) -> impl IntoElement {
                         .text_color(rgb(ACCENT))
                         .child(SharedString::from("Store")),
                 ),
-        );
-    if width >= 700.0 {
-        bar = bar.child(
+        )
+        .child(div().flex_1())
+        .child(
             div()
-                .flex_1()
-                .px_3()
-                .py_2()
-                .rounded_lg()
-                .bg(rgb(BG))
-                .border_1()
-                .border_color(rgb(EDGE))
-                .text_sm()
-                .text_color(rgb(MUTED))
-                .child(SharedString::from("Search the store")),
-        );
-    }
-    bar.child(
-        div()
-            .text_xs()
-            .text_color(rgb(MUTED))
-            .child(SharedString::from(format!("{source} · verified catalog"))),
-    )
+                .text_xs()
+                .text_color(rgb(mark.1))
+                .child(SharedString::from(mark.0)),
+        )
 }
 
-fn chip(account: &str) -> impl IntoElement {
-    let name = account.strip_prefix("mycelium:").unwrap_or(account).to_string();
-    let initial = name
+fn chip(account: &Account) -> impl IntoElement {
+    let initial = account
+        .name
         .chars()
         .next()
         .map(|value| value.to_uppercase().to_string())
@@ -630,17 +739,31 @@ fn chip(account: &str) -> impl IntoElement {
                     div()
                         .text_xs()
                         .font_weight(FontWeight::MEDIUM)
-                        .child(SharedString::from(name)),
+                        .child(SharedString::from(account.name.clone())),
                 )
                 .child(
                     div()
                         .text_xs()
                         .text_color(rgb(MUTED))
-                        .child(SharedString::from(if account == "local" {
-                            "this machine"
-                        } else {
-                            "signed in"
-                        })),
+                        .child(SharedString::from(account.note.clone())),
                 ),
         )
+}
+
+/// `dev.fungos.vitals-view` has no listing yet, so the best name available is
+/// its own last segment, read as words.
+fn title_of(id: &str) -> String {
+    let tail = id.rsplit('.').next().unwrap_or(id);
+    let mut title = String::with_capacity(tail.len());
+    for (index, word) in tail.split(['-', '_']).enumerate() {
+        if index > 0 {
+            title.push(' ');
+        }
+        let mut characters = word.chars();
+        if let Some(first) = characters.next() {
+            title.extend(first.to_uppercase());
+            title.push_str(characters.as_str());
+        }
+    }
+    title
 }
