@@ -11,7 +11,7 @@ name = "vitals-view"
 version = "0.1.0"
 license = "MIT"
 summary = "GPUI vitals rings and cards rendered into a Canvas-owned GPU surface"
-description = "Reads the vitals.view record from Records, builds Apple Health-style activity rings and metric cards with GPUI, renders them through the Soil-provided wasi:webgpu device, and presents the texture to Canvas. The Spore owns the UI and the health labels; Canvas owns the window and compositor. Steps stay per device; there is no total."
+description = "Reads the vitals.view record from Records, builds Apple Health-style activity rings and metric cards with GPUI, renders them through the Soil-provided wasi:webgpu device, and presents the texture to Canvas. The Spore owns the UI and the health labels; Canvas owns the window and compositor. Steps stay per device and are never summed; the Move ring uses the highest fresh estimate."
 homepage = "https://github.com/fungOS-linux/spores"
 
 [engine]

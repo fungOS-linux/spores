@@ -155,11 +155,52 @@ pub struct Vitals {
 }
 
 impl Vitals {
+    /// The highest fresh per-device step total, with its source.
+    ///
+    /// Devices observe the same steps, so summing them double-counts. Taking
+    /// the highest total is the conservative first cut: it uses the device
+    /// with the most coverage, but still assumes the devices cover the same
+    /// window. A per-bucket max is the next step when independent coverage
+    /// windows are available.
+    #[must_use]
+    pub fn step_estimate(&self) -> (Option<&str>, Option<u64>) {
+        let primary = self.primary_motion_device.as_deref();
+        let mut best: Option<(&str, u64)> = None;
+        for (device, count) in &self.steps {
+            let better = match best {
+                None => true,
+                Some((best_device, best_count)) => {
+                    *count > best_count
+                        || (*count == best_count
+                            && primary == Some(device.as_str())
+                            && primary != Some(best_device))
+                }
+            };
+            if better {
+                best = Some((device.as_str(), *count));
+            }
+        }
+        match best {
+            Some((device, count)) => (Some(device), Some(count)),
+            None => (None, None),
+        }
+    }
+
+    fn step_estimate_json(&self) -> Value {
+        let (source_device, value) = self.step_estimate();
+        json!({
+            "value": value,
+            "source_device": source_device,
+            "policy": "max-fresh-device",
+        })
+    }
+
     #[must_use]
     pub fn to_json(&self) -> Value {
         let steps = json!({
             "by_device": self.steps,
             "primary_device": self.primary_motion_device,
+            "estimate": self.step_estimate_json(),
         });
         json!({
             "schema": SCHEMA,
@@ -181,6 +222,7 @@ impl Vitals {
     #[must_use]
     pub fn to_view(&self) -> Value {
         let rings = activity_rings(self);
+        let step_estimate = self.step_estimate_json();
         let cards = vec![
             card("heart_rate", "Heart rate", self.heart_rate.as_ref(), "bpm"),
             card("hrv", "HRV", self.hrv.as_ref(), "ms"),
@@ -210,7 +252,11 @@ impl Vitals {
             "cards": cards,
             // A GPUI renderer draws one row per device; there is deliberately
             // no `total` field to accidentally render a summed step count.
-            "steps": {"rows": steps, "primary_device": self.primary_motion_device},
+            "steps": {
+                "rows": steps,
+                "primary_device": self.primary_motion_device,
+                "estimate": step_estimate,
+            },
             "devices": self.devices,
             "policy_version": POLICY_VERSION,
             "source": SOURCE,
@@ -219,24 +265,20 @@ impl Vitals {
 }
 
 fn activity_rings(vitals: &Vitals) -> Vec<Value> {
-    let move_value = vitals
-        .primary_motion_device
-        .as_ref()
-        .and_then(|device| vitals.steps.get(device))
-        .copied();
+    let (move_source, move_value) = vitals.step_estimate();
     let move_ring = json!({
         "id": "move",
         "label": "Move",
         "value": move_value,
         "max": MOVE_RING_MAX_STEPS,
         "unit": "steps",
-        "source_device": vitals.primary_motion_device,
+        "source_device": move_source,
         "freshness": if move_value.is_some() {
             freshness_name(vitals.freshness)
         } else {
             "unknown"
         },
-        "detail": "primary device only",
+        "detail": "highest fresh device",
     });
 
     let heart_value = vitals
@@ -711,11 +753,22 @@ mod tests {
         assert_eq!(json["policy_version"], POLICY_VERSION);
         assert_eq!(json["wearer"], "owner");
         assert_eq!(json["steps"]["by_device"]["sim-ring"], 9_000);
+        assert_eq!(json["steps"]["estimate"]["value"], 9_000);
+        assert_eq!(json["steps"]["estimate"]["source_device"], "sim-ring");
     }
 
     #[test]
     fn seed_is_deterministic() {
         assert_eq!(seed(42), seed(42));
+    }
+
+    #[test]
+    fn step_estimate_prefers_the_motion_primary_on_a_tie() {
+        let now = 10_000;
+        let mut vitals = fuse(&seeded(now), "owner", now, Policy::default());
+        vitals.steps.insert("sim-pinetime".into(), 5_000);
+        vitals.steps.insert("sim-ring".into(), 5_000);
+        assert_eq!(vitals.step_estimate(), (Some("sim-pinetime"), Some(5_000)));
     }
 
     #[test]
@@ -733,14 +786,19 @@ mod tests {
     }
 
     #[test]
-    fn view_rings_use_primary_steps_not_a_total() {
+    fn view_rings_use_highest_fresh_steps_not_a_total() {
         let now = 10_000;
         let view = fuse(&seeded(now), "owner", now, Policy::default()).to_view();
         let rings = view["rings"].as_array().expect("rings");
         let move_ring = rings.iter().find(|ring| ring["id"] == "move").unwrap();
-        assert_eq!(move_ring["value"], 4_231);
-        assert_eq!(move_ring["source_device"], "sim-pinetime");
+        assert_eq!(move_ring["value"], 9_000);
+        assert_eq!(move_ring["source_device"], "sim-ring");
         assert!(move_ring.get("total").is_none());
+
+        assert_eq!(view["steps"]["estimate"]["value"], 9_000);
+        assert_eq!(view["steps"]["estimate"]["source_device"], "sim-ring");
+        assert_eq!(view["steps"]["estimate"]["policy"], "max-fresh-device");
+        assert_ne!(view["steps"]["estimate"]["value"], 4_231 + 9_000);
 
         let heart_ring = rings.iter().find(|ring| ring["id"] == "heart").unwrap();
         assert_eq!(heart_ring["value"], 58);
@@ -759,6 +817,7 @@ mod tests {
         assert!(cards.iter().all(|card| card["value"].is_null()));
         let rings = view["rings"].as_array().expect("rings");
         assert!(rings.iter().all(|ring| ring["value"].is_null()));
+        assert!(view["steps"]["estimate"]["value"].is_null());
         assert_eq!(view["empty"], true);
     }
 }
