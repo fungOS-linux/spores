@@ -48,6 +48,8 @@ the texture by borrow; the host chooses the extent and composites it.
 The guest still has no authority over the window. A revoked surface closes the
 lease; the Spore cannot keep drawing to a hidden window. The only font is the
 bundled IBM Plex Sans face (SIL OFL 1.1); a WASI component has no system fonts.
+The host supplies an empty WASI context: std's filesystem import is linked, but
+with no preopens, so the Spore cannot read a host path.
 
 ## Build
 
