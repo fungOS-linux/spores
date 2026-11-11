@@ -38,7 +38,7 @@ spores/unibus/wit/deps/soil-records/soil-records.wit 898cb3a58c473488e877a624e65
 
 # --- soil-spore.wit ---------------------------------------------------------
 # source:      fungOS-linux/soil, wit/soil-spore.wit
-# soil-commit: 95324d83f235ade6480ff8ee8686236ab94afa6b (soil main)
+# soil-commit: 35d960cdcdbc0db61cef34734f53316dca44fe38 (soil main)
 #
 # `title` joined the catalog entry: a package names how it is shown (a window
 # title, a launcher row) without turning its slug into a label. Every copy moved
