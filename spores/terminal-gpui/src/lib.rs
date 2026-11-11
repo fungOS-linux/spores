@@ -18,7 +18,7 @@ use gpui::{
     IntoElement, PlatformTextSystem, Render, SharedString, Window, div, prelude::*, px, rgb, size,
 };
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
-use soil::present::{cursor, input, surface};
+use soil::present::{clipboard, cursor, input, surface};
 use soil::terminal_screen::screen;
 use std::{borrow::Cow, sync::Arc};
 use terminal_core::{Cell, Grid, Style};
@@ -89,6 +89,11 @@ struct TerminalView {
     sessions: Vec<screen::Session>,
     /// What the last sidebar click had to say (a target with no session yet).
     notice: Option<SharedString>,
+    /// Text selection, in grid coordinates: `(anchor, focus)`, either end being
+    /// the one the pointer started on.
+    selection: Option<((u32, u32), (u32, u32))>,
+    /// A press is in progress, so a pointer move extends the selection.
+    dragging: bool,
     /// The sidebar can be folded away; the grid takes the width back.
     sidebar_open: bool,
     /// The last failure from the host, shown instead of a silent blank grid: a
@@ -158,6 +163,8 @@ impl TerminalView {
             grid,
             sessions: Vec::new(),
             notice: None,
+            selection: None,
+            dragging: false,
             sidebar_open: true,
             error: None,
             generation,
@@ -220,6 +227,9 @@ impl TerminalView {
                 }
                 if bg != 0 {
                     element = element.bg(rgb(bg));
+                }
+                if self.selected(row, col) {
+                    element = element.bg(rgb(0x2f4a63)).text_color(rgb(0xf2f6fb));
                 }
                 if cursor {
                     element = element.bg(rgb(0x3a5f8a)).text_color(rgb(0xffffff));
@@ -296,6 +306,59 @@ impl TerminalView {
         }
         let index = (offset / TARGET_H) as usize;
         (index < self.targets.len()).then_some(index)
+    }
+
+    /// Whether a cell is inside the selection, compared row-major so a drag up
+    /// and to the left selects the same text as one down and to the right.
+    fn selected(&self, row: u32, col: u32) -> bool {
+        let Some((anchor, focus)) = self.selection else {
+            return false;
+        };
+        let (start, end) = if (anchor.0, anchor.1) <= (focus.0, focus.1) {
+            (anchor, focus)
+        } else {
+            (focus, anchor)
+        };
+        let position = (row, col);
+        position >= start && position <= end
+    }
+
+    /// The selected text, rows joined by newlines, trailing blanks trimmed.
+    /// A wide cell is taken once; the cell behind it is empty by construction.
+    fn selection_text(&self) -> Option<String> {
+        let (anchor, focus) = self.selection?;
+        if anchor == focus {
+            return None;
+        }
+        let (start, end) = if (anchor.0, anchor.1) <= (focus.0, focus.1) {
+            (anchor, focus)
+        } else {
+            (focus, anchor)
+        };
+        let mut text = String::new();
+        for row in start.0..=end.0 {
+            let from = if row == start.0 { start.1 } else { 0 };
+            let to = if row == end.0 {
+                end.1
+            } else {
+                self.grid.cols.saturating_sub(1)
+            };
+            let mut line = String::new();
+            let mut col = from;
+            while col <= to {
+                if let Some(cell) = self.grid.cell(row, col) {
+                    line.push_str(&cell.text);
+                    col += u32::from(cell.width.max(1));
+                } else {
+                    col += 1;
+                }
+            }
+            text.push_str(line.trim_end());
+            if row != end.0 {
+                text.push('\n');
+            }
+        }
+        (!text.is_empty()).then_some(text)
     }
 
     /// The fold control sits at the head of the terminal pane.
@@ -389,7 +452,7 @@ impl TerminalView {
                     .text_color(rgb(0x6d7b8c))
                     .child("MYCELIUM"),
             )
-            .children(self.targets.iter().enumerate().map(|(index, target)| {
+            .children(self.targets.iter().map(|target| {
                 let mut row = div()
                     .h(px(TARGET_H))
                     .flex()
@@ -555,14 +618,20 @@ fn click_target(
         let target = &view.targets[index];
         let name = target.name.to_string();
         let local = index == 0;
-        view.targets.iter_mut().enumerate().for_each(|(other, target)| {
-            target.selected = other == index;
-        });
+        view.targets
+            .iter_mut()
+            .enumerate()
+            .for_each(|(other, target)| {
+                target.selected = other == index;
+            });
         (name, local)
     })?;
     let (name, local) = local;
     if local {
-        if screen::sessions().map(|sessions| sessions.is_empty()).unwrap_or(true) {
+        if screen::sessions()
+            .map(|sessions| sessions.is_empty())
+            .unwrap_or(true)
+        {
             let _ = screen::open_session(None);
         } else if let Ok(sessions) = screen::sessions() {
             if let Some(session) = sessions.first() {
@@ -575,12 +644,20 @@ fn click_target(
         })?;
         return Ok(());
     }
-    window.update(cx, |view, _, cx| {
-        view.notice = Some(SharedString::from(format!(
-            "{name}: mycelium has no session for this host yet"
-        )));
-        cx.notify();
-    })?;
+    // A target is a request for a shell on that host. Until mycelium provides
+    // the transport, `ssh` is it: the Spore still only sees a grid, and the
+    // session it opens is an ordinary tab.
+    let command = format!("ssh -t {name}");
+    match screen::open_session(Some(command.as_str())) {
+        Ok(_) => window.update(cx, |view, _, cx| {
+            view.notice = Some(SharedString::from(format!("opening {name}…")));
+            cx.notify();
+        })?,
+        Err(error) => window.update(cx, |view, _, cx| {
+            view.notice = Some(SharedString::from(format!("{name}: {error}")));
+            cx.notify();
+        })?,
+    }
     Ok(())
 }
 
@@ -699,7 +776,10 @@ fn render_frame() -> anyhow::Result<()> {
     let mut cells = (0, 0);
     // The host starts no shell on its own: a terminal with no session is a
     // blank window with a tab strip that cannot do anything.
-    if screen::sessions().map(|sessions| sessions.is_empty()).unwrap_or(true) {
+    if screen::sessions()
+        .map(|sessions| sessions.is_empty())
+        .unwrap_or(true)
+    {
         let _ = screen::open_session(None);
     }
     loop {
@@ -720,12 +800,11 @@ fn render_frame() -> anyhow::Result<()> {
             window.update(&mut cx, |view, _, cx| {
                 // The generated record has no `PartialEq`; a tab strip only
                 // cares about what it draws.
-                let same = view.sessions.len() == sessions.len()
-                    && view
-                        .sessions
-                        .iter()
-                        .zip(&sessions)
-                        .all(|(a, b)| a.id == b.id && a.title == b.title && a.active == b.active);
+                let same =
+                    view.sessions.len() == sessions.len()
+                        && view.sessions.iter().zip(&sessions).all(|(a, b)| {
+                            a.id == b.id && a.title == b.title && a.active == b.active
+                        });
                 if !same {
                     view.sessions = sessions;
                     cx.notify();
@@ -829,15 +908,50 @@ fn render_frame() -> anyhow::Result<()> {
                     }
                 }
                 input::Event::Button(button) => {
+                    if !button.pressed && button.button == input::PointerButton::Left {
+                        let text = window.update(&mut cx, |view, _, cx| {
+                            if !view.dragging {
+                                return None;
+                            }
+                            view.dragging = false;
+                            let text = view.selection_text();
+                            if text.is_none() {
+                                view.selection = None;
+                            }
+                            cx.notify();
+                            text
+                        })?;
+                        if let Some(text) = text {
+                            // A selection is for carrying somewhere else, so it
+                            // goes to the pasteboard as soon as it is made.
+                            let characters = text.chars().count();
+                            match clipboard::set_text(&text) {
+                                Ok(()) => window.update(&mut cx, |view, _, cx| {
+                                    view.notice = Some(SharedString::from(format!(
+                                        "copied {characters} chars"
+                                    )));
+                                    cx.notify();
+                                })?,
+                                Err(error) => window.update(&mut cx, |view, _, cx| {
+                                    view.notice =
+                                        Some(SharedString::from(format!("clipboard: {error}")));
+                                    cx.notify();
+                                })?,
+                            }
+                        }
+                        dirty = true;
+                    }
                     if button.pressed && button.button == input::PointerButton::Left {
                         let fold = window
                             .update(&mut cx, |view, _, _| view.toggle_at(button.x, button.y))?;
-                        let tab = window
-                            .update(&mut cx, |view, _, _| view.tab_at(button.x, button.y))?;
+                        let tab =
+                            window.update(&mut cx, |view, _, _| view.tab_at(button.x, button.y))?;
                         let plus = window
                             .update(&mut cx, |view, _, _| view.plus_at(button.x, button.y))?;
                         let target = window
                             .update(&mut cx, |view, _, _| view.target_at(button.x, button.y))?;
+                        let cell = window
+                            .update(&mut cx, |view, _, _| view.cell_at(button.x, button.y))?;
                         if fold {
                             toggle_sidebar(&window, &mut cx, None)?;
                             dirty = true;
@@ -855,6 +969,14 @@ fn render_frame() -> anyhow::Result<()> {
                             dirty = true;
                         } else if let Some(index) = target {
                             click_target(&window, &mut cx, index)?;
+                            dirty = true;
+                        } else if let Some(cell) = cell {
+                            window.update(&mut cx, |view, _, cx| {
+                                view.selection = Some((cell, cell));
+                                view.dragging = true;
+                                view.notice = None;
+                                cx.notify();
+                            })?;
                             dirty = true;
                         }
                     }
