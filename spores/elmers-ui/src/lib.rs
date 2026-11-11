@@ -35,6 +35,7 @@ const MAX_BODY: u32 = 512 * 1024;
 const TIMEOUT_MS: u32 = 5_000;
 
 pub mod brain;
+pub mod menu;
 pub mod view;
 
 use view::{Board, HEADER_H, LIST_W, ROW_H, View, parse_graph, parse_runs};
@@ -156,6 +157,12 @@ fn render_frame() -> anyhow::Result<()> {
             dirty = true;
         }
 
+        // Anything that moves asks for the next frame until it stops: the graph
+        // settling, a camera flying to a node.
+        if window.update(&mut cx, |board, _, _| board.tick())? {
+            dirty = true;
+        }
+
         // A board is a live thing: refresh on a slow tick so a run that finishes
         // while someone is watching does not need a key press to appear.
         let stale = window.update(&mut cx, |board, _, _| {
@@ -190,7 +197,76 @@ fn render_frame() -> anyhow::Result<()> {
             match event {
                 input::Event::KeyInput(key) => {
                     let name = key.key.to_ascii_lowercase();
+                    if window.update(&mut cx, |board, _, _| board.query_open())? {
+                        match name.as_str() {
+                            "escape" => {
+                                window.update(&mut cx, |board, _, cx| {
+                                    board.close_query();
+                                    cx.notify();
+                                })?;
+                            }
+                            "enter" => {
+                                window.update(&mut cx, |board, _, cx| {
+                                    board.commit_query();
+                                    cx.notify();
+                                })?;
+                            }
+                            "backspace" => {
+                                window.update(&mut cx, |board, _, cx| {
+                                    board.backspace();
+                                    cx.notify();
+                                })?;
+                            }
+                            "arrow-down" | "tab" => {
+                                window.update(&mut cx, |board, _, cx| {
+                                    board.move_query_cursor(1);
+                                    cx.notify();
+                                })?;
+                            }
+                            "arrow-up" => {
+                                window.update(&mut cx, |board, _, cx| {
+                                    board.move_query_cursor(-1);
+                                    cx.notify();
+                                })?;
+                            }
+                            _ => {
+                                if let Some(text) = key.text.clone()
+                                    && text.chars().count() == 1
+                                    && !key.control
+                                {
+                                    window.update(&mut cx, |board, _, cx| {
+                                        board.type_char(&text);
+                                        cx.notify();
+                                    })?;
+                                }
+                            }
+                        }
+                        dirty = true;
+                        continue;
+                    }
                     match name.as_str() {
+                        "/" => {
+                            window.update(&mut cx, |board, _, cx| {
+                                board.open_query(view::Mode::Search);
+                                cx.notify();
+                            })?;
+                            dirty = true;
+                        }
+                        ":" => {
+                            window.update(&mut cx, |board, _, cx| {
+                                board.open_query(view::Mode::Command);
+                                cx.notify();
+                            })?;
+                            dirty = true;
+                        }
+                        "f" => {
+                            window.update(&mut cx, |board, _, cx| {
+                                let picked = board.picked_node();
+                                board.focus(picked);
+                                cx.notify();
+                            })?;
+                            dirty = true;
+                        }
                         "q" => return Ok(()),
                         "j" | "arrow-down" => {
                             window.update(&mut cx, |board, _, cx| {

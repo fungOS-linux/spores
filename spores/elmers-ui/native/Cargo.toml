@@ -11,4 +11,5 @@ publish = false
 [dependencies]
 gpui = { git = "https://github.com/fungOS-linux/gpui-fast", rev = "60ebb175729ad2a17acf59d8e988e794ff4b7eb4", package = "gpui" }
 gpui_platform = { git = "https://github.com/fungOS-linux/gpui-fast", rev = "60ebb175729ad2a17acf59d8e988e794ff4b7eb4", package = "gpui_platform", features = ["font-kit"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"

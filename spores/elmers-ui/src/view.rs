@@ -25,6 +25,7 @@ pub(crate) const ROW_H: f32 = 34.0;
 
 #[derive(Clone, Debug)]
 pub struct Run {
+    id: String,
     workflow: String,
     status: String,
     detail: String,
@@ -60,6 +61,9 @@ pub(crate) fn parse_runs(body: &[u8]) -> Result<Vec<Run>, String> {
                 .unwrap_or_default()
                 .to_string()
         };
+        // Pretty-printed here rather than at paint time: this runs once per
+        // response, and the detail pane is repainted on every frame of an
+        // animation.
         let detail = {
             let error = text("error");
             if !error.is_empty() {
@@ -69,12 +73,13 @@ pub(crate) fn parse_runs(body: &[u8]) -> Result<Vec<Run>, String> {
                 if result.is_null() {
                     String::new()
                 } else {
-                    result.to_string()
+                    serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string())
                 }
             }
         };
         let when = entry.get("started_at").map(wall_clock).unwrap_or_default();
         runs.push(Run {
+            id: text("id"),
             workflow: text("workflow"),
             status: text("status"),
             detail,
@@ -84,6 +89,27 @@ pub(crate) fn parse_runs(body: &[u8]) -> Result<Vec<Run>, String> {
     // Newest first, which is the only order a board is read in.
     runs.reverse();
     Ok(runs)
+}
+
+/// A payload in a code block: monospace, its own surface, hairline border.
+/// JSON is written to be read against its own indentation, so the pane gives it
+/// the width and the background a terminal would.
+fn code_block(body: &str) -> impl IntoElement {
+    div()
+        .mt(px(2.0))
+        .p(px(8.0))
+        .rounded(px(4.0))
+        .bg(rgb(0x090d12))
+        .border_1()
+        .border_color(rgb(0x1f2933))
+        .overflow_hidden()
+        .child(
+            div()
+                .font_family("Lilex")
+                .text_size(px(10.0))
+                .text_color(rgb(0xb9c4d1))
+                .child(SharedString::from(body.to_string())),
+        )
 }
 
 /// The run store writes `started_at` as `"YYYY-MM-DD HH:MM:SS"`; a numeric
@@ -190,6 +216,37 @@ pub(crate) fn parse_graph(body: &[u8]) -> Result<Vec<Workflow>, String> {
     Ok(workflows)
 }
 
+/// What the query bar is doing. `Search` finds a node and flies to it;
+/// `Command` runs one of a handful of verbs, so the picture can be driven
+/// without hunting for a key.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Mode {
+    Search,
+    Command,
+}
+
+#[derive(Clone, Debug)]
+pub struct Query {
+    pub mode: Mode,
+    pub text: String,
+    /// Index into `matches`, moved with j/k or the arrows before `Enter`.
+    pub cursor: usize,
+    pub matches: Vec<usize>,
+}
+
+/// What outlives the process. The Spore itself is stateless by design — no
+/// filesystem grant — so this is the host's to keep; the preview writes it to
+/// disk and hands it back on the next run, and a hosted Spore could do the same
+/// through whatever capability its host offers.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct State {
+    pub brain: bool,
+    pub zoom: f32,
+    pub pan: (f32, f32),
+    pub picked: usize,
+}
+
 pub struct Board {
     pub view: View,
     workflows: Vec<Workflow>,
@@ -212,6 +269,18 @@ pub struct Board {
     /// threading bounds through the element tree.
     graph_bounds: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     graph_error: Option<SharedString>,
+    /// The query bar, when it is open.
+    pub query: Option<Query>,
+    /// The right-click menu, when one is open. `menu.rs` owns how it looks;
+    /// this owns what its rows do.
+    pub menu: Option<crate::menu::Menu>,
+    /// A camera move in flight, and the node it is heading for if the move has
+    /// not been aimed yet (the canvas bounds are only known after a paint).
+    camera_target: Option<crate::brain::Camera>,
+    focus_target: Option<usize>,
+    /// Set whenever something worth remembering changed, so the host can write
+    /// the state out without this module touching a filesystem.
+    dirty: bool,
     pub graph_at: Option<std::time::Instant>,
     pub runs: Vec<Run>,
     pub selected: usize,
@@ -237,6 +306,11 @@ impl Board {
             brain: None,
             graph_bounds: Default::default(),
             graph_error: None,
+            query: None,
+            menu: None,
+            camera_target: None,
+            focus_target: None,
+            dirty: false,
             graph_at: None,
             runs: Vec::new(),
             selected: 0,
@@ -289,6 +363,288 @@ impl Board {
     /// to remember where someone was looking.
     pub fn zoom_to(&mut self, zoom: f32) {
         self.camera.zoom = zoom.clamp(crate::brain::Camera::MIN, crate::brain::Camera::MAX);
+    }
+
+    /// One frame of anything that moves: the graph settling, a camera flying.
+    /// Returns whether another frame is wanted, so the host can stop asking.
+    pub fn tick(&mut self) -> bool {
+        let mut working = false;
+
+        if let Some(brain) = self.brain.clone()
+            && brain.settling()
+        {
+            let mut next = (*brain).clone();
+            // A few ticks per frame: enough to settle in about a second, few
+            // enough that the settling is something you can watch.
+            next.step(6);
+            self.brain = Some(std::rc::Rc::new(next));
+            working = true;
+        }
+
+        // A focus is aimed here rather than when it is asked for, because only a
+        // paint knows the canvas bounds — and it is re-aimed every frame while
+        // the graph is still settling, or the camera would arrive at where the
+        // node used to be.
+        let settling = self
+            .brain
+            .as_ref()
+            .map(|brain| brain.settling())
+            .unwrap_or(false);
+        if let Some(node) = self.focus_target
+            && let Some(bounds) = self.graph_bounds.get()
+            && let Some(brain) = self.brain.as_ref()
+            && let Some((x, y)) = brain.position_of(node)
+        {
+            let zoom = self.camera.zoom.max(2.4);
+            self.camera_target = Some(crate::brain::Camera::centred_on(x, y, zoom, bounds));
+        }
+
+        if let Some(target) = self.camera_target {
+            self.camera = crate::brain::Camera::ease(self.camera, target, 0.22);
+            if self.camera.arrived(target) {
+                self.camera = target;
+                self.camera_target = None;
+                if !settling {
+                    self.focus_target = None;
+                }
+            } else {
+                working = true;
+            }
+            self.dirty = true;
+        }
+        working
+    }
+
+    /// Whether anything the host should persist has changed since it last asked.
+    pub fn take_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.dirty)
+    }
+
+    pub fn state(&self) -> State {
+        let (pan_x, pan_y) = self.camera.pan;
+        State {
+            brain: self.view == View::Brain,
+            zoom: self.camera.zoom,
+            pan: (pan_x, pan_y),
+            picked: self.picked,
+        }
+    }
+
+    pub fn restore(&mut self, state: State) {
+        self.view = if state.brain { View::Brain } else { View::Runs };
+        self.camera = crate::brain::Camera {
+            zoom: if state.zoom > 0.0 { state.zoom } else { 1.0 },
+            pan: state.pan,
+        };
+        self.picked = state.picked;
+    }
+
+    pub fn open_query(&mut self, mode: Mode) {
+        self.query = Some(Query {
+            mode,
+            text: String::new(),
+            cursor: 0,
+            matches: Vec::new(),
+        });
+        self.dirty = true;
+    }
+
+    pub fn close_query(&mut self) {
+        self.query = None;
+    }
+
+    pub fn query_open(&self) -> bool {
+        self.query.is_some()
+    }
+
+    /// A typed character. Search refilters on every keystroke; a command line
+    /// does not, because its arguments are not node names.
+    pub fn type_char(&mut self, text: &str) {
+        let Some(query) = self.query.as_mut() else {
+            return;
+        };
+        query.text.push_str(text);
+        query.cursor = 0;
+        let text = query.text.clone();
+        if query.mode == Mode::Search {
+            query.matches = self
+                .brain
+                .as_ref()
+                .map(|brain| brain.find(&text))
+                .unwrap_or_default();
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        let Some(query) = self.query.as_mut() else {
+            return;
+        };
+        query.text.pop();
+        query.cursor = 0;
+        let text = query.text.clone();
+        if query.mode == Mode::Search {
+            query.matches = self
+                .brain
+                .as_ref()
+                .map(|brain| brain.find(&text))
+                .unwrap_or_default();
+        }
+    }
+
+    pub fn move_query_cursor(&mut self, delta: i32) {
+        let Some(query) = self.query.as_mut() else {
+            return;
+        };
+        if query.matches.is_empty() {
+            return;
+        }
+        let max = query.matches.len() as i32 - 1;
+        query.cursor = (query.cursor as i32 + delta).clamp(0, max) as usize;
+    }
+
+    /// `Enter`: fly to the highlighted match, or run the typed command.
+    pub fn commit_query(&mut self) {
+        let Some(query) = self.query.take() else {
+            return;
+        };
+        match query.mode {
+            Mode::Search => {
+                if let Some(&node) = query.matches.get(query.cursor) {
+                    self.focus(node);
+                }
+            }
+            Mode::Command => self.run_command(&query.text),
+        }
+        self.dirty = true;
+    }
+
+    /// The command vocabulary is deliberately tiny: the ones a person reaches
+    /// for while looking at a graph, not a second interface.
+    fn run_command(&mut self, text: &str) {
+        let mut words = text.split_whitespace();
+        match words.next().unwrap_or_default() {
+            "runs" => self.view = View::Runs,
+            "brain" => self.view = View::Brain,
+            "fit" => self.camera = Default::default(),
+            "zoom" => {
+                if let Some(zoom) = words.next().and_then(|value| value.parse::<f32>().ok()) {
+                    self.zoom_to(zoom);
+                }
+            }
+            "focus" => {
+                let rest = text.trim_start_matches("focus").trim();
+                if let Some(node) = self
+                    .brain
+                    .as_ref()
+                    .and_then(|brain| brain.find(rest).first().copied())
+                {
+                    self.focus(node);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Open a menu for a node at a window position.
+    pub fn open_node_menu(&mut self, node: Option<usize>, at: gpui::Point<gpui::Pixels>) {
+        let title = node
+            .and_then(|node| self.brain.as_ref().and_then(|brain| brain.name_of(node)))
+            .unwrap_or("graph")
+            .to_string();
+        let mut menu = crate::menu::Menu::new(at, title)
+            .item("focus", "Focus", "f")
+            .item("zoom-in", "Zoom in", "scroll")
+            .item("zoom-out", "Zoom out", "")
+            .item("fit", "Fit graph", "0")
+            .item("runs", "Show runs", "1");
+        if node.is_none() {
+            menu = crate::menu::Menu::new(at, "graph").item("fit", "Fit graph", "0");
+        }
+        if let Some(node) = node {
+            self.picked = node;
+        }
+        // Keep the menu on screen. The canvas is the only rectangle this view
+        // knows, and it is the one the menu is opened over.
+        if let Some(bounds) = self.graph_bounds.get() {
+            let bottom = f32::from(bounds.origin.y + bounds.size.height);
+            let overflow = f32::from(at.y) + menu.height() - bottom;
+            if overflow > 0.0 {
+                menu.at.y = at.y - px(overflow);
+            }
+        }
+        self.menu = Some(menu);
+        self.dirty = true;
+    }
+
+    /// Open a menu for a run, from the list or the graph's panel.
+    pub fn open_run_menu(&mut self, run: usize, at: gpui::Point<gpui::Pixels>) {
+        let title = self
+            .runs
+            .get(run)
+            .map(|run| run.workflow.clone())
+            .unwrap_or_default();
+        self.selected = run;
+        let mut menu = crate::menu::Menu::new(at, title)
+            .item("open", "Open run", "enter")
+            .item("copy", "Copy run id", "");
+        if let Some(bounds) = self.graph_bounds.get() {
+            let bottom = f32::from(bounds.origin.y + bounds.size.height);
+            let overflow = f32::from(at.y) + menu.height() - bottom;
+            if overflow > 0.0 {
+                menu.at.y = at.y - px(overflow);
+            }
+        }
+        self.menu = Some(menu);
+        self.dirty = true;
+    }
+
+    pub fn close_menu(&mut self) {
+        self.menu = None;
+    }
+
+    /// Run the row a menu reported. Ids are matched here rather than in
+    /// `menu.rs`, because only the view knows what it can do.
+    pub fn run_menu(&mut self, id: &str, cx: &mut gpui::App) {
+        match id {
+            "focus" => {
+                let node = self.picked_node();
+                self.focus(node);
+            }
+            "zoom-in" => self.zoom_to(self.camera.zoom * 1.5),
+            "zoom-out" => self.zoom_to(self.camera.zoom / 1.5),
+            "fit" => self.fit_graph(),
+            "runs" | "open" => self.view = View::Runs,
+            "copy" => {
+                if let Some(run) = self.runs.get(self.selected) {
+                    use gpui::ClipboardItem;
+                    cx.write_to_clipboard(ClipboardItem::new_string(run.id.clone()));
+                }
+            }
+            _ => {}
+        }
+        self.menu = None;
+        self.dirty = true;
+    }
+
+    /// Pick a node and fly the camera to it.
+    pub fn focus(&mut self, node: usize) {
+        self.picked = node;
+        self.focus_target = Some(node);
+        self.dirty = true;
+    }
+
+    /// The node a name resolves to, best match first. The preview uses it to
+    /// open on a node; `focus` in the command bar uses the same ranking.
+    pub fn find_node(&self, name: &str) -> Option<usize> {
+        self.brain.as_ref()?.find(name).first().copied()
+    }
+
+    /// The node the keyboard is on, for `f` and for the footer.
+    pub fn picked_node(&self) -> usize {
+        self.brain
+            .as_ref()
+            .map(|brain| self.picked.min(brain.node_count().saturating_sub(1)))
+            .unwrap_or(0)
     }
 
     pub fn move_picked(&mut self, delta: i32) {
@@ -416,7 +772,7 @@ impl Board {
             })
     }
 
-    fn list(&self) -> impl IntoElement {
+    fn list(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .w(px(LIST_W))
             // The detail pane holds a single un-wrapped line of JSON whose
@@ -431,6 +787,7 @@ impl Board {
             .children(self.runs.iter().enumerate().map(|(index, run)| {
                 let selected = index == self.selected;
                 let mut row = div()
+                    .id(("run", index))
                     .h(px(ROW_H))
                     .w_full()
                     .px(px(10.0))
@@ -459,6 +816,23 @@ impl Board {
                         .text_size(px(10.0))
                         .text_color(rgb(MUTED))
                         .child(SharedString::from(run.when.clone())),
+                )
+                // A click selects; nothing here starts or stops work, so this is
+                // the whole of the list's behaviour.
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(move |this, _: &gpui::MouseDownEvent, _window, cx| {
+                        this.selected = index;
+                        this.close_menu();
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_down(
+                    gpui::MouseButton::Right,
+                    cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                        this.open_run_menu(index, event.position);
+                        cx.notify();
+                    }),
                 )
                 .into_any_element()
             }))
@@ -502,12 +876,7 @@ impl Board {
                                     .child(SharedString::from(run.when.clone())),
                             ),
                     )
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(rgb(MUTED))
-                            .child(SharedString::from(run.detail.clone())),
-                    );
+                    .child(code_block(&run.detail));
             }
             None => {
                 panel = panel.child(
@@ -588,7 +957,37 @@ impl Board {
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                    // A double click is "take me there": the same flight `f` and
+                    // the search bar use, aimed at the node under the pointer.
+                    if event.click_count >= 2 {
+                        let node = match (this.brain.as_ref(), this.graph_bounds.get()) {
+                            (Some(brain), Some(bounds)) => {
+                                brain.hit(bounds, this.camera, event.position)
+                            }
+                            _ => None,
+                        };
+                        if let Some(node) = node {
+                            this.focus(node);
+                        }
+                        this.drag = None;
+                        cx.notify();
+                        return;
+                    }
                     this.drag = Some((event.position, this.camera.pan));
+                    this.close_menu();
+                    cx.notify();
+                }),
+            )
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                    let node = match (this.brain.as_ref(), this.graph_bounds.get()) {
+                        (Some(brain), Some(bounds)) => {
+                            brain.hit(bounds, this.camera, event.position)
+                        }
+                        _ => None,
+                    };
+                    this.open_node_menu(node, event.position);
                     cx.notify();
                 }),
             )
@@ -657,11 +1056,108 @@ impl Board {
         div()
             .flex_1()
             .flex()
-            .flex_row()
+            .flex_col()
             .overflow_hidden()
-            .child(div().flex_1().overflow_hidden().child(canvas_element))
-            .child(self.brain_detail(cx))
+            .child(self.query_strip())
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_row()
+                    .overflow_hidden()
+                    .child(div().flex_1().overflow_hidden().child(canvas_element))
+                    .child(self.brain_detail(cx)),
+            )
             .into_any_element()
+    }
+
+    /// The query bar and its matches. It sits above the canvas rather than
+    /// floating over it: this view has no absolute positioning to float with,
+    /// and a strip that pushes the picture down reads as a mode, which it is.
+    fn query_strip(&self) -> AnyElement {
+        let Some(query) = &self.query else {
+            return div().into_any_element();
+        };
+        let prompt = match query.mode {
+            Mode::Search => "/",
+            Mode::Command => ":",
+        };
+        let mut strip = div()
+            .flex()
+            .flex_col()
+            .bg(rgb(0x301010))
+            .border_b(px(1.0))
+            .border_color(rgb(0x1f2933))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .px(px(12.0))
+                    .h(px(28.0))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(rgb(WAIT))
+                            .child(SharedString::from(prompt)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(rgb(TEXT))
+                            .child(SharedString::from(query.text.clone())),
+                    )
+                    .child(div().text_size(px(12.0)).text_color(rgb(WAIT)).child("▌"))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(10.0))
+                            .text_color(rgb(MUTED))
+                            .child(SharedString::from(match query.mode {
+                                Mode::Search => "enter opens · ↑↓ picks · esc closes",
+                                Mode::Command => {
+                                    "runs · brain · fit · zoom N · focus NAME · esc closes"
+                                }
+                            })),
+                    ),
+            );
+        if query.mode == Mode::Search {
+            let brain = self.brain.as_ref();
+            strip = strip.children(query.matches.iter().take(6).enumerate().map(
+                |(index, node)| {
+                    let name = brain
+                        .and_then(|brain| brain.name_of(*node))
+                        .unwrap_or_default()
+                        .to_string();
+                    let station = brain
+                        .and_then(|brain| brain.station_of(*node))
+                        .map(|station| station.name.clone())
+                        .unwrap_or_default();
+                    let active = index == query.cursor;
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.0))
+                        .px(px(14.0))
+                        .h(px(20.0))
+                        .bg(rgb(if active { 0x606020 } else { 0x203040 }))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(px(11.0))
+                                .text_color(rgb(if active { TEXT } else { 0xb9c4d1 }))
+                                .child(SharedString::from(name)),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(rgb(MUTED))
+                                .child(SharedString::from(station)),
+                        )
+                },
+            ));
+        }
+        strip.into_any_element()
     }
 
     /// The panel a click opens: what the node is, and — for a workflow — the
@@ -816,7 +1312,7 @@ impl Board {
                     .child(match self.view {
                         View::Runs => "j/k move   r refresh   1 runs   2 brain   q quit",
                         View::Brain => {
-                            "drag pan   scroll zoom   0 fit   j/k pick   r reload   1 runs   2 brain   q quit"
+                            "/ search   : command   f focus   drag pan   scroll zoom   0 fit   1 runs   2 brain   q quit"
                         }
                     }),
             )
@@ -865,12 +1361,17 @@ impl Render for Board {
                     .flex()
                     .flex_row()
                     .overflow_hidden()
-                    .child(self.list())
+                    .child(self.list(cx))
                     .child(self.detail())
                     .into_any_element(),
                 View::Brain => self.brain_body(cx),
             })
             .child(self.footer())
+            .children(self.menu.as_ref().map(|menu| {
+                menu.element(cx.listener(|this, id, _window, cx| {
+                    this.run_menu(id, cx);
+                }))
+            }))
     }
 }
 
@@ -974,6 +1475,97 @@ mod tests {
             seen,
             workflows.len(),
             "every workflow is reachable by pointer"
+        );
+    }
+
+    #[test]
+    fn search_finds_by_name_then_station_and_puts_exact_matches_first() {
+        let body = br#"{"workflows":[
+            {"name":"notifications/pr","owners":["cto"],"steps":[{"kind":"call","name":"agent"}]},
+            {"name":"notifications/marbles","owners":["cto"]},
+            {"name":"dev/pr-close","owners":["coo"]},
+            {"name":"report/weekly","owners":["cmo"]}
+        ]}"#;
+        let workflows = parse_graph(body).expect("a small graph parses");
+        let brain = crate::brain::Brain::build(&workflows);
+
+        let hits = brain.find("notifications");
+        assert_eq!(hits.len(), 2, "a domain name finds its workflows");
+
+        let exact = brain.find("notifications/pr");
+        assert_eq!(
+            brain.name_of(exact[0]),
+            Some("notifications/pr"),
+            "an exact name comes first"
+        );
+
+        let by_owner = brain.find("cmo");
+        assert!(
+            by_owner
+                .iter()
+                .filter_map(|node| brain.name_of(*node))
+                .any(|name| name == "report/weekly"),
+            "an owner finds what it owns"
+        );
+        assert!(brain.find("nothing-here").is_empty());
+    }
+
+    #[test]
+    fn the_saved_state_survives_a_round_trip() {
+        let mut board = Board::new();
+        board.view = View::Brain;
+        board.zoom_to(2.5);
+        board.camera.pan = (37.0, -12.0);
+        board.picked = 7;
+        let saved = board.state();
+
+        let mut restored = Board::new();
+        restored.restore(saved.clone());
+        assert_eq!(restored.state(), saved);
+        assert!(restored.state().brain, "the view that was open reopens");
+
+        // A file written by an older build without a field still loads.
+        let older: State = serde_json::from_str(r#"{"brain":true}"#).expect("partial state loads");
+        assert_eq!(older.picked, 0);
+    }
+
+    #[test]
+    fn a_focus_flies_the_camera_to_the_node() {
+        let body = br#"{"workflows":[
+            {"name":"dev/a","owners":["cto"],"steps":[{"kind":"call","name":"agent"}]},
+            {"name":"ops/c","owners":["coo"]}
+        ]}"#;
+        let workflows = parse_graph(body).expect("a small graph parses");
+        let mut board = Board::new();
+        board.apply_graph(Ok(workflows));
+        let bounds = gpui::Bounds {
+            origin: gpui::point(gpui::px(0.0), gpui::px(0.0)),
+            size: gpui::size(
+                gpui::px(crate::brain::SPACE.0),
+                gpui::px(crate::brain::SPACE.1),
+            ),
+        };
+        board.graph_bounds.set(Some(bounds));
+
+        board.focus(1);
+        assert!(board.tick(), "a focus asks for frames until it arrives");
+        let mut guard = 0;
+        while board.tick() && guard < 200 {
+            guard += 1;
+        }
+        let node = board.picked_node();
+        let (x, y) = board
+            .brain
+            .as_ref()
+            .and_then(|brain| brain.position_of(node))
+            .expect("the focused node has a place");
+        let (origin, scale) = board.camera.frame(bounds);
+        let landed_x = f32::from(origin.x) + x * scale;
+        let landed_y = f32::from(origin.y) + y * scale;
+        assert!(
+            (landed_x - crate::brain::SPACE.0 / 2.0).abs() < 4.0
+                && (landed_y - crate::brain::SPACE.1 / 2.0).abs() < 4.0,
+            "the focused node ends up in the middle: {landed_x}, {landed_y}"
         );
     }
 

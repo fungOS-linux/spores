@@ -1093,6 +1093,7 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "gpui_platform",
+ "serde",
  "serde_json",
 ]
 

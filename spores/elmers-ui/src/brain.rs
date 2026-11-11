@@ -22,9 +22,8 @@ use crate::view::Workflow;
 /// Layout space. Everything below is in these units; `paint` scales to fit.
 pub const SPACE: (f32, f32) = (1280.0, 900.0);
 
-/// d3's defaults, which the dashboard leans on: 300 ticks down to alpha 0.001,
-/// with each tick's velocity multiplied by 0.4 before it moves the node.
-const TICKS: usize = 300;
+/// d3's defaults, which the dashboard leans on: alpha decays to 0.001 over 300
+/// ticks, and each tick's velocity is multiplied by 0.4 before it moves a node.
 const VELOCITY_DECAY: f32 = 0.4;
 const ALPHA_MIN: f32 = 0.001;
 const ALPHA_DECAY: f32 = 0.022_76;
@@ -64,6 +63,7 @@ enum Kind {
     Capability,
 }
 
+#[derive(Clone)]
 struct Node {
     name: String,
     kind: Kind,
@@ -154,6 +154,40 @@ impl Camera {
             ),
         }
     }
+
+    /// A camera that puts a world point in the middle of the canvas at `zoom`.
+    pub fn centred_on(x: f32, y: f32, zoom: f32, bounds: Bounds<Pixels>) -> Self {
+        let (width, height) = SPACE;
+        let zoom = zoom.clamp(Self::MIN, Self::MAX);
+        let fit: f32 =
+            f32::from(bounds.size.width / width).min(f32::from(bounds.size.height / height));
+        let scale = fit * zoom;
+        Self {
+            zoom,
+            // The pan that makes `origin + world * scale` land on the centre.
+            pan: ((width / 2.0 - x) * scale, (height / 2.0 - y) * scale),
+        }
+    }
+
+    /// Ease from one camera to another. `t` is the fraction of the remaining
+    /// distance to travel, so a focus lands rather than snaps.
+    pub fn ease(from: Self, to: Self, t: f32) -> Self {
+        let t = t.clamp(0.0, 1.0);
+        Self {
+            zoom: from.zoom + (to.zoom - from.zoom) * t,
+            pan: (
+                from.pan.0 + (to.pan.0 - from.pan.0) * t,
+                from.pan.1 + (to.pan.1 - from.pan.1) * t,
+            ),
+        }
+    }
+
+    /// Close enough that another frame would not be visible.
+    pub fn arrived(self, at: Self) -> bool {
+        (self.zoom - at.zoom).abs() < 0.005
+            && (self.pan.0 - at.pan.0).abs() < 0.5
+            && (self.pan.1 - at.pan.1).abs() < 0.5
+    }
 }
 
 /// What the panel next to the graph shows for one node. Assembled here because
@@ -168,6 +202,7 @@ pub struct Detail {
     pub callers: Vec<String>,
 }
 
+#[derive(Clone)]
 struct Link {
     from: usize,
     to: usize,
@@ -175,6 +210,7 @@ struct Link {
     strength: f32,
 }
 
+#[derive(Clone)]
 pub struct Station {
     pub name: String,
     pub count: usize,
@@ -183,10 +219,14 @@ pub struct Station {
     y: f32,
 }
 
+#[derive(Clone)]
 pub struct Brain {
     nodes: Vec<Node>,
     links: Vec<Link>,
     stations: Vec<Station>,
+    /// d3's cooling schedule, carried as state so the layout can be advanced a
+    /// few ticks per frame instead of all at once.
+    alpha: f32,
 }
 
 /// The folder a workflow lives in, with `lib/`, `tests/` and `examples/`
@@ -418,26 +458,28 @@ impl Brain {
             node.y = centre_y + angle.sin() * reach;
         }
 
-        let mut brain = Self {
+        Self {
             nodes,
             links,
             stations,
-        };
-        brain.settle();
-        brain
+            alpha: 1.0,
+        }
     }
 
-    /// d3 runs this on a timer; here it runs once, because the picture is a
-    /// document, not an animation.
-    fn settle(&mut self) {
-        let mut alpha = 1.0;
-        for _ in 0..TICKS {
-            alpha += -alpha * ALPHA_DECAY;
-            if alpha < ALPHA_MIN {
+    /// Advance the simulation by up to `budget` ticks. Returns whether the graph
+    /// is still moving: the view runs this once per frame so the layout is seen
+    /// settling instead of appearing finished, and stops asking when it stops.
+    pub fn step(&mut self, budget: usize) -> bool {
+        if self.alpha < ALPHA_MIN {
+            return false;
+        }
+        for _ in 0..budget {
+            if self.alpha < ALPHA_MIN {
                 break;
             }
-            self.springs(alpha);
-            self.charge(alpha);
+            self.alpha += -self.alpha * ALPHA_DECAY;
+            self.springs(self.alpha);
+            self.charge(self.alpha);
             for _ in 0..2 {
                 self.collide();
             }
@@ -446,14 +488,20 @@ impl Brain {
                     Kind::Workflow => STATION_PULL,
                     Kind::Capability => CORE_PULL,
                 };
-                node.vx += (node.home.0 - node.x) * pull * alpha;
-                node.vy += (node.home.1 - node.y) * pull * alpha;
+                node.vx += (node.home.0 - node.x) * pull * self.alpha;
+                node.vy += (node.home.1 - node.y) * pull * self.alpha;
                 node.vx *= VELOCITY_DECAY;
                 node.vy *= VELOCITY_DECAY;
                 node.x += node.vx;
                 node.y += node.vy;
             }
         }
+        self.alpha >= ALPHA_MIN
+    }
+
+    /// True while the graph is still finding itself.
+    pub fn settling(&self) -> bool {
+        self.alpha >= ALPHA_MIN
     }
 
     fn springs(&mut self, alpha: f32) {
@@ -579,6 +627,48 @@ impl Brain {
 
     pub fn name_of(&self, node: usize) -> Option<&str> {
         self.nodes.get(node).map(|node| node.name.as_str())
+    }
+
+    /// A node's place in the layout, for aiming the camera at it.
+    pub fn position_of(&self, node: usize) -> Option<(f32, f32)> {
+        self.nodes.get(node).map(|node| (node.x, node.y))
+    }
+
+    /// Nodes matching a typed query, best first: exact name, then prefix, then
+    /// name substring, then the station or owner. A person looking for
+    /// `notifications/pr` and a person looking for `notifications` are both
+    /// served by the same box, which is why the domain is in the key order.
+    pub fn find(&self, query: &str) -> Vec<usize> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let mut hits: Vec<(u8, usize, String)> = Vec::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            let name = node.name.to_lowercase();
+            let station = self
+                .stations
+                .get(node.station)
+                .map(|station| station.name.to_lowercase())
+                .unwrap_or_default();
+            let owner = node.owner.to_lowercase();
+            let rank = if name == needle {
+                0
+            } else if name.starts_with(&needle) {
+                1
+            } else if name.contains(&needle) {
+                2
+            } else if station == needle || owner == needle {
+                3
+            } else if station.contains(&needle) || owner.contains(&needle) {
+                4
+            } else {
+                continue;
+            };
+            hits.push((rank, index, name));
+        }
+        hits.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.2.cmp(&b.2)));
+        hits.into_iter().map(|(_, index, _)| index).collect()
     }
 
     pub fn node_count(&self) -> usize {
