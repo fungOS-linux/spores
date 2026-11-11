@@ -1,0 +1,12 @@
+// The vitals view as a Spore UI: GPUI lays out the cards and renders through
+// the Soil-provided wasi:webgpu device; the host presents the texture via
+// soil:canvas-gpu. No window, swapchain, or native handle enters the guest.
+package fungos:vitals-view@0.1.0;
+
+world runner {
+  include wasi:webgpu/imports@0.3.0-rc.2;
+  import soil:canvas-gpu/surface@0.1.0;
+  import soil:records/records@0.1.0;
+
+  export run: async func() -> u32;
+}
