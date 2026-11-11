@@ -19,7 +19,7 @@ host: wasi:webgpu instance + soil:present surface
 
 The guest uses the `headless` feature added to
 [`fungOS-linux/gpui-fast`](https://github.com/fungOS-linux/gpui-fast/tree/wasip2)
-(`eef6434`). That feature compiles `HeadlessAppContext` and
+(`60ebb17`). That feature compiles `HeadlessAppContext` and
 `WgpuHeadlessRenderer` without the native-only and `proptest` dependencies, and
 `WgpuContext::from_offscreen` builds a context on a caller-supplied device.
 
@@ -38,6 +38,41 @@ canvas-winit target/wasm32-wasip2/release/terminal_gpui.wasm
 
 `soil-webgpu` writes BGR24; the screenshot above is that frame converted to
 PNG.
+
+## What the host owns
+
+The grid on screen is the host's: `canvas-winit` opens a pty, runs `$SHELL`
+on it, feeds its output to `soil-vt`, and answers the emulator's replies back
+down the same pty. The Spore asks `soil:terminal-screen` for a snapshot, draws
+the cells, and sends keys back. It never sees an escape sequence, a file
+descriptor, or a process.
+
+The grid follows the window: the Spore reads `soil:present/surface` every frame,
+recomputes `cols × rows` from the space it has (minus the chrome, and minus the
+sidebar when it is folded), and calls `screen::resize`. A wheel notch scrolls
+the viewport through scrollback; the host hands back the moved viewport, so the
+Spore tracks no offset of its own.
+
+Keys typed before the shell has painted are held and replayed rather than
+written into the tty, which would echo them wherever the cursor happened to be.
+
+## Sidebar targets
+
+The three targets in the sidebar — `studio`, `agora-one`, `home-pi` — are
+fixtures, not sessions. Making them real is the next piece of work, and it does
+not need a new contract:
+
+1. The target list becomes host data: a catalogue of hosts (mycelium inventory,
+   or a config file) reached through a host call, the same way the launcher gets
+   its Spore list.
+2. Opening a target starts a local `ssh <host>` on the pty. The Spore still
+   renders a grid, so this is a host change plus a target list in the view.
+3. A mycelium transport later replaces `ssh` without the Spore noticing: the
+   contract is "a process on a pty", whichever side of the link it runs on.
+
+Selecting a target in the sidebar is therefore a request for a new session, not
+a local UI state change — which is why it belongs behind a host call rather than
+being faked in the view.
 
 ## What is real, and what is not
 

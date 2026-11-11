@@ -22,13 +22,45 @@ use soil::present::{cursor, input, surface};
 use soil::spore::catalog;
 use std::{borrow::Cow, sync::Arc};
 
-/// One geometry, two readers: the list lays rows out with these numbers and the
+/// One geometry, two readers: the grid lays tiles out with these numbers and the
 /// pointer hit-tests with them. Keeping them shared is what makes a click land
-/// on the row the user aimed at.
-const HEADER_H: f32 = 52.0;
-const LIST_PAD: f32 = 8.0;
-const ROW_H: f32 = 56.0;
-const ROW_GAP: f32 = 2.0;
+/// on the tile the user aimed at.
+const HEADER_H: f32 = 56.0;
+const LIST_PAD: f32 = 24.0;
+const TILE: f32 = 104.0;
+const TILE_GAP: f32 = 28.0;
+const LABEL_H: f32 = 26.0;
+
+
+/// The colour an app gets when it does not ship one: a hue from its id, at a
+/// saturation and lightness that read as a bright tile on a dark launcher.
+/// Stable across runs, so an app always looks like itself.
+fn tile_color(id: &str, lift: f32) -> u32 {
+    let mut hash = 0u32;
+    for byte in id.bytes() {
+        hash = hash.wrapping_mul(16777619) ^ u32::from(byte);
+    }
+    let hue = (hash % 360) as f32;
+    let saturation = 0.62;
+    let lightness = (0.52 + lift).min(0.78);
+    hsl_to_rgb(hue, saturation, lightness)
+}
+
+fn hsl_to_rgb(hue: f32, saturation: f32, lightness: f32) -> u32 {
+    let c = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let x = c * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
+    let m = lightness - c / 2.0;
+    let (r, g, b) = match hue as u32 / 60 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let channel = |value: f32| ((value + m) * 255.0).round().clamp(0.0, 255.0) as u32;
+    (channel(r) << 16) | (channel(g) << 8) | channel(b)
+}
 
 const LILEX: &[u8] = include_bytes!("../assets/Lilex-Regular.ttf");
 const LILEX_BOLD: &[u8] = include_bytes!("../assets/Lilex-Bold.ttf");
@@ -45,7 +77,12 @@ struct Row {
 
 struct LauncherView {
     rows: Vec<Row>,
+    /// Keyboard selection, drawn as a ring.
     selected: usize,
+    /// Pointer hover, drawn as a brighter tile. Held apart from `selected` so
+    /// pointing at an app always shows something, even when it is also the
+    /// selected one.
+    hovered: Option<usize>,
     status: SharedString,
 }
 
@@ -67,70 +104,65 @@ impl LauncherView {
                 Self {
                     rows,
                     selected: 0,
+                    hovered: None,
                     status: SharedString::from(format!("{count} installed")),
                 }
             }
             Err(error) => Self {
                 rows: Vec::new(),
                 selected: 0,
+                hovered: None,
                 status: SharedString::from(format!("catalog: {error:?}")),
             },
         }
     }
 
-    /// Which row the pointer is over, if any. The list starts under the header
-    /// and one row's height is a constant here, not a guess about text metrics.
-    fn row_at(&self, y: f32) -> Option<usize> {
-        let offset = y - HEADER_H - LIST_PAD;
-        if offset < 0.0 {
+    /// How many tiles fit across the window. The grid reflows with the window
+    /// instead of running off the edge.
+    fn columns(width: f32) -> usize {
+        let usable = (width - 2.0 * LIST_PAD + TILE_GAP).max(TILE);
+        ((usable / (TILE + TILE_GAP)).floor() as usize).max(1)
+    }
+
+    /// The tile under a point, if the pointer is over one.
+    fn tile_at(&self, x: f32, y: f32, width: f32) -> Option<usize> {
+        let columns = Self::columns(width);
+        let top = HEADER_H + LIST_PAD;
+        if y < top || x < LIST_PAD {
             return None;
         }
-        let index = (offset / (ROW_H + ROW_GAP)) as usize;
+        let stride_x = TILE + TILE_GAP;
+        let stride_y = TILE + LABEL_H + TILE_GAP;
+        let column = ((x - LIST_PAD) / stride_x).floor();
+        let row = ((y - top) / stride_y).floor();
+        if column < 0.0 || row < 0.0 {
+            return None;
+        }
+        let column = column as usize;
+        if column >= columns {
+            return None;
+        }
+        // A tile's label belongs to the tile: pointing at the name should open
+        // the app, not fall between targets.
+        if (y - top) % stride_y > TILE + LABEL_H {
+            return None;
+        }
+        let index = row as usize * columns + column;
         (index < self.rows.len()).then_some(index)
     }
 
-    /// Follow the pointer. A launcher with one highlight is easier to trust than
-    /// one with a hover highlight and a separate keyboard highlight.
-    fn hover(&mut self, y: f32) -> bool {
-        let Some(row) = self.row_at(y) else {
-            return false;
-        };
-        if row == self.selected {
+    /// Follow the pointer. The hover ring is its own state: with one app
+    /// installed, a highlight that only moved the selection would look inert.
+    fn hover(&mut self, index: Option<usize>) -> bool {
+        if index == self.hovered {
             return false;
         }
-        self.selected = row;
+        self.hovered = index;
         true
     }
 
-    /// Open the row under the pointer. Returns whether anything was launched.
-    fn click(&mut self, y: f32) -> bool {
-        let Some(row) = self.row_at(y) else {
-            return false;
-        };
-        self.selected = row;
-        self.open_selected()
-    }
-
-    fn move_down(&mut self) -> bool {
-        if self.selected + 1 < self.rows.len() {
-            self.selected += 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn move_up(&mut self) -> bool {
-        if self.selected > 0 {
-            self.selected -= 1;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn open_selected(&mut self) -> bool {
-        let Some(row) = self.rows.get(self.selected) else {
+    fn open(&mut self, index: usize) -> bool {
+        let Some(row) = self.rows.get(index) else {
             return false;
         };
         self.status = match catalog::launch(&row.id, &row.default_surface) {
@@ -140,14 +172,51 @@ impl LauncherView {
         true
     }
 
+    fn click(&mut self, index: Option<usize>) -> bool {
+        let Some(index) = index else {
+            return false;
+        };
+        self.selected = index;
+        self.open(index)
+    }
+
+    fn move_by(&mut self, dx: i32, dy: i32, width: f32) -> bool {
+        if self.rows.is_empty() {
+            return false;
+        }
+        let columns = Self::columns(width) as i32;
+        let count = self.rows.len() as i32;
+        let column = self.selected as i32 % columns;
+        let row = self.selected as i32 / columns;
+        let (column, row) = if dx != 0 {
+            let next = column + dx;
+            if next < 0 || next >= columns {
+                (column, row)
+            } else {
+                (next, row)
+            }
+        } else if dy != 0 {
+            let next = (row + dy).max(0);
+            (column, next)
+        } else {
+            (column, row)
+        };
+        let index = row * columns + column;
+        let index = index.clamp(0, count - 1) as usize;
+        if index == self.selected {
+            return false;
+        }
+        self.selected = index;
+        true
+    }
+
     fn header(&self) -> impl IntoElement {
         div()
             .flex()
             .items_center()
             .justify_between()
-            .px(px(16.0))
+            .px(px(22.0))
             .h(px(HEADER_H))
-            .bg(rgb(0x0f141b))
             .child(
                 div()
                     .flex()
@@ -155,91 +224,99 @@ impl LauncherView {
                     .gap(px(10.0))
                     .child(
                         div()
-                            .text_size(px(15.0))
+                            .text_size(px(16.0))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(rgb(0xe6edf5))
+                            .text_color(rgb(0xf2f6fb))
                             .child("Spores"),
                     )
                     .child(
                         div()
                             .text_size(px(11.0))
-                            .text_color(rgb(0x6d7b8c))
+                            .text_color(rgb(0x76828f))
                             .child("installed on this machine"),
                     ),
             )
             .child(
                 div()
                     .text_size(px(10.0))
-                    .text_color(rgb(0x6d7b8c))
+                    .text_color(rgb(0x76828f))
                     .child(self.status.clone()),
             )
     }
 
-    fn rows(&self) -> Vec<AnyElement> {
+    fn tiles(&self, width: f32) -> Vec<AnyElement> {
         if self.rows.is_empty() {
             return vec![
                 div()
-                    .p(px(16.0))
-                    .text_color(rgb(0x6d7b8c))
+                    .text_color(rgb(0x76828f))
                     .child("No Spores found. Pass --spores DIR to canvas-winit.")
                     .into_any_element(),
             ];
         }
-        self.rows
-            .iter()
-            .enumerate()
-            .map(|(index, row)| {
-                let selected = index == self.selected;
-                let mut element = div()
+        // Rows are chunked here rather than wrapped by the layout, so the
+        // pointer hit test and the drawn grid share one idea of where a tile is.
+        let columns = Self::columns(width).max(1);
+        let mut grid = Vec::with_capacity(self.rows.len().div_ceil(columns));
+        for start in (0..self.rows.len()).step_by(columns) {
+            let mut cells = Vec::with_capacity(columns);
+            for index in start..(start + columns).min(self.rows.len()) {
+                let row = &self.rows[index];
+                let hovered = self.hovered == Some(index);
+                let selected = self.selected == index;
+                let background = tile_color(&row.id, if hovered { 0.14 } else { 0.0 });
+                let glyph: String = row
+                    .title
+                    .chars()
+                    .next()
+                    .map(|first| first.to_uppercase().collect())
+                    .unwrap_or_else(|| "?".to_owned());
+                let mut tile = div()
+                    .w(px(TILE))
+                    .h(px(TILE))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(24.0))
+                    .bg(rgb(background))
+                    .text_size(px(40.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(0xffff_ffff));
+                if selected {
+                    tile = tile.border_2().border_color(rgb(0x7d_8b_99));
+                }
+                if hovered {
+                    tile = tile.border_2().border_color(rgb(0xffff_ffff));
+                }
+                let cell = div()
                     .flex()
                     .flex_col()
-                    .justify_center()
-                    .gap(px(2.0))
-                    .h(px(ROW_H))
-                    .px(px(10.0))
-                    .rounded(px(6.0));
-                if selected {
-                    element = element.bg(rgb(0x1b2430));
-                }
-                element
+                    .items_center()
+                    .gap(px(6.0))
+                    .w(px(TILE))
+                    .child(tile.child(SharedString::from(glyph)))
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .child(
-                                div()
-                                    .text_size(px(13.0))
-                                    .font_weight(if selected {
-                                        FontWeight::BOLD
-                                    } else {
-                                        FontWeight::NORMAL
-                                    })
-                                    .text_color(rgb(0xe6edf5))
-                                    .child(row.title.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(10.0))
-                                    .text_color(rgb(0x6d7b8c))
-                                    .child(row.version.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(10.0))
-                                    .text_color(rgb(0x4f6b82))
-                                    .child(row.default_surface.clone()),
-                            ),
+                            .text_size(px(12.0))
+                            .text_color(if hovered || selected {
+                                rgb(0xf2f6fb)
+                            } else {
+                                rgb(0xb9c4cf)
+                            })
+                            .child(row.title.clone()),
                     )
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(rgb(0x8a99aa))
-                            .child(row.summary.clone()),
-                    )
-                    .into_any_element()
-            })
-            .collect()
+                    .into_any_element();
+                cells.push(cell);
+            }
+            grid.push(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(TILE_GAP))
+                    .children(cells)
+                    .into_any_element(),
+            );
+        }
+        grid
     }
 
     fn footer(&self) -> impl IntoElement {
@@ -248,22 +325,36 @@ impl LauncherView {
             .flex()
             .items_center()
             .justify_between()
-            .px(px(16.0))
+            .px(px(22.0))
             .bg(rgb(0x0f141b))
             .text_size(px(10.0))
-            .text_color(rgb(0x6d7b8c))
-            .child("↑/↓ select · enter open · esc quit")
-            .child(self.status.clone())
+            .text_color(rgb(0x76828f))
+            .child("←↑↓→ select · enter open · esc quit")
+            .child(
+                // What the pointer (or the keyboard) is on, so a tile can stay
+                // a name and a colour without hiding what the app is.
+                self.hovered
+                    .or(Some(self.selected))
+                    .and_then(|index| self.rows.get(index))
+                    .map(|row| {
+                        SharedString::from(format!(
+                            "{} {} · {}",
+                            row.title, row.version, row.summary
+                        ))
+                    })
+                    .unwrap_or_else(|| self.status.clone()),
+            )
     }
 }
 
 impl Render for LauncherView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let width = surface::size().0 as f32;
         div()
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x0c1015))
+            .bg(rgb(0x14171c))
             .font_family("Lilex")
             .child(self.header())
             .child(
@@ -271,12 +362,28 @@ impl Render for LauncherView {
                     .flex_1()
                     .flex()
                     .flex_col()
-                    .gap(px(ROW_GAP))
+                    .items_start()
+                    .gap(px(TILE_GAP))
                     .p(px(LIST_PAD))
-                    .children(self.rows()),
+                    .children(self.tiles(width)),
             )
             .child(self.footer())
     }
+}
+
+/// Run one view change and mark the frame dirty if it did anything.
+fn step(
+    window: &gpui::WindowHandle<LauncherView>,
+    cx: &mut HeadlessAppContext,
+    change: impl FnOnce(&mut LauncherView) -> bool,
+) -> anyhow::Result<bool> {
+    window.update(cx, |view, _, cx| {
+        let changed = change(view);
+        if changed {
+            cx.notify();
+        }
+        changed
+    })
 }
 
 fn present_frame(
@@ -382,26 +489,13 @@ fn run_launcher() -> anyhow::Result<()> {
                 if key.key == "escape" {
                     break;
                 }
+                let width = surface::size().0 as f32;
                 let changed = match key.key.as_str() {
-                    "arrow-down" => window.update(&mut cx, |view, _, cx| {
-                        let changed = view.move_down();
-                        if changed {
-                            cx.notify();
-                        }
-                        changed
-                    })?,
-                    "arrow-up" => window.update(&mut cx, |view, _, cx| {
-                        let changed = view.move_up();
-                        if changed {
-                            cx.notify();
-                        }
-                        changed
-                    })?,
-                    "enter" => window.update(&mut cx, |view, _, cx| {
-                        let changed = view.open_selected();
-                        cx.notify();
-                        changed
-                    })?,
+                    "arrow-right" => step(&window, &mut cx, |view| view.move_by(1, 0, width))?,
+                    "arrow-left" => step(&window, &mut cx, |view| view.move_by(-1, 0, width))?,
+                    "arrow-down" => step(&window, &mut cx, |view| view.move_by(0, 1, width))?,
+                    "arrow-up" => step(&window, &mut cx, |view| view.move_by(0, -1, width))?,
+                    "enter" => step(&window, &mut cx, |view| view.open(view.selected))?,
                     _ => false,
                 };
                 if changed {
@@ -409,31 +503,35 @@ fn run_launcher() -> anyhow::Result<()> {
                 }
             }
             Some(input::Event::Moved(pointer)) => {
+                let width = surface::size().0 as f32;
                 let changed = window.update(&mut cx, |view, _, cx| {
-                    let changed = view.hover(pointer.y);
+                    let target = view.tile_at(pointer.x, pointer.y, width);
+                    let changed = view.hover(target);
                     if changed {
                         cx.notify();
                     }
                     changed
                 })?;
-                // A row is a target, so the pointer says so before it is clicked.
-                let style = match window.update(&mut cx, |view, _, _| view.row_at(pointer.y))? {
+                // A tile is a target, so the pointer says so before it is clicked.
+                let target = window
+                    .update(&mut cx, |view, _, _| view.tile_at(pointer.x, pointer.y, width))?;
+                let _ = cursor::set(match target {
                     Some(_) => cursor::CursorStyle::Pointer,
                     None => cursor::CursorStyle::Default,
-                };
-                let _ = cursor::set(style);
+                });
                 if changed {
                     dirty = true;
                 }
             }
             Some(input::Event::Button(button)) => {
                 if button.pressed && button.button == input::PointerButton::Left {
-                    let changed =
-                        window.update(&mut cx, |view, _, cx| {
-                            let changed = view.click(button.y);
-                            cx.notify();
-                            changed
-                        })?;
+                    let width = surface::size().0 as f32;
+                    let changed = window.update(&mut cx, |view, _, cx| {
+                        let target = view.tile_at(button.x, button.y, width);
+                        let changed = view.click(target);
+                        cx.notify();
+                        changed
+                    })?;
                     if changed {
                         dirty = true;
                     }

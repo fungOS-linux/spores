@@ -25,6 +25,10 @@ use terminal_core::{Cell, Grid, Style};
 
 const LILEX: &[u8] = include_bytes!("../assets/Lilex-Regular.ttf");
 const LILEX_BOLD: &[u8] = include_bytes!("../assets/Lilex-Bold.ttf");
+/// The grid's face. Fira Code is monospaced with a 0.6 em advance, which is
+/// what `CELL_W` measures at 13 px; the UI around it stays in Lilex.
+const FIRA: &[u8] = include_bytes!("../assets/FiraCode-Regular.otf");
+const FIRA_BOLD: &[u8] = include_bytes!("../assets/FiraCode-Bold.ttf");
 
 const CELL_W: f32 = 7.8;
 const CELL_H: f32 = 16.0;
@@ -35,7 +39,11 @@ const CELL_H: f32 = 16.0;
 const SIDEBAR_W: f32 = 214.0;
 const HEADER_H: f32 = 46.0;
 const GRID_PAD: f32 = 10.0;
+/// A cell's advance is not its ink: the last column needs room on its right or
+/// the glyph is clipped by the pane.
+const GRID_PAD_R: f32 = 18.0;
 const FOOTER_H: f32 = 26.0;
+const TOGGLE_W: f32 = 28.0;
 
 const DEFAULT_FG: u32 = 0xc8d3e0;
 
@@ -68,8 +76,12 @@ struct Target {
 
 struct TerminalView {
     grid: Grid,
+    /// The sidebar can be folded away; the grid takes the width back.
+    sidebar_open: bool,
+    /// The last failure from the host, shown instead of a silent blank grid: a
+    /// terminal that cannot open a shell has to say so.
+    error: Option<SharedString>,
     targets: Vec<Target>,
-    last_key: SharedString,
     generation: u64,
 }
 
@@ -131,7 +143,8 @@ impl TerminalView {
         };
         Self {
             grid,
-            last_key: SharedString::from("none"),
+            sidebar_open: true,
+            error: None,
             generation,
             targets: vec![
                 Target {
@@ -183,7 +196,7 @@ impl TerminalView {
                     .flex_none()
                     .w(px(CELL_W * f32::from(width)))
                     .h(px(CELL_H))
-                    .font_family("Lilex")
+                    .font_family("Fira Code")
                     .text_size(px(13.0))
                     .line_height(px(CELL_H))
                     .text_color(rgb(fg));
@@ -217,18 +230,31 @@ impl TerminalView {
     }
 
     /// How many cells fit in the space the host gives us. The grid follows the
-    /// window, so a resize is a shell resize rather than a crop.
-    fn cells_for(width: f32, height: f32) -> (u32, u32) {
-        let cols = ((width - SIDEBAR_W - 2.0 * GRID_PAD) / CELL_W).floor().max(20.0) as u32;
+    /// window and the sidebar, so folding the sidebar widens the shell.
+    fn cells_for(width: f32, height: f32, sidebar_open: bool) -> (u32, u32) {
+        let sidebar = if sidebar_open { SIDEBAR_W } else { 0.0 };
+        let cols = ((width - sidebar - GRID_PAD - GRID_PAD_R) / CELL_W)
+            .floor()
+            .max(20.0) as u32;
         let rows = ((height - HEADER_H - FOOTER_H - 2.0 * GRID_PAD) / CELL_H)
             .floor()
             .max(5.0) as u32;
         (cols, rows)
     }
 
+    fn sidebar_width(&self) -> f32 {
+        if self.sidebar_open { SIDEBAR_W } else { 0.0 }
+    }
+
+    /// The fold control sits at the head of the terminal pane.
+    fn toggle_at(&self, x: f32, y: f32) -> bool {
+        let left = self.sidebar_width();
+        (left..left + TOGGLE_W).contains(&x) && (0.0..HEADER_H).contains(&y)
+    }
+
     /// Which cell the pointer is over, if it is over the grid at all.
     fn cell_at(&self, x: f32, y: f32) -> Option<(u32, u32)> {
-        let left = SIDEBAR_W + GRID_PAD;
+        let left = self.sidebar_width() + GRID_PAD;
         let top = HEADER_H + GRID_PAD;
         if x < left || y < top {
             return None;
@@ -236,6 +262,63 @@ impl TerminalView {
         let col = ((x - left) / CELL_W) as u32;
         let row = ((y - top) / CELL_H) as u32;
         (col < self.grid.cols && row < self.grid.rows).then_some((row, col))
+    }
+
+    /// The bar under the grid: what this session is, how big the grid is, and
+    /// the keys that matter. Everything here is something the Spore knows; a
+    /// field it cannot fill honestly (a working directory, a running process)
+    /// waits for a contract that reports it rather than guessing.
+    fn status_bar(&self) -> impl IntoElement {
+        let title = self
+            .grid
+            .title
+            .clone()
+            .unwrap_or_else(|| "local shell".to_string());
+        let (dot, title_color) = match &self.error {
+            Some(_) => (0xd97757, 0xf0b8a4),
+            None => (0x7ee08a, 0xc8d3e0),
+        };
+        let left = match &self.error {
+            Some(error) => format!("terminal: {error}"),
+            None => title,
+        };
+        div()
+            .h(px(FOOTER_H))
+            .flex()
+            .items_center()
+            .justify_between()
+            .px(px(14.0))
+            .bg(rgb(0x0f141b))
+            .text_size(px(11.0))
+            .text_color(rgb(0x6d7b8c))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(div().w(px(6.0)).h(px(6.0)).rounded(px(3.0)).bg(rgb(dot)))
+                    .child(
+                        div()
+                            .text_color(rgb(title_color))
+                            .child(SharedString::from(left)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(14.0))
+                    .child(
+                        div()
+                            .text_color(rgb(0x8a99aa))
+                            .child(SharedString::from(format!(
+                                "{}×{}",
+                                self.grid.cols, self.grid.rows
+                            ))),
+                    )
+                    .child("⌃B sidebar")
+                    .child("⌃Q quit"),
+            )
     }
 
     fn sidebar(&self) -> impl IntoElement {
@@ -312,6 +395,13 @@ impl TerminalView {
                     .gap(px(8.0))
                     .child(
                         div()
+                            .w(px(TOGGLE_W))
+                            .text_size(px(13.0))
+                            .text_color(rgb(0x8a99aa))
+                            .child(if self.sidebar_open { "«" } else { "»" }),
+                    )
+                    .child(
+                        div()
                             .text_size(px(13.0))
                             .text_color(rgb(0xe6edf5))
                             .child("term.myc"),
@@ -343,7 +433,7 @@ impl Render for TerminalView {
             .flex_row()
             .bg(rgb(0x0b0f14))
             .font_family("Lilex")
-            .child(self.sidebar())
+            .children(self.sidebar_open.then(|| self.sidebar()))
             .child(
                 div()
                     .flex_1()
@@ -354,28 +444,29 @@ impl Render for TerminalView {
                         div()
                             .flex_1()
                             .overflow_hidden()
-                            .p(px(GRID_PAD))
+                            .pl(px(GRID_PAD))
+                            .pr(px(GRID_PAD_R))
+                            .py(px(GRID_PAD))
                             .flex()
                             .flex_col()
                             .children(self.rows()),
                     )
-                    .child(
-                        div()
-                            .h(px(26.0))
-                            .flex()
-                            .items_center()
-                            .px(px(14.0))
-                            .bg(rgb(0x0f141b))
-                            .text_size(px(10.0))
-                            .text_color(rgb(0x6d7b8c))
-                            .child(SharedString::from(format!(
-                                "connected · {} · last key: {}",
-                                self.grid.title.as_deref().unwrap_or("shell"),
-                                self.last_key
-                            ))),
-                    ),
+                    .child(self.status_bar()),
             )
     }
+}
+
+/// Fold or unfold the sidebar and re-lay the shell at the width that leaves.
+fn toggle_sidebar(
+    window: &gpui::WindowHandle<TerminalView>,
+    cx: &mut HeadlessAppContext,
+    _unused: Option<()>,
+) -> anyhow::Result<()> {
+    window.update(cx, |view, _, cx| {
+        view.sidebar_open = !view.sidebar_open;
+        cx.notify();
+    })?;
+    Ok(())
 }
 
 fn present_frame(
@@ -463,7 +554,12 @@ fn render_frame() -> anyhow::Result<()> {
     let (context, format) = WgpuContext::from_offscreen(instance, adapter, device, queue)?;
 
     let text = Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(LILEX_BOLD)])?;
+    text.add_fonts(vec![
+        Cow::Borrowed(LILEX),
+        Cow::Borrowed(LILEX_BOLD),
+        Cow::Borrowed(FIRA),
+        Cow::Borrowed(FIRA_BOLD),
+    ])?;
 
     let factory_context = context.clone();
     let mut cx = HeadlessAppContext::with_platform(text, Arc::new(()), move || {
@@ -476,11 +572,10 @@ fn render_frame() -> anyhow::Result<()> {
     // The host knows the display; asking for its scale means the frame we render
     // is the resolution the window blits, not a guess that gets resampled.
     let scale = surface::scale() as f32;
-    let window = cx.open_window_scaled(
-        size(px(width as f32), px(height as f32)),
-        scale,
-        |_, cx| cx.new(|_| TerminalView::new()),
-    )?;
+    let window =
+        cx.open_window_scaled(size(px(width as f32), px(height as f32)), scale, |_, cx| {
+            cx.new(|_| TerminalView::new())
+        })?;
     let any: AnyWindowHandle = window.into();
 
     let mut generation = 0u64;
@@ -499,23 +594,35 @@ fn render_frame() -> anyhow::Result<()> {
             })?;
             dirty = true;
         }
-        let wanted = TerminalView::cells_for(size.0 as f32, size.1 as f32);
+        let sidebar_open = window.update(&mut cx, |view, _, _| view.sidebar_open)?;
+        let wanted = TerminalView::cells_for(size.0 as f32, size.1 as f32, sidebar_open);
         if wanted != cells {
             cells = wanted;
             let _ = screen::resize(wanted.0, wanted.1);
         }
 
-        if let Ok(snapshot) = screen::snapshot()
-            && snapshot.generation != generation
-        {
-            generation = snapshot.generation;
-            let grid = grid_from_snapshot(&snapshot);
-            window.update(&mut cx, |view, _, cx| {
-                view.grid = grid;
-                view.generation = generation;
-                cx.notify();
-            })?;
-            dirty = true;
+        match screen::snapshot() {
+            Ok(snapshot) if snapshot.generation != generation => {
+                generation = snapshot.generation;
+                let grid = grid_from_snapshot(&snapshot);
+                window.update(&mut cx, |view, _, cx| {
+                    view.grid = grid;
+                    view.generation = generation;
+                    view.error = None;
+                    cx.notify();
+                })?;
+                dirty = true;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                window.update(&mut cx, |view, _, cx| {
+                    if view.error.as_deref() != Some(error.as_str()) {
+                        view.error = Some(SharedString::from(error));
+                        cx.notify();
+                    }
+                })?;
+                dirty = true;
+            }
         }
 
         if dirty {
@@ -532,49 +639,78 @@ fn render_frame() -> anyhow::Result<()> {
         if !input::interactive() {
             break;
         }
-        match input::poll(16) {
-            Some(input::Event::KeyInput(key)) => {
-                if key.control && key.key.eq_ignore_ascii_case("q") {
-                    break;
+        // Everything already queued goes to the pty on this turn: a key should
+        // not wait for a poll timeout to reach the shell.
+        let mut quit = false;
+        loop {
+            let Some(event) = input::poll(0) else {
+                break;
+            };
+            match event {
+                input::Event::KeyInput(key) => {
+                    if key.control && key.key.eq_ignore_ascii_case("q") {
+                        quit = true;
+                        break;
+                    }
+                    if key.control && key.key.eq_ignore_ascii_case("b") {
+                        toggle_sidebar(&window, &mut cx, None)?;
+                        dirty = true;
+                        continue;
+                    }
+                    let bytes = key_bytes(&key);
+                    if !bytes.is_empty() {
+                        let _ = screen::write(&bytes);
+                    }
+                    dirty = true;
                 }
-                let bytes = key_bytes(&key);
-                if !bytes.is_empty() {
-                    let _ = screen::write(&bytes);
+                input::Event::Moved(pointer) => {
+                    // The grid is text: say so with the pointer itself, the way a
+                    // native terminal does, instead of drawing our own caret.
+                    let over_toggle = window
+                        .update(&mut cx, |view, _, _| view.toggle_at(pointer.x, pointer.y))?;
+                    if over_toggle {
+                        let _ = cursor::set(cursor::CursorStyle::Pointer);
+                        continue;
+                    }
+                    let over_grid = window
+                        .update(&mut cx, |view, _, _| view.cell_at(pointer.x, pointer.y))?
+                        .is_some();
+                    let style = if over_grid {
+                        cursor::CursorStyle::Text
+                    } else {
+                        cursor::CursorStyle::Default
+                    };
+                    let _ = cursor::set(style);
                 }
-                let label = key.text.clone().unwrap_or_else(|| key.key.clone());
-                window.update(&mut cx, |view, _, cx| {
-                    view.last_key = SharedString::from(label);
-                    cx.notify();
-                })?;
-                dirty = true;
-            }
-            Some(input::Event::Moved(pointer)) => {
-                // The grid is text: say so with the pointer itself, the way a
-                // native terminal does, instead of drawing our own caret.
-                let over_grid = window
-                    .update(&mut cx, |view, _, _| view.cell_at(pointer.x, pointer.y))?
-                    .is_some();
-                let style = if over_grid {
-                    cursor::CursorStyle::Text
-                } else {
-                    cursor::CursorStyle::Default
-                };
-                let _ = cursor::set(style);
-            }
-            Some(input::Event::Scrolled(scroll)) => {
-                let over_grid = window
-                    .update(&mut cx, |view, _, _| view.cell_at(scroll.x, scroll.y))?
-                    .is_some();
-                if over_grid && scroll.lines != 0.0 {
-                    // Three rows a notch feels like a wheel, not a nudge. The
-                    // grid the host hands back already shows the moved viewport.
-                    let _ = screen::scroll(-(scroll.lines * 3.0) as i32);
+                input::Event::Scrolled(scroll) => {
+                    let over_grid = window
+                        .update(&mut cx, |view, _, _| view.cell_at(scroll.x, scroll.y))?
+                        .is_some();
+                    if over_grid && scroll.lines != 0.0 {
+                        // Three rows a notch feels like a wheel, not a nudge. The
+                        // grid the host hands back already shows the moved viewport.
+                        let _ = screen::scroll(-(scroll.lines * 3.0) as i32);
+                    }
+                }
+                input::Event::Button(button) => {
+                    if button.pressed && button.button == input::PointerButton::Left {
+                        let target = window
+                            .update(&mut cx, |view, _, _| view.toggle_at(button.x, button.y))?;
+                        if target {
+                            toggle_sidebar(&window, &mut cx, None)?;
+                            dirty = true;
+                        }
+                    }
                 }
             }
-            // A terminal has nothing to click yet: selection and mouse reporting
-            // to the running program are separate contracts, not this one.
-            Some(input::Event::Button(_)) | None => {}
         }
+        if quit {
+            break;
+        }
+        // Then sleep until the emulator publishes or a tick passes, instead of
+        // polling the grid: the echo of a keystroke is drawn the moment it
+        // exists, and an idle terminal costs one wake-up every 8 ms at most.
+        let _ = screen::wait(generation, 8);
     }
     Ok(())
 }
