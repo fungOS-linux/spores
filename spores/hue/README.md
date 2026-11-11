@@ -33,6 +33,9 @@ printf %s "$HUE_KEY" | geoded --store ~/.geode/store.db \
   --put geode://home/hue/bridge --purpose hue.control
 ```
 
+`geoded` loads the store at startup. Restart it after `--put` so the live
+broker sees the new entry; the socket lease is read-only by design.
+
 ## Capability
 
 Only `soil:http`, and only for origins the host was told to allow. The key
