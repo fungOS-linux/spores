@@ -59,6 +59,25 @@ of adding a second GPU renderer. The sleep panel is a four-row hypnogram built
 from the selected `sleep_session.stages`; it never stitches two devices into one
 night.
 
+## Layout
+
+The renderer is responsive because Canvas chooses the texture extent, not the
+Spore. It has three layouts:
+
+- **Wide** (`>= 1100 x 880`): rings beside a two-column card grid, then sleep
+  and per-device steps side by side.
+- **Compact**: a phone column capped at 560 px and centered. Rings keep their
+  legend in one horizontal row, tall screens show four cards, shorter screens
+  show two, and the sleep timeline sits underneath.
+- **Watch / flip** (`height < 560`): the title and rings only, vertically
+  centered. Narrow portrait faces (under 400 px wide) also get the sleep
+  timeline when it fits.
+
+The hypnogram keeps every stage bar inside the rounded track with a 16 px
+horizontal inset and centers each bar in its own stage lane. Bars are lightly
+rounded segments, not pills, so they do not compete with the card corners.
+Stale or expired readings still render as absent values, never zero.
+
 ## Build
 
 ```sh

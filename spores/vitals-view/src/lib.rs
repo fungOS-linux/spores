@@ -134,11 +134,18 @@ fn render() -> Result<(), String> {
     );
 
     let view = load_view()?;
+    let viewport = (width as f32, height as f32);
     let window = app
         .open_window_scaled(
-            gpui::size(px(width as f32), px(height as f32)),
+            gpui::size(px(viewport.0), px(viewport.1)),
             1.0,
-            move |_, cx| cx.new(|_| VitalsView { view }),
+            move |_, cx| {
+                cx.new(|_| VitalsView {
+                    view,
+                    width: viewport.0,
+                    height: viewport.1,
+                })
+            },
         )
         .map_err(|error| format!("open headless window: {error}"))?;
     app.run_until_parked();
@@ -195,128 +202,256 @@ fn render() -> Result<(), String> {
 
 struct VitalsView {
     view: Value,
+    width: f32,
+    height: f32,
 }
 
 impl Render for VitalsView {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let title = self.view["title"].as_str().unwrap_or("Vitals");
-        let wearer = self.view["wearer"].as_str().unwrap_or("unknown");
-        let freshness = self.view["freshness"].as_str().unwrap_or("unknown");
-        let device_count = self.view["devices"]
-            .as_array()
-            .map(|devices| devices.len())
-            .unwrap_or(0);
-        let cards = self.view["cards"].as_array().cloned().unwrap_or_default();
-        let rows = self.view["steps"]["rows"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        let rings = parse_rings(&self.view);
-        let sleep = parse_sleep(&self.view);
-        let empty = self.view["empty"].as_bool().unwrap_or(false);
-
-        let mut root = div()
-            .flex()
-            .flex_col()
-            .gap_5()
-            .p_6()
-            .size_full()
-            .bg(rgb(BG))
-            .text_color(rgb(TEXT))
-            .child(header(title, wearer, freshness, device_count));
-
-        if empty {
-            root = root.child(
-                div()
-                    .p_4()
-                    .rounded_xl()
-                    .bg(rgb(0x122033))
-                    .text_sm()
-                    .text_color(rgb(0x9ec7ff))
-                    .child("No vitals view recorded yet. Run the vitals Spore seed/once first."),
-            );
-        }
-
-        let display_rings = if rings.is_empty() {
-            placeholder_rings()
+        if self.width >= 1100.0 && self.height >= 880.0 {
+            render_wide(&self.view, self.width).into_any_element()
         } else {
-            rings
-        };
-
-        let mut hero = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_4()
-            .child(ring_panel(&display_rings, wearer, freshness));
-
-        if cards.is_empty() {
-            hero = hero.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .p_5()
-                    .rounded_xl()
-                    .bg(rgb(PANEL))
-                    .text_color(rgb(MUTED))
-                    .child("Waiting for the first vitals view."),
-            );
-        } else {
-            let mut grid = div().flex().flex_wrap().gap_3().w(px(774.0)).max_w_full();
-            for card in &cards {
-                grid = grid.child(card_element(card));
-            }
-            hero = hero.child(grid);
+            render_compact(&self.view, self.width, self.height).into_any_element()
         }
-        root = root.child(hero);
-
-        if sleep.is_some() && !rows.is_empty() {
-            root = root.child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_start()
-                    .gap_4()
-                    .child(sleep_panel(sleep.as_ref().expect("sleep checked")))
-                    .child(steps_panel(&rows, false)),
-            );
-        } else if let Some(sleep) = &sleep {
-            root = root.child(sleep_panel(sleep));
-        } else if !rows.is_empty() {
-            root = root.child(steps_panel(&rows, true));
-        }
-
-        root
     }
 }
 
-fn header(title: &str, wearer: &str, freshness: &str, device_count: usize) -> impl IntoElement {
-    div()
+fn render_wide(view: &Value, width: f32) -> impl IntoElement {
+    let title = view["title"].as_str().unwrap_or("Vitals");
+    let wearer = view["wearer"].as_str().unwrap_or("unknown");
+    let freshness = view["freshness"].as_str().unwrap_or("unknown");
+    let device_count = view["devices"]
+        .as_array()
+        .map(|devices| devices.len())
+        .unwrap_or(0);
+    let cards = view["cards"].as_array().cloned().unwrap_or_default();
+    let rows = view["steps"]["rows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let rings = parse_rings(view);
+    let display_rings = if rings.is_empty() {
+        placeholder_rings()
+    } else {
+        rings
+    };
+    let sleep = parse_sleep(view);
+    let estimate = Some(&view["steps"]["estimate"]);
+    let empty = view["empty"].as_bool().unwrap_or(false);
+
+    let mut root = div()
         .flex()
-        .justify_between()
-        .items_center()
-        .child(
+        .flex_col()
+        .gap_5()
+        .p_6()
+        .size_full()
+        .bg(rgb(BG))
+        .text_color(rgb(TEXT))
+        .child(header(title, wearer, freshness, device_count, false, true));
+
+    if empty {
+        root = root.child(empty_banner());
+    }
+
+    let content_width = (width - 48.0).max(320.0);
+    let ring_width = (content_width * 0.30).clamp(320.0, 400.0);
+    let grid_width = content_width - ring_width - 16.0;
+    let card_width = ((grid_width - 12.0) / 2.0).max(260.0);
+
+    let mut hero = div().flex().items_center().gap_4().child(ring_panel(
+        &display_rings,
+        wearer,
+        freshness,
+        false,
+        ring_width,
+        320.0,
+    ));
+    if cards.is_empty() {
+        hero = hero.child(
             div()
                 .flex()
                 .flex_col()
-                .gap_1()
-                .child(
-                    div()
-                        .text_3xl()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(SharedString::from(title.to_string())),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(MUTED))
-                        .child(SharedString::from(format!(
-                            "Wearer: {wearer} · {freshness} · {device_count} devices"
-                        ))),
-                ),
-        )
-        .child(
+                .gap_2()
+                .p_5()
+                .rounded_xl()
+                .bg(rgb(PANEL))
+                .text_color(rgb(MUTED))
+                .child("Waiting for the first vitals view."),
+        );
+    } else {
+        let mut grid = div()
+            .flex()
+            .flex_wrap()
+            .gap_3()
+            .w(px(grid_width))
+            .max_w_full();
+        for card in &cards {
+            grid = grid.child(card_element(card, card_width, false));
+        }
+        hero = hero.child(grid);
+    }
+    root = root.child(hero);
+
+    if sleep.is_some() && !rows.is_empty() {
+        root = root.child(
+            div()
+                .flex()
+                .items_stretch()
+                .gap_4()
+                .child(sleep_panel(sleep.as_ref().expect("sleep checked")))
+                .child(steps_panel(&rows, false, estimate)),
+        );
+    } else if let Some(sleep) = &sleep {
+        root = root.child(sleep_panel(sleep));
+    } else if !rows.is_empty() {
+        root = root.child(steps_panel(&rows, true, estimate));
+    }
+
+    root
+}
+
+fn render_compact(view: &Value, width: f32, height: f32) -> impl IntoElement {
+    let title = view["title"].as_str().unwrap_or("Vitals");
+    let wearer = view["wearer"].as_str().unwrap_or("unknown");
+    let freshness = view["freshness"].as_str().unwrap_or("unknown");
+    let device_count = view["devices"]
+        .as_array()
+        .map(|devices| devices.len())
+        .unwrap_or(0);
+    let cards = view["cards"].as_array().cloned().unwrap_or_default();
+    let rings = parse_rings(view);
+    let display_rings = if rings.is_empty() {
+        placeholder_rings()
+    } else {
+        rings
+    };
+    let sleep = parse_sleep(view);
+    let tiny = height < 560.0;
+    let empty = view["empty"].as_bool().unwrap_or(false);
+    let available = (width - 24.0).max(240.0);
+    let content_width = available.min(560.0);
+    let tiny_strip = tiny && sleep.is_some() && content_width < 400.0 && height >= 470.0;
+    let canvas_cap = if tiny_strip { 180.0 } else { 240.0 };
+
+    let mut stack = div()
+        .flex()
+        .flex_col()
+        .flex_grow(1.0)
+        .gap_2()
+        .w(px(content_width))
+        .max_w_full()
+        .child(header(title, wearer, freshness, device_count, true, !tiny));
+
+    if empty {
+        stack = stack.child(empty_banner());
+    }
+
+    let rings = ring_panel(
+        &display_rings,
+        wearer,
+        freshness,
+        true,
+        content_width,
+        canvas_cap,
+    );
+
+    if tiny {
+        if let (true, Some(sleep)) = (tiny_strip, sleep.as_ref()) {
+            stack = stack.child(rings).child(sleep_strip(sleep, false));
+        } else {
+            stack = stack.child(
+                div()
+                    .flex()
+                    .flex_grow(1.0)
+                    .items_center()
+                    .justify_center()
+                    .w_full()
+                    .child(rings),
+            );
+        }
+    } else {
+        stack = stack.child(rings).child({
+            let wanted = if height >= 740.0 { 4 } else { 2 };
+            let order = ["heart_rate", "sleep", "spo2", "temperature"];
+            let selected: Vec<&Value> = order
+                .iter()
+                .filter_map(|id| cards.iter().find(|card| card["id"].as_str() == Some(*id)))
+                .take(wanted)
+                .collect();
+            let card_width = (content_width - 8.0) / 2.0;
+            let mut grid = div().flex().flex_wrap().gap_2().w_full();
+            for card in selected {
+                grid = grid.child(card_element(card, card_width, true));
+            }
+            grid
+        });
+
+        if let Some(sleep) = &sleep {
+            if height >= 620.0 {
+                stack = stack.child(sleep_strip(sleep, true));
+            }
+        }
+    }
+
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .p_3()
+        .size_full()
+        .bg(rgb(BG))
+        .text_color(rgb(TEXT))
+        .child(stack)
+}
+
+fn empty_banner() -> impl IntoElement {
+    div()
+        .p_4()
+        .rounded_xl()
+        .bg(rgb(0x122033))
+        .text_sm()
+        .text_color(rgb(0x9ec7ff))
+        .child("No vitals view recorded yet. Run the vitals Spore seed/once first.")
+}
+
+fn header(
+    title: &str,
+    wearer: &str,
+    freshness: &str,
+    device_count: usize,
+    compact: bool,
+    show_subtitle: bool,
+) -> impl IntoElement {
+    let title_style = if compact {
+        div().text_2xl()
+    } else {
+        div().text_3xl()
+    };
+    let subtitle = if compact {
+        format!("{wearer} · {freshness} · {device_count} devices")
+    } else {
+        format!("Wearer: {wearer} · {freshness} · {device_count} devices")
+    };
+    let mut title_block = div().flex().flex_col().gap_1().child(
+        title_style
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(SharedString::from(title.to_string())),
+    );
+    if show_subtitle {
+        title_block = title_block.child(
+            div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(SharedString::from(subtitle)),
+        );
+    }
+    let mut header = div()
+        .flex()
+        .justify_between()
+        .items_center()
+        .child(title_block);
+    if !compact {
+        header = header.child(
             div()
                 .flex()
                 .items_center()
@@ -327,10 +462,16 @@ fn header(title: &str, wearer: &str, freshness: &str, device_count: usize) -> im
                 .bg(rgb(0x10251b))
                 .child(dot(rgb(GREEN)))
                 .child(div().text_xs().text_color(rgb(GREEN)).child("LIVE")),
-        )
+        );
+    }
+    header
 }
 
-fn steps_panel(rows: &[Value], full: bool) -> impl IntoElement {
+fn steps_panel(rows: &[Value], full: bool, estimate: Option<&Value>) -> impl IntoElement {
+    let mut row_list = div().flex().flex_col().gap_2();
+    for row in rows {
+        row_list = row_list.child(step_row(row));
+    }
     let mut panel = div()
         .flex()
         .flex_col()
@@ -342,8 +483,10 @@ fn steps_panel(rows: &[Value], full: bool) -> impl IntoElement {
         .child(
             div()
                 .flex()
+                .flex_wrap()
                 .justify_between()
                 .items_center()
+                .gap_2()
                 .child(
                     div()
                         .text_sm()
@@ -356,16 +499,64 @@ fn steps_panel(rows: &[Value], full: bool) -> impl IntoElement {
                         .text_color(rgb(DIM))
                         .child("per device · never summed"),
                 ),
-        );
+        )
+        .child(row_list);
+    if let Some(estimate) = estimate {
+        if let Some(value) = estimate["value"].as_u64() {
+            let covered = estimate["coverage"]["covered_buckets"]
+                .as_u64()
+                .unwrap_or(0);
+            let total = estimate["coverage"]["total_buckets"].as_u64().unwrap_or(0);
+            let fraction = (value as f64 / 10_000.0).clamp(0.0, 1.0) as f32;
+            panel =
+                panel.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child("Move estimate · fused"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .text_2xl()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(SharedString::from(format_count(value as f64))),
+                                )
+                                .child(div().text_xs().text_color(rgb(DIM)).child(
+                                    SharedString::from(format!("{covered}/{total} buckets")),
+                                )),
+                        )
+                        .child(
+                            div()
+                                .h(px(4.0))
+                                .w_full()
+                                .rounded_full()
+                                .bg(rgb(TRACK))
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .w(relative(fraction))
+                                        .rounded_full()
+                                        .bg(rgb(GREEN)),
+                                ),
+                        ),
+                );
+        }
+    }
     if full {
-        panel = panel.w_full();
+        panel.w_full()
     } else {
-        panel = panel.w(px(430.0)).flex_grow(1.0);
+        panel.flex_basis(px(0.0)).flex_grow(1.0)
     }
-    for row in rows {
-        panel = panel.child(step_row(row));
-    }
-    panel
 }
 
 #[derive(Clone)]
@@ -433,33 +624,7 @@ fn parse_sleep(view: &Value) -> Option<SleepSummary> {
 }
 
 fn sleep_panel(sleep: &SleepSummary) -> impl IntoElement {
-    let total = sleep.end.saturating_sub(sleep.start).max(1);
-    let mut chart = div()
-        .relative()
-        .h(px(66.0))
-        .w_full()
-        .rounded_lg()
-        .bg(rgb(TRACK))
-        .overflow_hidden();
-    for stage in &sleep.stages {
-        let start = stage.start.max(sleep.start).min(sleep.end);
-        let end = stage.end.max(sleep.start).min(sleep.end);
-        if end <= start {
-            continue;
-        }
-        let left = (start - sleep.start) as f64 / total as f64;
-        let width = (end - start) as f64 / total as f64;
-        let (top, height) = sleep_stage_row(&stage.stage);
-        chart = chart.child(
-            div()
-                .absolute()
-                .top(px(top))
-                .left(relative(left as f32))
-                .w(relative(width as f32))
-                .h(px(height))
-                .bg(sleep_stage_color(&stage.stage)),
-        );
-    }
+    let chart = sleep_chart(sleep, 74.0);
 
     let mut legend = div().flex().flex_wrap().gap_3();
     for stage in ["awake", "rem", "light", "deep"] {
@@ -490,8 +655,8 @@ fn sleep_panel(sleep: &SleepSummary) -> impl IntoElement {
         .p_4()
         .rounded_xl()
         .bg(rgb(PANEL))
-        .w(px(760.0))
         .max_w_full()
+        .flex_basis(px(0.0))
         .flex_grow(2.0)
         .child(
             div()
@@ -551,6 +716,98 @@ fn sleep_panel(sleep: &SleepSummary) -> impl IntoElement {
         .child(legend)
 }
 
+fn sleep_strip(sleep: &SleepSummary, full: bool) -> impl IntoElement {
+    let summary = ["awake", "rem", "light", "deep"]
+        .iter()
+        .map(|stage| {
+            format!(
+                "{} {}",
+                sleep_stage_label(stage),
+                format_duration_ms(sleep.stage_ms.get(*stage).copied().unwrap_or(0))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let mut strip = div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .p_2()
+        .rounded_xl()
+        .bg(rgb(PANEL))
+        .w_full()
+        .child(
+            div()
+                .flex()
+                .justify_between()
+                .items_center()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child("Sleep timeline"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(DIM))
+                        .child(SharedString::from(format!(
+                            "{} → {} UTC",
+                            clock_utc(sleep.start),
+                            clock_utc(sleep.end)
+                        ))),
+                ),
+        )
+        .child(sleep_chart(sleep, if full { 40.0 } else { 32.0 }));
+    if full {
+        strip = strip.child(
+            div()
+                .text_xs()
+                .text_color(rgb(DIM))
+                .child(SharedString::from(summary)),
+        );
+    }
+    strip
+}
+
+fn sleep_chart(sleep: &SleepSummary, height: f32) -> impl IntoElement {
+    let total = sleep.end.saturating_sub(sleep.start).max(1);
+    let inner_height = (height - 16.0).max(20.0);
+    let row_height = inner_height / 4.0;
+    let bar_height = (row_height * 0.58).max(2.0);
+    let mut inner = div().relative().h(px(inner_height)).w_full();
+    for stage in &sleep.stages {
+        let start = stage.start.max(sleep.start).min(sleep.end);
+        let end = stage.end.max(sleep.start).min(sleep.end);
+        if end <= start {
+            continue;
+        }
+        let left = (start - sleep.start) as f64 / total as f64;
+        let width = (end - start) as f64 / total as f64;
+        let row = sleep_stage_index(&stage.stage) as f32;
+        inner = inner.child(
+            div()
+                .absolute()
+                .top(px(row * row_height + (row_height - bar_height) / 2.0))
+                .left(relative(left as f32))
+                .w(relative(width as f32))
+                .h(px(bar_height))
+                .rounded_xs()
+                .bg(sleep_stage_color(&stage.stage)),
+        );
+    }
+    div()
+        .relative()
+        .h(px(height))
+        .w_full()
+        .rounded_lg()
+        .bg(rgb(TRACK))
+        .px(px(12.0))
+        .py(px(8.0))
+        .overflow_hidden()
+        .child(inner)
+}
+
 fn sleep_stage_color(stage: &str) -> Rgba {
     match stage {
         "awake" => rgb(AMBER),
@@ -561,13 +818,13 @@ fn sleep_stage_color(stage: &str) -> Rgba {
     }
 }
 
-fn sleep_stage_row(stage: &str) -> (f32, f32) {
+fn sleep_stage_index(stage: &str) -> usize {
     match stage {
-        "awake" => (0.0, 10.0),
-        "rem" => (18.0, 10.0),
-        "light" => (36.0, 10.0),
-        "deep" => (54.0, 10.0),
-        _ => (0.0, 10.0),
+        "awake" => 0,
+        "rem" => 1,
+        "light" => 2,
+        "deep" => 3,
+        _ => 0,
     }
 }
 
@@ -597,7 +854,20 @@ fn clock_utc(ms: u64) -> String {
     format!("{:02}:{:02}", day / 3_600_000, (day / 60_000) % 60)
 }
 
-fn ring_panel(rings: &[Ring], wearer: &str, freshness: &str) -> impl IntoElement {
+fn ring_panel(
+    rings: &[Ring],
+    wearer: &str,
+    freshness: &str,
+    compact: bool,
+    available_width: f32,
+    canvas_cap: f32,
+) -> impl IntoElement {
+    let panel_width = available_width;
+    let canvas_size = if compact {
+        ((panel_width - 24.0) * 0.7).clamp(180.0, canvas_cap)
+    } else {
+        320.0
+    };
     let center = rings
         .iter()
         .find(|ring| ring.id == "heart")
@@ -609,54 +879,88 @@ fn ring_panel(rings: &[Ring], wearer: &str, freshness: &str) -> impl IntoElement
     let center_label = center.map(|ring| ring.label.clone()).unwrap_or_default();
 
     let paint_specs = rings.to_vec();
-    let mut legend = div().flex().flex_col().gap_2();
-    for ring in rings {
-        legend = legend.child(
-            div()
-                .flex()
-                .justify_between()
-                .items_center()
-                .gap_3()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(dot(ring.color()))
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(rgb(TEXT))
-                                .child(SharedString::from(ring.label.clone())),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(DIM))
-                                .child(SharedString::from(format!(
-                                    "{} · {}",
-                                    ring.source, ring.freshness
-                                ))),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(TEXT))
-                        .child(SharedString::from(value_with_unit(
-                            &ring.display_value(),
-                            &ring.unit,
-                        ))),
-                ),
-        );
-    }
+    let legend =
+        if compact {
+            let mut legend = div().flex().items_start().justify_between().gap_2();
+            for ring in rings {
+                legend =
+                    legend.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .flex_grow(1.0)
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(dot(ring.color()))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .child(SharedString::from(ring.label.clone())),
+                                    ),
+                            )
+                            .child(div().text_xs().text_color(rgb(TEXT)).child(
+                                SharedString::from(value_with_unit(
+                                    &ring.display_value(),
+                                    &ring.unit,
+                                )),
+                            )),
+                    );
+            }
+            legend
+        } else {
+            let mut legend = div().flex().flex_col().gap(px(8.0));
+            for ring in rings {
+                legend =
+                    legend.child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(dot(ring.color()))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(TEXT))
+                                            .child(SharedString::from(ring.label.clone())),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(DIM))
+                                    .child(SharedString::from(format!(
+                                        "{} · {}",
+                                        ring.source, ring.freshness
+                                    ))),
+                            )
+                            .child(div().text_xs().text_color(rgb(TEXT)).child(
+                                SharedString::from(value_with_unit(
+                                    &ring.display_value(),
+                                    &ring.unit,
+                                )),
+                            )),
+                    );
+            }
+            legend
+        };
 
     div()
         .flex()
         .flex_col()
-        .gap_3()
-        .w(px(380.0))
-        .p_5()
+        .gap(px(if compact { 8.0 } else { 12.0 }))
+        .w(px(panel_width))
+        .p(px(if compact { 12.0 } else { 20.0 }))
         .rounded_2xl()
         .bg(rgb(PANEL))
         .child(
@@ -666,7 +970,7 @@ fn ring_panel(rings: &[Ring], wearer: &str, freshness: &str) -> impl IntoElement
                 .items_center()
                 .child(
                     div()
-                        .text_sm()
+                        .text_xs()
                         .text_color(rgb(MUTED))
                         .child("Activity rings"),
                 )
@@ -681,8 +985,8 @@ fn ring_panel(rings: &[Ring], wearer: &str, freshness: &str) -> impl IntoElement
             div().flex().justify_center().child(
                 div()
                     .relative()
-                    .w(px(320.0))
-                    .h(px(320.0))
+                    .w(px(canvas_size))
+                    .h(px(canvas_size))
                     .child(
                         canvas(
                             move |_, _, _| {},
@@ -691,23 +995,23 @@ fn ring_panel(rings: &[Ring], wearer: &str, freshness: &str) -> impl IntoElement
                         .absolute()
                         .top(px(0.0))
                         .left(px(0.0))
-                        .w(px(320.0))
-                        .h(px(320.0)),
+                        .w(px(canvas_size))
+                        .h(px(canvas_size)),
                     )
                     .child(
                         div()
                             .absolute()
                             .top(px(0.0))
                             .left(px(0.0))
-                            .w(px(320.0))
-                            .h(px(320.0))
+                            .w(px(canvas_size))
+                            .h(px(canvas_size))
                             .flex()
                             .flex_col()
                             .items_center()
                             .justify_center()
                             .child(
                                 div()
-                                    .text_3xl()
+                                    .text_2xl()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(SharedString::from(center_value)),
                             )
@@ -729,7 +1033,7 @@ fn ring_panel(rings: &[Ring], wearer: &str, freshness: &str) -> impl IntoElement
         .child(legend)
 }
 
-fn card_element(card: &Value) -> impl IntoElement {
+fn card_element(card: &Value, width: f32, compact: bool) -> impl IntoElement {
     let id = card["id"].as_str().unwrap_or("metric");
     let label = card["label"].as_str().unwrap_or("");
     let value = display_value(&card["value"]);
@@ -740,13 +1044,19 @@ fn card_element(card: &Value) -> impl IntoElement {
     let quality = card["quality"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0);
     let accent = card_color(id);
     let fraction = quality as f32;
+    let value_style = if compact {
+        div().text_2xl()
+    } else {
+        div().text_3xl()
+    };
 
     div()
         .flex()
         .flex_col()
-        .gap_2()
-        .w(px(250.0))
-        .p_4()
+        .gap(px(if compact { 6.0 } else { 8.0 }))
+        .w(px(width))
+        .h(px(if compact { 100.0 } else { 150.0 }))
+        .p(px(if compact { 12.0 } else { 16.0 }))
         .rounded_xl()
         .bg(rgb(PANEL_RAISED))
         .child(
@@ -764,15 +1074,14 @@ fn card_element(card: &Value) -> impl IntoElement {
                 .items_center()
                 .child(
                     div()
-                        .text_sm()
+                        .text_xs()
                         .text_color(rgb(MUTED))
                         .child(SharedString::from(label.to_string())),
                 )
                 .child(dot(freshness_color(freshness))),
         )
         .child(
-            div()
-                .text_3xl()
+            value_style
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(SharedString::from(display)),
         )
