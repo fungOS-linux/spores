@@ -44,3 +44,8 @@ surfaces = ["native", "canvas", "web"]
 "wasi:clocks" = "monotonic timing for the guest's scheduler"
 "wasi:random" = "std's hasher seed; no host entropy or file stream is shared"
 "wasi:io" = "component-model async transport"
+
+[presentation]
+badge = "Mu"
+color = "#b9a866"
+mark = "assets/icon.svg"

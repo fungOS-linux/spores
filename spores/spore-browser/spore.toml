@@ -4,6 +4,9 @@ schema = 1
 [spore]
 id = "dev.fungos.spore-browser"
 name = "spore-browser"
+# What it is on screen: the thing that lists what is installed and opens one.
+# The package name stays the registry slug.
+title = "Launcher"
 version = "0.1.0"
 license = "MIT"
 summary = "Browse installed Spores and launch one bounded surface"
@@ -52,3 +55,4 @@ host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
 # reads at the size a launcher actually draws.
 badge = "L"
 color = "#c9a6ff"
+mark = "assets/icon.svg"

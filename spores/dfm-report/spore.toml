@@ -47,3 +47,8 @@ scene = { path = "model/data.json", media_type = "application/json" }
 [denied]
 "soil:http" = ["findings are host-supplied; the Spore has no network path"]
 "wasi:filesystem" = ["the host owns the workspace root"]
+
+[presentation]
+badge = "DF"
+color = "#ff8fab"
+mark = "assets/icon.svg"

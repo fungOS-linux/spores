@@ -100,3 +100,4 @@ idempotent = true
 # reads at the size a launcher actually draws.
 badge = "I"
 color = "#6ea8fe"
+mark = "assets/icon.svg"
