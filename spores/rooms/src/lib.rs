@@ -638,29 +638,46 @@ fn call_mute(args: &[String]) -> Result<String, String> {
     })
 }
 
-/// One pump. The host owns the clock; each tick moves at most `frames` in each
-/// direction, so a slow host shortens the audio rather than stalling the world.
+/// One pump. Each tick waits on the edge it is waiting for — capture while the
+/// microphone is open, a received frame while it is muted — so the loop is paced
+/// by audio rather than by a timer the guest cannot see. `frames` is how many
+/// such waits one call is allowed, not how many frames are forced through.
 fn call_tick(args: &[String]) -> Result<String, String> {
+    /// Long enough to cover one 20 ms frame, short enough that leaving a call
+    /// is noticed immediately.
+    const WAIT_MS: u32 = 20;
     let ticks: u32 = args
         .get(1)
         .and_then(|value| value.parse().ok())
-        .unwrap_or(2);
+        .unwrap_or(1);
     CALL.with(|call| {
         let mut call = call.borrow_mut();
         let Some(call) = call.as_mut() else {
             return Err("no call is open".to_string());
         };
         for _ in 0..ticks {
-            if !call.muted
-                && let Some(pcm) = call
-                    .mic
-                    .read(960, 10)
-                    .map_err(|error| format!("microphone: {error:?}"))?
+            if call.muted {
+                // Nothing to send, but the far side still has to be heard, so
+                // this is the edge that paces a muted call.
+                if let Some(pcm) =
+                    voice::receive(WAIT_MS).map_err(|error| format!("voice receive: {error:?}"))?
+                {
+                    call.audio
+                        .write(&pcm)
+                        .map_err(|error| format!("audio write: {error:?}"))?;
+                }
+                continue;
+            }
+            if let Some(pcm) = call
+                .mic
+                .read(960, WAIT_MS)
+                .map_err(|error| format!("microphone: {error:?}"))?
             {
                 voice::send(&pcm.samples).map_err(|error| format!("voice send: {error:?}"))?;
             }
-            if let Some(pcm) = voice::receive(1)
-                .map_err(|error| format!("voice receive: {error:?}"))?
+            // Opportunistic: whatever arrived while the microphone was waiting.
+            if let Some(pcm) =
+                voice::receive(1).map_err(|error| format!("voice receive: {error:?}"))?
             {
                 call.audio
                     .write(&pcm)
