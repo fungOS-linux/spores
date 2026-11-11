@@ -398,6 +398,7 @@ impl Shell {
             Some("if") => self.run_if(tokens),
             Some("for") => self.run_for(tokens),
             Some("while") => self.run_while(tokens),
+            Some("case") => self.run_case(tokens),
             _ => {
                 self.error("unsupported compound command");
                 2
@@ -524,6 +525,85 @@ impl Shell {
         status
     }
 
+    /// `case WORD in PATTERN) ... ;; esac` — the form agents use to branch on
+    /// a short string instead of chaining `if [ ... ]` per value.
+    fn run_case(&mut self, tokens: &[Token]) -> i32 {
+        let Some(Token::Word(word)) = tokens.get(1) else {
+            self.error("case: missing word");
+            return 2;
+        };
+        let subject = self
+            .expand_word(word)
+            .unwrap_or_default()
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        let Some(in_index) = tokens
+            .iter()
+            .position(|token| matches!(token, Token::Word(word) if word.text == "in"))
+        else {
+            self.error("case: missing in");
+            return 2;
+        };
+        let mut at = in_index + 1;
+        while at < tokens.len() {
+            while matches!(tokens.get(at), Some(Token::Op(Op::Semi))) {
+                at += 1;
+            }
+            let Some(Token::Word(word)) = tokens.get(at) else {
+                break;
+            };
+            if word.text == "esac" {
+                return 0;
+            }
+            // Alternates are separated by `|`; the list ends at a word whose
+            // last character is the closing `)`.
+            let mut patterns = Vec::new();
+            let mut current = String::new();
+            let mut closed = false;
+            while at < tokens.len() {
+                match &tokens[at] {
+                    Token::Word(word) => {
+                        current.push_str(&word.text);
+                        if current.ends_with(')') {
+                            current.pop();
+                            patterns.push(std::mem::take(&mut current));
+                            at += 1;
+                            closed = true;
+                            break;
+                        }
+                    }
+                    Token::Op(Op::Pipe) => {
+                        patterns.push(std::mem::take(&mut current));
+                    }
+                    _ => break,
+                }
+                at += 1;
+            }
+            if !closed {
+                self.error("case: missing )");
+                return 2;
+            }
+            let body_start = at;
+            let mut body_end = at;
+            while body_end < tokens.len() {
+                if matches!(tokens.get(body_end), Some(Token::Word(word)) if word.text == "esac")
+                    || (matches!(tokens.get(body_end), Some(Token::Op(Op::Semi)))
+                        && matches!(tokens.get(body_end + 1), Some(Token::Op(Op::Semi))))
+                {
+                    break;
+                }
+                body_end += 1;
+            }
+            if patterns.iter().any(|pattern| glob_match(pattern, &subject)) {
+                return self.run_tokens(&tokens[body_start..body_end]);
+            }
+            at = body_end;
+        }
+        self.error("case: missing esac");
+        2
+    }
+
     fn run_pipeline(&mut self, tokens: &[Token]) -> i32 {
         let segments = split_tokens(tokens, Op::Pipe);
         let mut input = Vec::new();
@@ -624,6 +704,20 @@ impl Shell {
     }
 
     fn run_simple(&mut self, command: &str, args: &[String]) -> Result<i32, String> {
+        // `NAME=VALUE` on its own is an assignment, not a command. Bash accepts
+        // it anywhere and agents write `i=0` before a loop far more often than
+        // they write `export i=0`.
+        if args.is_empty()
+            && let Some((name, value)) = command.split_once('=')
+            && name.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            self.env.insert(name.into(), value.into());
+            if name == "PWD" {
+                self.cwd = self.resolve(value).unwrap_or_default();
+            }
+            return Ok(0);
+        }
         match command {
             "help" => {
                 self.out.push_str(HELP);
@@ -644,7 +738,7 @@ impl Shell {
                 // The host owns the screen; the Spore only says what to do
                 // with it, so this works on every surface.
                 self.out.push_str("\x1b[2J\x1b[H");
-                Ok(())
+                Ok(0)
             }
             "exit" | "quit" => {
                 let code = match args.first() {
@@ -2256,7 +2350,13 @@ impl Shell {
 
     fn expand_literal(&mut self, word: &Word) -> String {
         if word.expand {
-            self.expand_dynamic(&word.text)
+            // Arithmetic first: `$((1+2))` must not reach the `$(` scanner,
+            // which would read it as a command substitution.
+            let text = {
+                let value_of = |name: &str| self.var_value(name);
+                expand_arithmetic(&word.text, &value_of)
+            };
+            self.expand_dynamic(&text)
         } else {
             word.text.clone()
         }
@@ -3584,9 +3684,9 @@ fn parse_chains(tokens: &[Token]) -> Result<Vec<(ChainOp, Vec<Token>)>, String> 
     for token in tokens {
         match token {
             Token::Word(word) => {
-                if at_start && matches!(word.text.as_str(), "if" | "for" | "while") {
+                if at_start && matches!(word.text.as_str(), "if" | "for" | "while" | "case") {
                     depth += 1;
-                } else if at_start && matches!(word.text.as_str(), "fi" | "done") {
+                } else if at_start && matches!(word.text.as_str(), "fi" | "done" | "esac") {
                     depth = depth.saturating_sub(1);
                 }
                 at_start = matches!(word.text.as_str(), "then" | "do" | "else" | "elif");
@@ -3717,7 +3817,7 @@ fn token_word(token: &Token) -> Option<&str> {
 fn is_compound(tokens: &[Token]) -> bool {
     matches!(
         tokens.first().and_then(token_word),
-        Some("if" | "for" | "while")
+        Some("if" | "for" | "while" | "case")
     )
 }
 
@@ -3727,12 +3827,12 @@ fn find_block_marker(tokens: &[Token], from: usize, targets: &[&str]) -> Option<
     for (index, token) in tokens.iter().enumerate().skip(from) {
         match token {
             Token::Word(word) => {
-                if at_start && matches!(word.text.as_str(), "if" | "for" | "while") {
+                if at_start && matches!(word.text.as_str(), "if" | "for" | "while" | "case") {
                     depth += 1;
                     at_start = false;
                     continue;
                 }
-                if at_start && matches!(word.text.as_str(), "fi" | "done") {
+                if at_start && matches!(word.text.as_str(), "fi" | "done" | "esac") {
                     if depth == 1 && targets.contains(&word.text.as_str()) {
                         return Some(index);
                     }
@@ -3904,6 +4004,7 @@ Shell syntax:
   cmd 2>&1                merge stderr into stdout
   *.txt, docs/*.md        glob VFS paths; quoted globs stay literal
   $(cmd)                  command substitution
+  $((expr))               integer arithmetic over the shell's variables
   # comment               rest of line
   $?                      previous command status
   $0, $1, $#, $@          script name, arguments, count, all arguments
@@ -3916,6 +4017,7 @@ environment; they never run host binaries.
   test EXPR               evaluate a condition (or [ EXPR ])
   read [-r] [VAR]         read one line from piped stdin
   if ...; then ...; fi    conditional block
+  case X in P) ... ;; esac  pattern match on one word
   for VAR in ...; do ...; done
   while ...; do ...; done
   break / continue        leave or continue the nearest loop
@@ -3925,3 +4027,264 @@ environment; they never run host binaries.
   set [KEY=VALUE]         print or set variables
   exit                    leave
 ";
+
+/// `$(( ... ))`: integer arithmetic over the shell's own variables.
+///
+/// Agents write counters and bounded loops (`i=$((i + 1))`, `n=$((n * 2))`)
+/// far more than any other arithmetic, so this is the subset that pays: `+ - *
+/// / %`, `&&`, `||`, comparisons that yield 1/0, parentheses, unary minus, and
+/// bare names that read a variable and fall back to 0 when it is unset or not a
+/// number. Text that does not parse is left as written, so a broken expression
+/// shows up in the output instead of quietly becoming 0.
+fn expand_arithmetic(text: &str, var: &dyn Fn(&str) -> String) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut index = 0;
+    while index < chars.len() {
+        let starts = chars[index] == '$'
+            && chars.get(index + 1) == Some(&'(')
+            && chars.get(index + 2) == Some(&'(');
+        if !starts {
+            out.push(chars[index]);
+            index += 1;
+            continue;
+        }
+        let start = index + 3;
+        let mut at = start;
+        let mut depth = 0usize;
+        let mut end = None;
+        while at < chars.len() {
+            match chars[at] {
+                '(' => depth += 1,
+                ')' if depth == 0 => {
+                    if chars.get(at + 1) == Some(&')') {
+                        end = Some(at);
+                        break;
+                    }
+                }
+                ')' => depth -= 1,
+                _ => {}
+            }
+            at += 1;
+        }
+        let Some(end) = end else {
+            out.extend(chars[index..].iter());
+            break;
+        };
+        let expr: String = chars[start..end].iter().collect();
+        let value_of = |name: &str| var(name).trim().parse::<i64>().unwrap_or(0);
+        match arithmetic(&expr, &value_of) {
+            Ok(value) => out.push_str(&value.to_string()),
+            Err(_) => out.extend(chars[index..=end + 1].iter()),
+        }
+        index = end + 2;
+    }
+    out
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum ArithToken {
+    Number(i64),
+    Name(String),
+    Operator(&'static str),
+}
+
+fn arithmetic(expr: &str, var: &dyn Fn(&str) -> i64) -> Result<i64, String> {
+    let tokens = arith_tokens(expr)?;
+    if tokens.is_empty() {
+        return Err("arithmetic: empty expression".into());
+    }
+    let mut at = 0usize;
+    let value = arith_or(&tokens, &mut at, var)?;
+    if at != tokens.len() {
+        return Err(format!("arithmetic: unexpected input in {expr:?}"));
+    }
+    Ok(value)
+}
+
+fn arith_tokens(expr: &str) -> Result<Vec<ArithToken>, String> {
+    let chars: Vec<char> = expr.chars().collect();
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        let ch = chars[index];
+        if ch.is_whitespace() {
+            index += 1;
+            continue;
+        }
+        if ch.is_ascii_digit() {
+            let start = index;
+            while index < chars.len() && chars[index].is_ascii_digit() {
+                index += 1;
+            }
+            let text: String = chars[start..index].iter().collect();
+            let value = text
+                .parse()
+                .map_err(|_| format!("arithmetic: {text:?} does not fit"))?;
+            out.push(ArithToken::Number(value));
+            continue;
+        }
+        if ch.is_ascii_alphabetic() || ch == '_' {
+            let start = index;
+            while index < chars.len() && (chars[index].is_ascii_alphanumeric() || chars[index] == '_')
+            {
+                index += 1;
+            }
+            out.push(ArithToken::Name(chars[start..index].iter().collect()));
+            continue;
+        }
+        let next = chars.get(index + 1).copied();
+        let operator = match (ch, next) {
+            ('<', Some('=')) => "<=",
+            ('>', Some('=')) => ">=",
+            ('=', Some('=')) => "==",
+            ('!', Some('=')) => "!=",
+            ('&', Some('&')) => "&&",
+            ('|', Some('|')) => "||",
+            ('<', _) => "<",
+            ('>', _) => ">",
+            ('+', _) => "+",
+            ('-', _) => "-",
+            ('*', _) => "*",
+            ('/', _) => "/",
+            ('%', _) => "%",
+            ('!', _) => "!",
+            ('(', _) => "(",
+            (')', _) => ")",
+            _ => return Err(format!("arithmetic: unexpected {ch:?} in {expr:?}")),
+        };
+        index += if operator.len() == 2 { 2 } else { 1 };
+        out.push(ArithToken::Operator(operator));
+    }
+    Ok(out)
+}
+
+fn arith_take(tokens: &[ArithToken], at: &mut usize, operator: &'static str) -> bool {
+    if tokens.get(*at) == Some(&ArithToken::Operator(operator)) {
+        *at += 1;
+        true
+    } else {
+        false
+    }
+}
+
+fn arith_or(tokens: &[ArithToken], at: &mut usize, var: &dyn Fn(&str) -> i64) -> Result<i64, String> {
+    let mut left = arith_and(tokens, at, var)?;
+    while arith_take(tokens, at, "||") {
+        let right = arith_and(tokens, at, var)?;
+        left = i64::from(left != 0 || right != 0);
+    }
+    Ok(left)
+}
+
+fn arith_and(tokens: &[ArithToken], at: &mut usize, var: &dyn Fn(&str) -> i64) -> Result<i64, String> {
+    let mut left = arith_compare(tokens, at, var)?;
+    while arith_take(tokens, at, "&&") {
+        let right = arith_compare(tokens, at, var)?;
+        left = i64::from(left != 0 && right != 0);
+    }
+    Ok(left)
+}
+
+fn arith_compare(
+    tokens: &[ArithToken],
+    at: &mut usize,
+    var: &dyn Fn(&str) -> i64,
+) -> Result<i64, String> {
+    let mut left = arith_sum(tokens, at, var)?;
+    loop {
+        let operator = match tokens.get(*at) {
+            Some(ArithToken::Operator(op @ ("<" | "<=" | ">" | ">=" | "==" | "!="))) => *op,
+            _ => return Ok(left),
+        };
+        *at += 1;
+        let right = arith_sum(tokens, at, var)?;
+        left = i64::from(match operator {
+            "<" => left < right,
+            "<=" => left <= right,
+            ">" => left > right,
+            ">=" => left >= right,
+            "==" => left == right,
+            _ => left != right,
+        });
+    }
+}
+
+fn arith_sum(tokens: &[ArithToken], at: &mut usize, var: &dyn Fn(&str) -> i64) -> Result<i64, String> {
+    let mut left = arith_product(tokens, at, var)?;
+    loop {
+        if arith_take(tokens, at, "+") {
+            left = left.wrapping_add(arith_product(tokens, at, var)?);
+        } else if arith_take(tokens, at, "-") {
+            left = left.wrapping_sub(arith_product(tokens, at, var)?);
+        } else {
+            return Ok(left);
+        }
+    }
+}
+
+fn arith_product(
+    tokens: &[ArithToken],
+    at: &mut usize,
+    var: &dyn Fn(&str) -> i64,
+) -> Result<i64, String> {
+    let mut left = arith_unary(tokens, at, var)?;
+    loop {
+        if arith_take(tokens, at, "*") {
+            left = left.wrapping_mul(arith_unary(tokens, at, var)?);
+        } else if arith_take(tokens, at, "/") {
+            let right = arith_unary(tokens, at, var)?;
+            if right == 0 {
+                return Err("arithmetic: division by zero".into());
+            }
+            left /= right;
+        } else if arith_take(tokens, at, "%") {
+            let right = arith_unary(tokens, at, var)?;
+            if right == 0 {
+                return Err("arithmetic: division by zero".into());
+            }
+            left %= right;
+        } else {
+            return Ok(left);
+        }
+    }
+}
+
+fn arith_unary(tokens: &[ArithToken], at: &mut usize, var: &dyn Fn(&str) -> i64) -> Result<i64, String> {
+    if arith_take(tokens, at, "-") {
+        return Ok(arith_unary(tokens, at, var)?.wrapping_neg());
+    }
+    if arith_take(tokens, at, "+") {
+        return arith_unary(tokens, at, var);
+    }
+    if arith_take(tokens, at, "!") {
+        return Ok(i64::from(arith_unary(tokens, at, var)? == 0));
+    }
+    arith_primary(tokens, at, var)
+}
+
+fn arith_primary(
+    tokens: &[ArithToken],
+    at: &mut usize,
+    var: &dyn Fn(&str) -> i64,
+) -> Result<i64, String> {
+    match tokens.get(*at) {
+        Some(ArithToken::Number(value)) => {
+            *at += 1;
+            Ok(*value)
+        }
+        Some(ArithToken::Name(name)) => {
+            *at += 1;
+            Ok(var(name))
+        }
+        Some(ArithToken::Operator("(")) => {
+            *at += 1;
+            let value = arith_or(tokens, at, var)?;
+            if !arith_take(tokens, at, ")") {
+                return Err("arithmetic: missing )".into());
+            }
+            Ok(value)
+        }
+        _ => Err("arithmetic: expected a number, name, or (".into()),
+    }
+}
