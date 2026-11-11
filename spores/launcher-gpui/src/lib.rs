@@ -18,16 +18,26 @@ use gpui::{
     IntoElement, PlatformTextSystem, Render, SharedString, Window, div, prelude::*, px, rgb, size,
 };
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
-use soil::present::{input, surface};
+use soil::present::{cursor, input, surface};
 use soil::spore::catalog;
 use std::{borrow::Cow, sync::Arc};
+
+/// One geometry, two readers: the list lays rows out with these numbers and the
+/// pointer hit-tests with them. Keeping them shared is what makes a click land
+/// on the row the user aimed at.
+const HEADER_H: f32 = 52.0;
+const LIST_PAD: f32 = 8.0;
+const ROW_H: f32 = 56.0;
+const ROW_GAP: f32 = 2.0;
 
 const LILEX: &[u8] = include_bytes!("../assets/Lilex-Regular.ttf");
 const LILEX_BOLD: &[u8] = include_bytes!("../assets/Lilex-Bold.ttf");
 
 struct Row {
     id: SharedString,
-    name: SharedString,
+    /// What the row shows. The host resolves it from the manifest, so the list
+    /// and the window title agree on what an app is called.
+    title: SharedString,
     version: SharedString,
     summary: SharedString,
     default_surface: SharedString,
@@ -48,7 +58,7 @@ impl LauncherView {
                     .into_iter()
                     .map(|entry| Row {
                         id: SharedString::from(entry.id),
-                        name: SharedString::from(entry.name),
+                        title: SharedString::from(entry.title),
                         version: SharedString::from(entry.version),
                         summary: SharedString::from(entry.summary),
                         default_surface: SharedString::from(entry.default_surface),
@@ -66,6 +76,39 @@ impl LauncherView {
                 status: SharedString::from(format!("catalog: {error:?}")),
             },
         }
+    }
+
+    /// Which row the pointer is over, if any. The list starts under the header
+    /// and one row's height is a constant here, not a guess about text metrics.
+    fn row_at(&self, y: f32) -> Option<usize> {
+        let offset = y - HEADER_H - LIST_PAD;
+        if offset < 0.0 {
+            return None;
+        }
+        let index = (offset / (ROW_H + ROW_GAP)) as usize;
+        (index < self.rows.len()).then_some(index)
+    }
+
+    /// Follow the pointer. A launcher with one highlight is easier to trust than
+    /// one with a hover highlight and a separate keyboard highlight.
+    fn hover(&mut self, y: f32) -> bool {
+        let Some(row) = self.row_at(y) else {
+            return false;
+        };
+        if row == self.selected {
+            return false;
+        }
+        self.selected = row;
+        true
+    }
+
+    /// Open the row under the pointer. Returns whether anything was launched.
+    fn click(&mut self, y: f32) -> bool {
+        let Some(row) = self.row_at(y) else {
+            return false;
+        };
+        self.selected = row;
+        self.open_selected()
     }
 
     fn move_down(&mut self) -> bool {
@@ -103,7 +146,7 @@ impl LauncherView {
             .items_center()
             .justify_between()
             .px(px(16.0))
-            .h(px(52.0))
+            .h(px(HEADER_H))
             .bg(rgb(0x0f141b))
             .child(
                 div()
@@ -150,9 +193,10 @@ impl LauncherView {
                 let mut element = div()
                     .flex()
                     .flex_col()
+                    .justify_center()
                     .gap(px(2.0))
+                    .h(px(ROW_H))
                     .px(px(10.0))
-                    .py(px(8.0))
                     .rounded(px(6.0));
                 if selected {
                     element = element.bg(rgb(0x1b2430));
@@ -172,7 +216,7 @@ impl LauncherView {
                                         FontWeight::NORMAL
                                     })
                                     .text_color(rgb(0xe6edf5))
-                                    .child(row.name.clone()),
+                                    .child(row.title.clone()),
                             )
                             .child(
                                 div()
@@ -227,8 +271,8 @@ impl Render for LauncherView {
                     .flex_1()
                     .flex()
                     .flex_col()
-                    .gap(px(2.0))
-                    .p(px(8.0))
+                    .gap(px(ROW_GAP))
+                    .p(px(LIST_PAD))
                     .children(self.rows()),
             )
             .child(self.footer())
@@ -300,13 +344,27 @@ fn run_launcher() -> anyhow::Result<()> {
         )?)))
     });
 
-    let window = cx.open_window(size(px(width as f32), px(height as f32)), |_, cx| {
-        cx.new(|_| LauncherView::new())
-    })?;
+    let scale = surface::scale() as f32;
+    let window = cx.open_window_scaled(
+        size(px(width as f32), px(height as f32)),
+        scale,
+        |_, cx| cx.new(|_| LauncherView::new()),
+    )?;
     let any: AnyWindowHandle = window.into();
 
     let mut dirty = true;
+    let mut window_size = (width, height);
     loop {
+        // Follow the window: a launcher that keeps its first size looks broken
+        // the moment someone drags a corner.
+        let size_now = surface::size();
+        if size_now != window_size {
+            window_size = size_now;
+            window.update(&mut cx, |_, window, _| {
+                window.resize(gpui::size(px(size_now.0 as f32), px(size_now.1 as f32)));
+            })?;
+            dirty = true;
+        }
         if dirty {
             cx.update_window(any, |_, window, app| {
                 let _ = window.draw(app);
@@ -320,7 +378,7 @@ fn run_launcher() -> anyhow::Result<()> {
             break;
         }
         match input::poll(16) {
-            Some(key) => {
+            Some(input::Event::KeyInput(key)) => {
                 if key.key == "escape" {
                     break;
                 }
@@ -350,7 +408,38 @@ fn run_launcher() -> anyhow::Result<()> {
                     dirty = true;
                 }
             }
-            None => {}
+            Some(input::Event::Moved(pointer)) => {
+                let changed = window.update(&mut cx, |view, _, cx| {
+                    let changed = view.hover(pointer.y);
+                    if changed {
+                        cx.notify();
+                    }
+                    changed
+                })?;
+                // A row is a target, so the pointer says so before it is clicked.
+                let style = match window.update(&mut cx, |view, _, _| view.row_at(pointer.y))? {
+                    Some(_) => cursor::CursorStyle::Pointer,
+                    None => cursor::CursorStyle::Default,
+                };
+                let _ = cursor::set(style);
+                if changed {
+                    dirty = true;
+                }
+            }
+            Some(input::Event::Button(button)) => {
+                if button.pressed && button.button == input::PointerButton::Left {
+                    let changed =
+                        window.update(&mut cx, |view, _, cx| {
+                            let changed = view.click(button.y);
+                            cx.notify();
+                            changed
+                        })?;
+                    if changed {
+                        dirty = true;
+                    }
+                }
+            }
+            Some(input::Event::Scrolled(_)) | None => {}
         }
     }
     Ok(())

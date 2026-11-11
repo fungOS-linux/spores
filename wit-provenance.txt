@@ -38,7 +38,12 @@ spores/unibus/wit/deps/soil-records/soil-records.wit 898cb3a58c473488e877a624e65
 
 # --- soil-spore.wit ---------------------------------------------------------
 # source:      fungOS-linux/soil, wit/soil-spore.wit
-# soil-commit: 697be58c0ed9fc57d5cd9e642b89b3d88e129500 (soil main, PR #38)
+# soil-commit: 95324d83f235ade6480ff8ee8686236ab94afa6b (soil main)
+#
+# `title` joined the catalog entry: a package names how it is shown (a window
+# title, a launcher row) without turning its slug into a label. Every copy moved
+# together, because a catalog entry that carries a field in one Spore and not
+# another is the drift this file exists to catch.
 #
 # `surface` and `surface-kind` landed here: a Spore declares the views it ships,
 # and a host can tell before opening anything whether it can present one.
@@ -50,11 +55,11 @@ spores/unibus/wit/deps/soil-records/soil-records.wit 898cb3a58c473488e877a624e65
 # the rest behind is the lie this file exists to prevent, so this section stayed
 # empty until `spores/spore-catalog` put both hosts back on soil's main.
 
-spores/launcher/wit/deps/soil-spore/spore.wit f129fa88029744ed09a3a9f35b494060182a12a7
-spores/launcher-gpui/wit/deps/soil-spore/spore.wit f129fa88029744ed09a3a9f35b494060182a12a7
-spores/launcher-host/wit/deps/soil-spore/spore.wit f129fa88029744ed09a3a9f35b494060182a12a7
-spores/spore-browser/wit/deps/soil-spore/spore.wit f129fa88029744ed09a3a9f35b494060182a12a7
-spores/spore-browser-host/wit/deps/soil-spore/spore.wit f129fa88029744ed09a3a9f35b494060182a12a7
+spores/launcher/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
+spores/launcher-gpui/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
+spores/launcher-host/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
+spores/spore-browser/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
+spores/spore-browser-host/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
 
 # --- soil-surface-import.wit ------------------------------------------------
 # source:      fungOS-linux/soil, wit/soil-surface-import.wit

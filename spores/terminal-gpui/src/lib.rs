@@ -18,15 +18,25 @@ use gpui::{
     IntoElement, PlatformTextSystem, Render, SharedString, Window, div, prelude::*, px, rgb, size,
 };
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
-use soil::present::{input, surface};
+use soil::present::{cursor, input, surface};
+use soil::terminal_screen::screen;
 use std::{borrow::Cow, sync::Arc};
-use terminal_core::{ANSI_FIXTURE, Grid, render};
+use terminal_core::{Cell, Grid, Style};
 
 const LILEX: &[u8] = include_bytes!("../assets/Lilex-Regular.ttf");
 const LILEX_BOLD: &[u8] = include_bytes!("../assets/Lilex-Bold.ttf");
 
 const CELL_W: f32 = 7.8;
 const CELL_H: f32 = 16.0;
+
+/// The chrome around the grid. The renderer lays out with these and the pointer
+/// hit-tests with them, so a click or a wheel tick lands on the cell the user
+/// aimed at.
+const SIDEBAR_W: f32 = 214.0;
+const HEADER_H: f32 = 46.0;
+const GRID_PAD: f32 = 10.0;
+const FOOTER_H: f32 = 26.0;
+
 const DEFAULT_FG: u32 = 0xc8d3e0;
 
 /// xterm's first sixteen colours; indices above that are the 6x6x6 cube.
@@ -60,14 +70,69 @@ struct TerminalView {
     grid: Grid,
     targets: Vec<Target>,
     last_key: SharedString,
+    generation: u64,
+}
+
+fn grid_from_snapshot(snapshot: &screen::Grid) -> Grid {
+    let cells = snapshot
+        .cells
+        .iter()
+        .enumerate()
+        .map(|(index, cell)| {
+            let wide = !cell.wide_tail
+                && snapshot
+                    .cells
+                    .get(index + 1)
+                    .is_some_and(|next| next.wide_tail);
+            Cell {
+                text: cell.text.clone(),
+                width: if wide { 2 } else { 1 },
+                style: Style {
+                    fg: cell.fg.unwrap_or(0),
+                    bg: cell.bg.unwrap_or(0),
+                    bold: cell.bold,
+                    italic: cell.italic,
+                    underline: cell.underline,
+                    reverse: cell.inverse,
+                    dim: cell.faint,
+                    strikethrough: false,
+                },
+            }
+        })
+        .collect();
+    let cursor = snapshot.cursor_row.zip(snapshot.cursor_col);
+    Grid {
+        cols: snapshot.cols,
+        rows: snapshot.rows,
+        cells,
+        cursor_row: cursor.map_or(0, |cursor| cursor.0),
+        cursor_col: cursor.map_or(0, |cursor| cursor.1),
+        cursor_visible: cursor.is_some(),
+        title: Some(snapshot.title.clone()).filter(|title| !title.is_empty()),
+    }
 }
 
 impl TerminalView {
     fn new() -> Self {
+        let (grid, generation) = match screen::snapshot() {
+            Ok(snapshot) => (grid_from_snapshot(&snapshot), snapshot.generation),
+            Err(_) => (
+                Grid {
+                    cols: 80,
+                    rows: 24,
+                    cells: vec![Cell::blank(); 80 * 24],
+                    cursor_row: 0,
+                    cursor_col: 0,
+                    cursor_visible: false,
+                    title: None,
+                },
+                0,
+            ),
+        };
         Self {
-            // The same ANSI fixture the native mock and the cell-grid spore use.
-            grid: render(ANSI_FIXTURE.as_bytes(), 80, 24),
+            grid,
             last_key: SharedString::from("none"),
+            generation,
             targets: vec![
                 Target {
                     name: "studio",
@@ -151,9 +216,31 @@ impl TerminalView {
         rows
     }
 
+    /// How many cells fit in the space the host gives us. The grid follows the
+    /// window, so a resize is a shell resize rather than a crop.
+    fn cells_for(width: f32, height: f32) -> (u32, u32) {
+        let cols = ((width - SIDEBAR_W - 2.0 * GRID_PAD) / CELL_W).floor().max(20.0) as u32;
+        let rows = ((height - HEADER_H - FOOTER_H - 2.0 * GRID_PAD) / CELL_H)
+            .floor()
+            .max(5.0) as u32;
+        (cols, rows)
+    }
+
+    /// Which cell the pointer is over, if it is over the grid at all.
+    fn cell_at(&self, x: f32, y: f32) -> Option<(u32, u32)> {
+        let left = SIDEBAR_W + GRID_PAD;
+        let top = HEADER_H + GRID_PAD;
+        if x < left || y < top {
+            return None;
+        }
+        let col = ((x - left) / CELL_W) as u32;
+        let row = ((y - top) / CELL_H) as u32;
+        (col < self.grid.cols && row < self.grid.rows).then_some((row, col))
+    }
+
     fn sidebar(&self) -> impl IntoElement {
         div()
-            .w(px(214.0))
+            .w(px(SIDEBAR_W))
             .h_full()
             .flex()
             .flex_col()
@@ -212,7 +299,7 @@ impl TerminalView {
             .clone()
             .unwrap_or_else(|| "terminal".to_string());
         div()
-            .h(px(46.0))
+            .h(px(HEADER_H))
             .flex()
             .items_center()
             .justify_between()
@@ -267,7 +354,7 @@ impl Render for TerminalView {
                         div()
                             .flex_1()
                             .overflow_hidden()
-                            .p(px(10.0))
+                            .p(px(GRID_PAD))
                             .flex()
                             .flex_col()
                             .children(self.rows()),
@@ -282,7 +369,8 @@ impl Render for TerminalView {
                             .text_size(px(10.0))
                             .text_color(rgb(0x6d7b8c))
                             .child(SharedString::from(format!(
-                                "connected · mycelium ssh studio · last key: {}",
+                                "connected · {} · last key: {}",
+                                self.grid.title.as_deref().unwrap_or("shell"),
                                 self.last_key
                             ))),
                     ),
@@ -337,6 +425,36 @@ fn present_frame(
     Ok(())
 }
 
+fn key_bytes(key: &input::Key) -> Vec<u8> {
+    if key.control
+        && let Some(text) = &key.text
+        && text.len() == 1
+    {
+        let byte = text.as_bytes()[0];
+        if byte.is_ascii_alphabetic() {
+            return vec![byte & 0x1f];
+        }
+    }
+    if let Some(text) = &key.text {
+        return text.as_bytes().to_vec();
+    }
+    match key.key.as_str() {
+        "enter" => b"\r".to_vec(),
+        "tab" => b"\t".to_vec(),
+        "backspace" => b"\x7f".to_vec(),
+        "escape" => b"\x1b".to_vec(),
+        "space" => b" ".to_vec(),
+        "arrow-up" => b"\x1b[A".to_vec(),
+        "arrow-down" => b"\x1b[B".to_vec(),
+        "arrow-right" => b"\x1b[C".to_vec(),
+        "arrow-left" => b"\x1b[D".to_vec(),
+        "home" => b"\x1b[H".to_vec(),
+        "end" => b"\x1b[F".to_vec(),
+        "delete" => b"\x1b[3~".to_vec(),
+        _ => Vec::new(),
+    }
+}
+
 fn render_frame() -> anyhow::Result<()> {
     let (width, height) = surface::size();
     let instance = wgpu_wasi_webgpu::instance();
@@ -355,13 +473,51 @@ fn render_frame() -> anyhow::Result<()> {
         )?)))
     });
 
-    let window = cx.open_window(size(px(width as f32), px(height as f32)), |_, cx| {
-        cx.new(|_| TerminalView::new())
-    })?;
+    // The host knows the display; asking for its scale means the frame we render
+    // is the resolution the window blits, not a guess that gets resampled.
+    let scale = surface::scale() as f32;
+    let window = cx.open_window_scaled(
+        size(px(width as f32), px(height as f32)),
+        scale,
+        |_, cx| cx.new(|_| TerminalView::new()),
+    )?;
     let any: AnyWindowHandle = window.into();
 
+    let mut generation = 0u64;
     let mut dirty = true;
+    let mut window_size = (width, height);
+    let mut cells = (0, 0);
     loop {
+        // The window is the source of truth for how much space there is. Both
+        // the emulator's grid and the GPUI window follow it, so a drag reaches
+        // the shell instead of leaving a half-drawn screen behind.
+        let size = surface::size();
+        if size != window_size {
+            window_size = size;
+            window.update(&mut cx, |_, window, _| {
+                window.resize(gpui::size(px(size.0 as f32), px(size.1 as f32)));
+            })?;
+            dirty = true;
+        }
+        let wanted = TerminalView::cells_for(size.0 as f32, size.1 as f32);
+        if wanted != cells {
+            cells = wanted;
+            let _ = screen::resize(wanted.0, wanted.1);
+        }
+
+        if let Ok(snapshot) = screen::snapshot()
+            && snapshot.generation != generation
+        {
+            generation = snapshot.generation;
+            let grid = grid_from_snapshot(&snapshot);
+            window.update(&mut cx, |view, _, cx| {
+                view.grid = grid;
+                view.generation = generation;
+                cx.notify();
+            })?;
+            dirty = true;
+        }
+
         if dirty {
             // `capture_screenshot` renders the last drawn frame; a notify only
             // marks the view dirty. Draw explicitly so a key update is visible.
@@ -377,9 +533,13 @@ fn render_frame() -> anyhow::Result<()> {
             break;
         }
         match input::poll(16) {
-            Some(key) => {
-                if key.key == "escape" {
+            Some(input::Event::KeyInput(key)) => {
+                if key.control && key.key.eq_ignore_ascii_case("q") {
                     break;
+                }
+                let bytes = key_bytes(&key);
+                if !bytes.is_empty() {
+                    let _ = screen::write(&bytes);
                 }
                 let label = key.text.clone().unwrap_or_else(|| key.key.clone());
                 window.update(&mut cx, |view, _, cx| {
@@ -388,7 +548,32 @@ fn render_frame() -> anyhow::Result<()> {
                 })?;
                 dirty = true;
             }
-            None => {}
+            Some(input::Event::Moved(pointer)) => {
+                // The grid is text: say so with the pointer itself, the way a
+                // native terminal does, instead of drawing our own caret.
+                let over_grid = window
+                    .update(&mut cx, |view, _, _| view.cell_at(pointer.x, pointer.y))?
+                    .is_some();
+                let style = if over_grid {
+                    cursor::CursorStyle::Text
+                } else {
+                    cursor::CursorStyle::Default
+                };
+                let _ = cursor::set(style);
+            }
+            Some(input::Event::Scrolled(scroll)) => {
+                let over_grid = window
+                    .update(&mut cx, |view, _, _| view.cell_at(scroll.x, scroll.y))?
+                    .is_some();
+                if over_grid && scroll.lines != 0.0 {
+                    // Three rows a notch feels like a wheel, not a nudge. The
+                    // grid the host hands back already shows the moved viewport.
+                    let _ = screen::scroll(-(scroll.lines * 3.0) as i32);
+                }
+            }
+            // A terminal has nothing to click yet: selection and mouse reporting
+            // to the running program are separate contracts, not this one.
+            Some(input::Event::Button(_)) | None => {}
         }
     }
     Ok(())
