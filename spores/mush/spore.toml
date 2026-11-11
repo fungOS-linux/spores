@@ -42,4 +42,5 @@ surfaces = ["native", "canvas", "web"]
 "soil:http" = "bounded HTTP through the host allowlist, with no credentials by default"
 "wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
 "wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:random" = "std's hasher seed; no host entropy or file stream is shared"
 "wasi:io" = "component-model async transport"
