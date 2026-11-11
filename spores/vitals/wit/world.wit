@@ -15,4 +15,7 @@ world vitals-spore {
 
   /// The last summary, as JSON, for a host that wants a snapshot.
   export snapshot: func() -> result<list<u8>, string>;
+
+  /// The Spore-owned view model: cards, per-device step rows, no pixels.
+  export view: func() -> result<list<u8>, string>;
 }

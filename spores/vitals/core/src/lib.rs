@@ -171,6 +171,64 @@ impl Vitals {
             "source": SOURCE,
         })
     }
+    #[must_use]
+    pub fn to_view(&self) -> Value {
+        let cards = vec![
+            card("heart_rate", "Heart rate", self.heart_rate.as_ref(), "bpm"),
+            card("hrv", "HRV", self.hrv.as_ref(), "ms"),
+            card("spo2", "SpO2", self.spo2.as_ref(), "%"),
+            card(
+                "temperature",
+                "Skin temperature",
+                self.temperature_c.as_ref(),
+                "C",
+            ),
+            card("sleep", "Sleep", self.sleep.as_ref(), ""),
+            card("motion", "Motion", self.motion.as_ref(), "mg"),
+        ];
+        let steps: Vec<Value> = self
+            .steps
+            .iter()
+            .map(|(device, count)| json!({"device": device, "count": count}))
+            .collect();
+        json!({
+            "schema": "vitals.view.v1",
+            "title": "Vitals",
+            "wearer": self.wearer,
+            "updated_at": self.window_end,
+            "freshness": freshness_name(self.freshness),
+            "empty": self.devices.is_empty(),
+            "cards": cards,
+            // A GPUI renderer draws one row per device; there is deliberately
+            // no `total` field to accidentally render a summed step count.
+            "steps": {"rows": steps, "primary_device": self.primary_motion_device},
+            "devices": self.devices,
+            "policy_version": POLICY_VERSION,
+            "source": SOURCE,
+        })
+    }
+}
+
+fn card(id: &str, label: &str, reading: Option<&Reading>, unit: &str) -> Value {
+    let Some(reading) = reading else {
+        return json!({
+            "id": id,
+            "label": label,
+            "value": null,
+            "unit": unit,
+            "source_device": null,
+            "freshness": "unknown",
+        });
+    };
+    json!({
+        "id": id,
+        "label": label,
+        "value": reading.value,
+        "unit": unit,
+        "source_device": reading.source_device,
+        "freshness": freshness_name(reading.freshness),
+        "quality": reading.quality,
+    })
 }
 
 fn reading_json(reading: &Reading, key: &str) -> Value {
@@ -597,5 +655,27 @@ mod tests {
     #[test]
     fn seed_is_deterministic() {
         assert_eq!(seed(42), seed(42));
+    }
+
+    #[test]
+    fn view_has_cards_and_no_step_total() {
+        let now = 10_000;
+        let view = fuse(&seeded(now), "owner", now, Policy::default()).to_view();
+        assert_eq!(view["schema"], "vitals.view.v1");
+        let cards = view["cards"].as_array().expect("cards");
+        assert!(cards.iter().any(|card| {
+            card["id"] == "heart_rate" && card["value"] == 58 && card["source_device"] == "sim-ring"
+        }));
+        assert_eq!(view["steps"]["rows"].as_array().unwrap().len(), 2);
+        assert!(view["steps"].get("total").is_none());
+    }
+
+    #[test]
+    fn view_marks_missing_reading_null() {
+        let now = 10_000;
+        let view = fuse(&[], "owner", now, Policy::default()).to_view();
+        let cards = view["cards"].as_array().expect("cards");
+        assert!(cards.iter().all(|card| card["value"].is_null()));
+        assert_eq!(view["empty"], true);
     }
 }

@@ -15,6 +15,7 @@ wit_bindgen::generate!({ path: "wit", world: "vitals-spore", generate_all });
 
 thread_local! {
     static SNAPSHOT: RefCell<Value> = RefCell::new(Value::Null);
+    static VIEW: RefCell<Value> = RefCell::new(Value::Null);
 }
 
 struct Component;
@@ -102,6 +103,12 @@ impl Guest for Component {
             serde_json::to_vec(&*slot.borrow()).map_err(|error| format!("snapshot JSON: {error}"))
         })
     }
+
+    fn view() -> Result<Vec<u8>, String> {
+        VIEW.with(|slot| {
+            serde_json::to_vec(&*slot.borrow()).map_err(|error| format!("view JSON: {error}"))
+        })
+    }
 }
 
 fn run_inner(raw: &[String]) -> Result<(), String> {
@@ -164,12 +171,14 @@ fn once(now: u64, args: &Args) -> Result<Value, String> {
     let signals = read_signals()?;
     let vitals = core::fuse(&signals, &args.wearer, now, core::Policy::default());
     let summary = vitals.to_json();
+    let view = vitals.to_view();
 
     let summary_id = format!("{}:{now}", args.wearer);
     upsert("vitals.summary", &summary_id, core::SCHEMA, &summary)?;
     upsert("vitals.latest", &args.wearer, core::SCHEMA, &summary)?;
     publish_summary(&summary)?;
 
+    VIEW.with(|slot| *slot.borrow_mut() = view);
     set_snapshot(json!({
         "ok": true,
         "command": "once",

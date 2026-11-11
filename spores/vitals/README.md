@@ -1,9 +1,12 @@
 # Vitals Spore
 
 Cross-device health fusion over the typed signals device Spores already write.
-It is **headless by design**: no radio, no Canvas Lua, no pixels. A native GPUI
-host reads `vitals.latest` (or subscribes to the `vitals.summary.v1` bus frame)
-and owns the UI.
+The Spore owns both the health policy and the **view model**: `view()` returns
+`vitals.view.v1` cards and per-device step rows. A GPUI renderer host draws
+those cards; it does not recompute health policy or own the layout semantics.
+
+The Spore is headless in the sense that it has no pixels, window, or GPU
+handle. GPUI is the rendering host; `wasm32-wasip2` has no native window.
 
 ## Commands
 
@@ -31,6 +34,25 @@ vitals loop [--wearer W] [--iterations N] [--interval-ms N]
   zero.
 - **Wearer-scoped.** A guest ring is not owner data; unknown wearers are not
   silently treated as the owner.
+
+## Spore UI
+
+`view()` returns the renderer-agnostic card tree:
+
+```json
+{
+  "schema": "vitals.view.v1",
+  "title": "Vitals",
+  "wearer": "owner",
+  "cards": [{"id":"heart_rate","label":"Heart rate","value":58,"unit":"bpm","source_device":"sim-ring","freshness":"fresh"}],
+  "steps": {"rows":[{"device":"sim-pinetime","count":4231},{"device":"sim-ring","count":9000}],"primary_device":"sim-pinetime"},
+  "empty": false
+}
+```
+
+There is deliberately no step `total` field. A GPUI host composes the cards
+into the actual window; the Spore owns the labels, values, units, sources,
+freshness, and the no-sum rule.
 
 ## Records and bus
 
