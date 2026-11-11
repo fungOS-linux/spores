@@ -35,7 +35,6 @@ const MAX_BODY: u32 = 512 * 1024;
 const TIMEOUT_MS: u32 = 5_000;
 
 pub mod brain;
-pub mod menu;
 pub mod view;
 
 use view::{Board, HEADER_H, LIST_W, ROW_H, View, parse_graph, parse_runs};
@@ -134,15 +133,29 @@ fn render_frame() -> anyhow::Result<()> {
         )?)))
     });
 
+    // The kit's globals, then the view. Its context menus and popovers resolve
+    // their overlays through Root, so the window's root view is the kit's, with
+    // the board inside it.
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+    });
+
+    let board = cx.update(|cx| {
+        cx.new(|_| {
+            let mut board = Board::new();
+            board.apply_runs(fetch_runs(RUNS_URL));
+            board
+        })
+    });
+    let attached = board.clone();
+    board.update(&mut cx, |board, _| board.attach(&attached));
+
     let scale = surface::scale() as f32;
-    let window =
-        cx.open_window_scaled(size(px(width as f32), px(height as f32)), scale, |_, cx| {
-            cx.new(|_| {
-                let mut board = Board::new();
-                board.apply_runs(fetch_runs(RUNS_URL));
-                board
-            })
-        })?;
+    let window = cx.open_window_scaled(size(px(width as f32), px(height as f32)), scale, {
+        let board = board.clone();
+        move |window, cx| cx.new(|cx| gpui_component::Root::new(board, window, cx))
+    })?;
     let any: AnyWindowHandle = window.into();
 
     let mut window_size = (width, height);
@@ -159,24 +172,24 @@ fn render_frame() -> anyhow::Result<()> {
 
         // Anything that moves asks for the next frame until it stops: the graph
         // settling, a camera flying to a node.
-        if window.update(&mut cx, |board, _, _| board.tick())? {
+        if board.update(&mut cx, |board, _| board.tick()) {
             dirty = true;
         }
 
         // A board is a live thing: refresh on a slow tick so a run that finishes
         // while someone is watching does not need a key press to appear.
-        let stale = window.update(&mut cx, |board, _, _| {
+        let stale = board.update(&mut cx, |board, _| {
             board
                 .fetched_at
                 .map(|at| at.elapsed().as_secs() >= 5)
                 .unwrap_or(true)
-        })?;
+        });
         if stale {
-            let runs = window.update(&mut cx, |board, _, cx| {
+            let runs = board.update(&mut cx, |board, cx| {
                 board.apply_runs(fetch_runs(RUNS_URL));
                 cx.notify();
                 board.runs.len()
-            })?;
+            });
             let _ = runs;
             dirty = true;
         }
@@ -197,47 +210,47 @@ fn render_frame() -> anyhow::Result<()> {
             match event {
                 input::Event::KeyInput(key) => {
                     let name = key.key.to_ascii_lowercase();
-                    if window.update(&mut cx, |board, _, _| board.query_open())? {
+                    if board.update(&mut cx, |board, _| board.query_open()) {
                         match name.as_str() {
                             "escape" => {
-                                window.update(&mut cx, |board, _, cx| {
+                                board.update(&mut cx, |board, cx| {
                                     board.close_query();
                                     cx.notify();
-                                })?;
+                                });
                             }
                             "enter" => {
-                                window.update(&mut cx, |board, _, cx| {
+                                board.update(&mut cx, |board, cx| {
                                     board.commit_query();
                                     cx.notify();
-                                })?;
+                                });
                             }
                             "backspace" => {
-                                window.update(&mut cx, |board, _, cx| {
+                                board.update(&mut cx, |board, cx| {
                                     board.backspace();
                                     cx.notify();
-                                })?;
+                                });
                             }
                             "arrow-down" | "tab" => {
-                                window.update(&mut cx, |board, _, cx| {
+                                board.update(&mut cx, |board, cx| {
                                     board.move_query_cursor(1);
                                     cx.notify();
-                                })?;
+                                });
                             }
                             "arrow-up" => {
-                                window.update(&mut cx, |board, _, cx| {
+                                board.update(&mut cx, |board, cx| {
                                     board.move_query_cursor(-1);
                                     cx.notify();
-                                })?;
+                                });
                             }
                             _ => {
                                 if let Some(text) = key.text.clone()
                                     && text.chars().count() == 1
                                     && !key.control
                                 {
-                                    window.update(&mut cx, |board, _, cx| {
+                                    board.update(&mut cx, |board, cx| {
                                         board.type_char(&text);
                                         cx.notify();
-                                    })?;
+                                    });
                                 }
                             }
                         }
@@ -246,57 +259,57 @@ fn render_frame() -> anyhow::Result<()> {
                     }
                     match name.as_str() {
                         "/" => {
-                            window.update(&mut cx, |board, _, cx| {
+                            board.update(&mut cx, |board, cx| {
                                 board.open_query(view::Mode::Search);
                                 cx.notify();
-                            })?;
+                            });
                             dirty = true;
                         }
                         ":" => {
-                            window.update(&mut cx, |board, _, cx| {
+                            board.update(&mut cx, |board, cx| {
                                 board.open_query(view::Mode::Command);
                                 cx.notify();
-                            })?;
+                            });
                             dirty = true;
                         }
                         "f" => {
-                            window.update(&mut cx, |board, _, cx| {
+                            board.update(&mut cx, |board, cx| {
                                 let picked = board.picked_node();
                                 board.focus(picked);
                                 cx.notify();
-                            })?;
+                            });
                             dirty = true;
                         }
                         "q" => return Ok(()),
                         "j" | "arrow-down" => {
-                            window.update(&mut cx, |board, _, cx| {
+                            board.update(&mut cx, |board, cx| {
                                 match board.view {
                                     View::Runs => board.move_selection(1),
                                     View::Brain => board.move_picked(1),
                                 }
                                 cx.notify();
-                            })?;
+                            });
                             dirty = true;
                         }
                         "k" | "arrow-up" => {
-                            window.update(&mut cx, |board, _, cx| {
+                            board.update(&mut cx, |board, cx| {
                                 match board.view {
                                     View::Runs => board.move_selection(-1),
                                     View::Brain => board.move_picked(-1),
                                 }
                                 cx.notify();
-                            })?;
+                            });
                             dirty = true;
                         }
                         "1" => {
-                            window.update(&mut cx, |board, _, cx| {
+                            board.update(&mut cx, |board, cx| {
                                 board.view = View::Runs;
                                 cx.notify();
-                            })?;
+                            });
                             dirty = true;
                         }
                         "2" | "tab" => {
-                            window.update(&mut cx, |board, _, cx| {
+                            board.update(&mut cx, |board, cx| {
                                 board.view = View::Brain;
                                 // The graph changes when a workflow is edited,
                                 // not on every tick; reload it when the view is
@@ -309,24 +322,24 @@ fn render_frame() -> anyhow::Result<()> {
                                     board.apply_graph(fetch_graph(GRAPH_URL));
                                 }
                                 cx.notify();
-                            })?;
+                            });
                             dirty = true;
                         }
                         "0" => {
-                            window.update(&mut cx, |board, _, cx| {
+                            board.update(&mut cx, |board, cx| {
                                 board.fit_graph();
                                 cx.notify();
-                            })?;
+                            });
                             dirty = true;
                         }
                         "r" => {
-                            window.update(&mut cx, |board, _, cx| {
+                            board.update(&mut cx, |board, cx| {
                                 match board.view {
                                     View::Runs => board.apply_runs(fetch_runs(RUNS_URL)),
                                     View::Brain => board.apply_graph(fetch_graph(GRAPH_URL)),
                                 }
                                 cx.notify();
-                            })?;
+                            });
                             dirty = true;
                         }
                         _ => {}
@@ -337,7 +350,7 @@ fn render_frame() -> anyhow::Result<()> {
                 input::Event::Button(button)
                     if button.pressed && button.button == input::PointerButton::Left =>
                 {
-                    window.update(&mut cx, |board, _, cx| {
+                    board.update(&mut cx, |board, cx| {
                         if button.x < LIST_W {
                             let index = ((button.y - HEADER_H) / ROW_H).max(0.0) as usize;
                             if index < board.runs.len() {
@@ -345,7 +358,7 @@ fn render_frame() -> anyhow::Result<()> {
                                 cx.notify();
                             }
                         }
-                    })?;
+                    });
                     dirty = true;
                 }
                 _ => {}

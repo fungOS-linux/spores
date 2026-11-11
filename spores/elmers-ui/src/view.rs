@@ -5,9 +5,10 @@
 //! the same code the Spore runs.
 
 use gpui::{
-    AnyElement, Context, IntoElement, Render, SharedString, Window, canvas, div, prelude::*, px,
-    rgb,
+    AnyElement, Context, Entity, IntoElement, Render, SharedString, WeakEntity, Window, canvas,
+    div, prelude::*, px, rgb,
 };
+use gpui_component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 
 const BG: u32 = 0x0b0f14;
 const PANEL: u32 = 0x0f141b;
@@ -89,6 +90,55 @@ pub(crate) fn parse_runs(body: &[u8]) -> Result<Vec<Run>, String> {
     // Newest first, which is the only order a board is read in.
     runs.reverse();
     Ok(runs)
+}
+
+/// The graph's menu: what you can ask of a node, or of the picture.
+fn node_menu(menu: PopupMenu, handle: Option<WeakEntity<Board>>) -> PopupMenu {
+    let mut menu = menu;
+    for (label, action) in [
+        ("Focus", "focus"),
+        ("Zoom in", "zoom-in"),
+        ("Zoom out", "zoom-out"),
+        ("Fit graph", "fit"),
+        ("Show runs", "runs"),
+    ] {
+        let handle = handle.clone();
+        menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+            if let Some(board) = handle.as_ref().and_then(|handle| handle.upgrade()) {
+                board.update(cx, |board, cx| {
+                    board.menu_action(action, cx);
+                    cx.notify();
+                });
+            }
+        }));
+    }
+    menu
+}
+
+/// A run's menu. The row names what it was opened on, because a menu that says
+/// only "Open run" makes you check which row you hit.
+fn run_menu(
+    menu: PopupMenu,
+    index: usize,
+    workflow: SharedString,
+    id: SharedString,
+    handle: Option<WeakEntity<Board>>,
+) -> PopupMenu {
+    let open = handle.clone();
+    menu.item(PopupMenuItem::label(workflow))
+        .separator()
+        .item(PopupMenuItem::new("Open run").on_click(move |_, _, cx| {
+            if let Some(board) = open.as_ref().and_then(|handle| handle.upgrade()) {
+                board.update(cx, |board, cx| {
+                    board.selected = index;
+                    board.view = View::Runs;
+                    cx.notify();
+                });
+            }
+        }))
+        .item(PopupMenuItem::new("Copy run id").on_click(move |_, _, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(id.to_string()));
+        }))
 }
 
 /// A payload in a code block: monospace, its own surface, hairline border.
@@ -271,9 +321,9 @@ pub struct Board {
     graph_error: Option<SharedString>,
     /// The query bar, when it is open.
     pub query: Option<Query>,
-    /// The right-click menu, when one is open. `menu.rs` owns how it looks;
-    /// this owns what its rows do.
-    pub menu: Option<crate::menu::Menu>,
+    /// This view's own handle. The kit's context menus are built per right-click
+    /// and their handlers run later, so they need a way back to the view.
+    handle: Option<WeakEntity<Board>>,
     /// A camera move in flight, and the node it is heading for if the move has
     /// not been aimed yet (the canvas bounds are only known after a paint).
     camera_target: Option<crate::brain::Camera>,
@@ -307,7 +357,7 @@ impl Board {
             graph_bounds: Default::default(),
             graph_error: None,
             query: None,
-            menu: None,
+            handle: None,
             camera_target: None,
             focus_target: None,
             dirty: false,
@@ -545,85 +595,34 @@ impl Board {
         }
     }
 
-    /// Open a menu for a node at a window position.
-    pub fn open_node_menu(&mut self, node: Option<usize>, at: gpui::Point<gpui::Pixels>) {
-        let title = node
-            .and_then(|node| self.brain.as_ref().and_then(|brain| brain.name_of(node)))
-            .unwrap_or("graph")
-            .to_string();
-        let mut menu = crate::menu::Menu::new(at, title)
-            .item("focus", "Focus", "f")
-            .item("zoom-in", "Zoom in", "scroll")
-            .item("zoom-out", "Zoom out", "")
-            .item("fit", "Fit graph", "0")
-            .item("runs", "Show runs", "1");
-        if node.is_none() {
-            menu = crate::menu::Menu::new(at, "graph").item("fit", "Fit graph", "0");
-        }
-        if let Some(node) = node {
-            self.picked = node;
-        }
-        // Keep the menu on screen. The canvas is the only rectangle this view
-        // knows, and it is the one the menu is opened over.
-        if let Some(bounds) = self.graph_bounds.get() {
-            let bottom = f32::from(bounds.origin.y + bounds.size.height);
-            let overflow = f32::from(at.y) + menu.height() - bottom;
-            if overflow > 0.0 {
-                menu.at.y = at.y - px(overflow);
-            }
-        }
-        self.menu = Some(menu);
-        self.dirty = true;
+    /// This view's handle, attached by whichever host created it. The kit builds
+    /// a context menu when the pointer asks for one and runs its handlers after
+    /// the build, so the rows need a way back to this view.
+    pub fn attach(&mut self, handle: &Entity<Board>) {
+        self.handle = Some(handle.downgrade());
     }
 
-    /// Open a menu for a run, from the list or the graph's panel.
-    pub fn open_run_menu(&mut self, run: usize, at: gpui::Point<gpui::Pixels>) {
-        let title = self
-            .runs
-            .get(run)
-            .map(|run| run.workflow.clone())
-            .unwrap_or_default();
-        self.selected = run;
-        let mut menu = crate::menu::Menu::new(at, title)
-            .item("open", "Open run", "enter")
-            .item("copy", "Copy run id", "");
-        if let Some(bounds) = self.graph_bounds.get() {
-            let bottom = f32::from(bounds.origin.y + bounds.size.height);
-            let overflow = f32::from(at.y) + menu.height() - bottom;
-            if overflow > 0.0 {
-                menu.at.y = at.y - px(overflow);
-            }
-        }
-        self.menu = Some(menu);
-        self.dirty = true;
-    }
-
-    pub fn close_menu(&mut self) {
-        self.menu = None;
-    }
-
-    /// Run the row a menu reported. Ids are matched here rather than in
-    /// `menu.rs`, because only the view knows what it can do.
-    pub fn run_menu(&mut self, id: &str, cx: &mut gpui::App) {
-        match id {
+    /// What a node menu row does. The kit owns the menu's look and lifetime; the
+    /// vocabulary of things it can ask for lives here.
+    pub fn menu_action(&mut self, action: &str, _cx: &mut gpui::App) {
+        match action {
             "focus" => {
                 let node = self.picked_node();
                 self.focus(node);
             }
-            "zoom-in" => self.zoom_to(self.camera.zoom * 1.5),
-            "zoom-out" => self.zoom_to(self.camera.zoom / 1.5),
+            "zoom-in" => self.zoom_by(1.5),
+            "zoom-out" => self.zoom_by(1.0 / 1.5),
             "fit" => self.fit_graph(),
-            "runs" | "open" => self.view = View::Runs,
-            "copy" => {
-                if let Some(run) = self.runs.get(self.selected) {
-                    use gpui::ClipboardItem;
-                    cx.write_to_clipboard(ClipboardItem::new_string(run.id.clone()));
-                }
-            }
+            "runs" => self.view = View::Runs,
             _ => {}
         }
-        self.menu = None;
         self.dirty = true;
+    }
+
+    /// Zoom by a factor, for the menu's Zoom rows and for a host that wants a
+    /// starting magnification.
+    pub fn zoom_by(&mut self, factor: f32) {
+        self.zoom_to(self.camera.zoom * factor);
     }
 
     /// Pick a node and fly the camera to it.
@@ -773,6 +772,7 @@ impl Board {
     }
 
     fn list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let handle = self.handle.clone();
         div()
             .w(px(LIST_W))
             // The detail pane holds a single un-wrapped line of JSON whose
@@ -786,6 +786,10 @@ impl Board {
             .overflow_hidden()
             .children(self.runs.iter().enumerate().map(|(index, run)| {
                 let selected = index == self.selected;
+                // The menu outlives this borrow: it keeps what it shows.
+                let workflow = SharedString::from(run.workflow.clone());
+                let run_id = SharedString::from(run.id.clone());
+                let menu_handle = handle.clone();
                 let mut row = div()
                     .id(("run", index))
                     .h(px(ROW_H))
@@ -823,17 +827,20 @@ impl Board {
                     gpui::MouseButton::Left,
                     cx.listener(move |this, _: &gpui::MouseDownEvent, _window, cx| {
                         this.selected = index;
-                        this.close_menu();
                         cx.notify();
                     }),
                 )
-                .on_mouse_down(
-                    gpui::MouseButton::Right,
-                    cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
-                        this.open_run_menu(index, event.position);
-                        cx.notify();
-                    }),
-                )
+                // The kit's context menu: it positions itself, closes itself, and
+                // gives every row in every view the same menu behaviour.
+                .context_menu(move |menu, _window, _cx| {
+                    run_menu(
+                        menu,
+                        index,
+                        workflow.clone(),
+                        run_id.clone(),
+                        menu_handle.clone(),
+                    )
+                })
                 .into_any_element()
             }))
     }
@@ -925,6 +932,7 @@ impl Board {
         let picked = self.picked.min(brain.node_count().saturating_sub(1));
         let hover = self.hover;
         let camera = self.camera;
+        let graph_menu = self.handle.clone();
         let canvas_element = div()
             .id("brain")
             .size_full()
@@ -974,20 +982,6 @@ impl Board {
                         return;
                     }
                     this.drag = Some((event.position, this.camera.pan));
-                    this.close_menu();
-                    cx.notify();
-                }),
-            )
-            .on_mouse_down(
-                gpui::MouseButton::Right,
-                cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
-                    let node = match (this.brain.as_ref(), this.graph_bounds.get()) {
-                        (Some(brain), Some(bounds)) => {
-                            brain.hit(bounds, this.camera, event.position)
-                        }
-                        _ => None,
-                    };
-                    this.open_node_menu(node, event.position);
                     cx.notify();
                 }),
             )
@@ -1051,7 +1045,8 @@ impl Board {
                     },
                 )
                 .size_full(),
-            );
+            )
+            .context_menu(move |menu, _window, _cx| node_menu(menu, graph_menu.clone()));
 
         div()
             .flex_1()
@@ -1367,11 +1362,6 @@ impl Render for Board {
                 View::Brain => self.brain_body(cx),
             })
             .child(self.footer())
-            .children(self.menu.as_ref().map(|menu| {
-                menu.element(cx.listener(|this, id, _window, cx| {
-                    this.run_menu(id, cx);
-                }))
-            }))
     }
 }
 

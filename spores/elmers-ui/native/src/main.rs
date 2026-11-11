@@ -16,8 +16,6 @@
 
 #[path = "../../src/brain.rs"]
 mod brain;
-#[path = "../../src/menu.rs"]
-mod menu;
 #[path = "../../src/view.rs"]
 mod view;
 
@@ -142,6 +140,11 @@ fn main() {
     }
 
     application().run(move |cx: &mut App| {
+        // The kit's globals first: theme, input handlers and the root that its
+        // menus and popovers resolve their overlays through.
+        gpui_component::init(cx);
+        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+
         // The Spore embeds Lilex rather than trusting the host's fonts; the
         // preview does the same so both draw the same glyph shapes.
         if let Err(error) = cx
@@ -187,9 +190,14 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            move |_, _cx| root.clone(),
+            move |window, cx| cx.new(|cx| gpui_component::Root::new(root.clone(), window, cx)),
         )
         .expect("open the Elmers window");
+
+        // The kit builds context menus later than the click; the rows need a
+        // way back to this view.
+        let attached = board.clone();
+        board.update(cx, |board, _| board.attach(&attached));
 
         bind_keys(cx, board, source);
         cx.activate(true);
