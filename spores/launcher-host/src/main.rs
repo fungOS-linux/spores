@@ -36,6 +36,9 @@ impl soil::spore::catalog::Host for State {
             .map(|entry| soil::spore::catalog::Entry {
                 id: entry.id.clone(),
                 name: entry.name.clone(),
+                // The catalog carries no separate display title yet; the
+                // registry name is what a launcher row shows.
+                title: entry.name.clone(),
                 version: entry.version.clone(),
                 summary: entry.summary.clone(),
                 workspace: entry.workspace.clone(),
