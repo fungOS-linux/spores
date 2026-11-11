@@ -42,6 +42,8 @@ pub enum Freshness {
 pub struct Policy {
     pub fresh_ms: u64,
     pub stale_ms: u64,
+    /// A completed sleep session is useful for this long after wake.
+    pub sleep_max_age_ms: u64,
     /// Ring first for HR/sleep. Set false for a watch-first experiment.
     pub ring_primary: bool,
 }
@@ -51,6 +53,7 @@ impl Default for Policy {
         Self {
             fresh_ms: 60_000,
             stale_ms: 300_000,
+            sleep_max_age_ms: 12 * 60 * 60 * 1_000,
             ring_primary: true,
         }
     }
@@ -97,6 +100,54 @@ impl StepEstimate {
             },
             "contributors": self.contributors,
             "window": {"start": self.window_start, "end": self.window_end},
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SleepStage {
+    pub stage: String,
+    pub start: u64,
+    pub end: u64,
+}
+
+/// One completed night from one source. Stages are never averaged across
+/// devices; the source with the best coverage wins, preferring the ring.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SleepSession {
+    pub start: u64,
+    pub end: u64,
+    pub stages: Vec<SleepStage>,
+    pub stage_ms: BTreeMap<String, u64>,
+    pub sleep_ms: u64,
+    pub time_in_bed_ms: u64,
+    pub efficiency: f64,
+    pub coverage: f64,
+    pub source_device: String,
+    pub quality: f64,
+    pub freshness: Freshness,
+}
+
+impl SleepSession {
+    #[must_use]
+    pub fn to_json(&self) -> Value {
+        json!({
+            "schema": "vitals.sleep.v1",
+            "start": self.start,
+            "end": self.end,
+            "time_in_bed_ms": self.time_in_bed_ms,
+            "sleep_ms": self.sleep_ms,
+            "efficiency": self.efficiency,
+            "coverage": self.coverage,
+            "stage_ms": self.stage_ms,
+            "stages": self.stages.iter().map(|stage| json!({
+                "stage": stage.stage,
+                "start": stage.start,
+                "end": stage.end,
+            })).collect::<Vec<_>>(),
+            "source_device": self.source_device,
+            "quality": self.quality,
+            "freshness": freshness_name(self.freshness),
         })
     }
 }
@@ -192,6 +243,7 @@ pub struct Vitals {
     pub spo2: Option<Reading>,
     pub temperature_c: Option<Reading>,
     pub sleep: Option<Reading>,
+    pub sleep_session: Option<SleepSession>,
     pub steps: BTreeMap<String, u64>,
     pub step_estimate: StepEstimate,
     pub motion: Option<Reading>,
@@ -217,6 +269,7 @@ impl Vitals {
             "spo2": self.spo2.as_ref().map(|reading| reading_json(reading, "percent")),
             "temperature_c": self.temperature_c.as_ref().map(|reading| reading_json(reading, "celsius")),
             "sleep": self.sleep.as_ref().map(|reading| reading_json(reading, "stage")),
+            "sleep_session": self.sleep_session.as_ref().map(SleepSession::to_json),
             "steps": steps,
             "motion": self.motion.as_ref().map(|reading| reading_json(reading, "magnitude")),
             "devices": self.devices,
@@ -239,7 +292,7 @@ impl Vitals {
                 self.temperature_c.as_ref(),
                 "C",
             ),
-            card("sleep", "Sleep", self.sleep.as_ref(), ""),
+            sleep_card(self),
             card("motion", "Motion", self.motion.as_ref(), "mg"),
         ];
         let steps: Vec<Value> = self
@@ -256,6 +309,7 @@ impl Vitals {
             "empty": self.devices.is_empty(),
             "rings": rings,
             "cards": cards,
+            "sleep_session": self.sleep_session.as_ref().map(SleepSession::to_json),
             // A GPUI renderer draws one row per device; there is deliberately
             // no `total` field to accidentally render a summed step count.
             "steps": {
@@ -317,6 +371,32 @@ fn activity_rings(vitals: &Vitals) -> Vec<Value> {
     });
 
     vec![move_ring, heart_ring, oxygen_ring]
+}
+
+fn sleep_card(vitals: &Vitals) -> Value {
+    let Some(session) = &vitals.sleep_session else {
+        return card("sleep", "Sleep", None, "");
+    };
+    json!({
+        "id": "sleep",
+        "label": "Sleep",
+        "value": format_duration(session.sleep_ms),
+        "unit": "",
+        "source_device": session.source_device,
+        "freshness": freshness_name(session.freshness),
+        "quality": session.quality,
+    })
+}
+
+fn format_duration(ms: u64) -> String {
+    let minutes = ms / 60_000;
+    let hours = minutes / 60;
+    let remainder = minutes % 60;
+    if hours > 0 {
+        format!("{hours}h {remainder}m")
+    } else {
+        format!("{remainder}m")
+    }
 }
 
 fn card(id: &str, label: &str, reading: Option<&Reading>, unit: &str) -> Value {
@@ -401,7 +481,9 @@ pub fn fuse(signals: &[Signal], wearer: &str, now: u64, policy: Policy) -> Vital
     } else {
         watch_sleep.or(ring_sleep)
     }
-    .map(|signal| reading(signal, "stage"));
+    .map(|signal| reading(signal, "stage"))
+    .filter(|reading| !reading.value.is_null());
+    let sleep_session = select_sleep(&visible, now, policy);
 
     let watch_motion = pick(&visible, "body.motion.v1", DeviceKind::Watch, now, policy);
     let ring_motion = pick(&visible, "body.motion.v1", DeviceKind::Ring, now, policy);
@@ -426,6 +508,7 @@ pub fn fuse(signals: &[Signal], wearer: &str, now: u64, policy: Policy) -> Vital
         spo2,
         temperature_c,
         sleep,
+        sleep_session,
         steps,
         step_estimate,
         motion,
@@ -473,6 +556,146 @@ fn motion_reading(signal: &Signal) -> Reading {
         observed_at: signal.observed_at,
         freshness: Freshness::Fresh,
         quality: signal.quality,
+    }
+}
+
+fn select_sleep(signals: &[&Signal], now: u64, policy: Policy) -> Option<SleepSession> {
+    let mut ring = None;
+    let mut watch = None;
+    for signal in signals {
+        if signal.kind != "body.sleep.v1" {
+            continue;
+        }
+        let Some(session) = parse_sleep(signal, now, policy) else {
+            continue;
+        };
+        match signal.device_kind() {
+            DeviceKind::Ring => keep_sleep_session(&mut ring, session),
+            DeviceKind::Watch => keep_sleep_session(&mut watch, session),
+            DeviceKind::Other => {}
+        }
+    }
+    if policy.ring_primary {
+        ring.or(watch)
+    } else {
+        watch.or(ring)
+    }
+}
+
+fn keep_sleep_session(slot: &mut Option<SleepSession>, session: SleepSession) {
+    let replace = slot.as_ref().is_none_or(|current| {
+        session.coverage > current.coverage
+            || (session.coverage == current.coverage && session.end > current.end)
+    });
+    if replace {
+        *slot = Some(session);
+    }
+}
+
+fn parse_sleep(signal: &Signal, now: u64, policy: Policy) -> Option<SleepSession> {
+    let value = &signal.value;
+    let start = value.get("start").and_then(Value::as_u64)?;
+    let end = value
+        .get("end")
+        .and_then(Value::as_u64)
+        .unwrap_or(signal.observed_at);
+    if end <= start {
+        return None;
+    }
+    let freshness = sleep_freshness(end, now, policy);
+    if freshness == Freshness::Expired {
+        return None;
+    }
+
+    let mut stages = Vec::new();
+    for raw in value.get("stages").and_then(Value::as_array)? {
+        let stage = normalize_stage(raw.get("stage").and_then(Value::as_str)?)?;
+        let stage_start = raw.get("start").and_then(Value::as_u64)?;
+        let stage_end = raw.get("end").and_then(Value::as_u64)?;
+        if stage_end <= stage_start {
+            continue;
+        }
+        stages.push(SleepStage {
+            stage: stage.to_string(),
+            start: stage_start,
+            end: stage_end,
+        });
+    }
+    if stages.is_empty() {
+        return None;
+    }
+    stages.sort_by_key(|stage| stage.start);
+
+    let mut clipped = Vec::new();
+    let mut cursor = start;
+    for stage in stages {
+        let stage_start = stage.start.max(start).max(cursor);
+        let stage_end = stage.end.min(end);
+        if stage_end <= stage_start {
+            continue;
+        }
+        clipped.push(SleepStage {
+            stage: stage.stage,
+            start: stage_start,
+            end: stage_end,
+        });
+        cursor = stage_end;
+    }
+    if clipped.is_empty() {
+        return None;
+    }
+
+    let mut stage_ms: BTreeMap<String, u64> = ["awake", "light", "deep", "rem"]
+        .into_iter()
+        .map(|stage| (stage.to_string(), 0))
+        .collect();
+    for stage in &clipped {
+        *stage_ms.get_mut(&stage.stage)? += stage.end - stage.start;
+    }
+    let time_in_bed_ms = end - start;
+    let sleep_ms = ["light", "deep", "rem"]
+        .iter()
+        .filter_map(|stage| stage_ms.get(*stage))
+        .copied()
+        .sum();
+    let coverage = stage_ms.values().copied().sum::<u64>() as f64 / time_in_bed_ms as f64;
+
+    Some(SleepSession {
+        start,
+        end,
+        stages: clipped,
+        stage_ms,
+        sleep_ms,
+        time_in_bed_ms,
+        efficiency: sleep_ms as f64 / time_in_bed_ms as f64,
+        coverage,
+        source_device: signal.source_device.clone(),
+        quality: signal.quality,
+        freshness,
+    })
+}
+
+fn normalize_stage(stage: &str) -> Option<&'static str> {
+    match stage.to_ascii_lowercase().as_str() {
+        "awake" | "wake" => Some("awake"),
+        "light" | "n1" | "n2" => Some("light"),
+        "deep" | "n3" | "slow_wave" => Some("deep"),
+        "rem" | "dream" => Some("rem"),
+        _ => None,
+    }
+}
+
+fn sleep_freshness(end: u64, now: u64, policy: Policy) -> Freshness {
+    if end > now {
+        return Freshness::Stale;
+    }
+    let age = now - end;
+    if age <= policy.sleep_max_age_ms {
+        Freshness::Fresh
+    } else if age <= policy.sleep_max_age_ms.saturating_mul(2) {
+        Freshness::Stale
+    } else {
+        Freshness::Expired
     }
 }
 
@@ -786,12 +1009,57 @@ pub fn seed(now: u64) -> Vec<SeedRecord> {
         json!({"celsius": 36.6}),
         "health",
     );
+    let sleep_start = now
+        .saturating_sub(2_000)
+        .saturating_sub(8 * 60 * 60 * 1_000);
+    let build_sleep = |layout: &[(&str, u64)]| -> Value {
+        let mut cursor = sleep_start;
+        let mut stages = Vec::new();
+        for (stage, minutes) in layout {
+            let end = cursor + minutes * 60_000;
+            stages.push(json!({"stage": stage, "start": cursor, "end": end}));
+            cursor = end;
+        }
+        json!({"start": sleep_start, "end": cursor, "stages": stages})
+    };
+    let ring_layout = [
+        ("awake", 20),
+        ("light", 90),
+        ("deep", 80),
+        ("light", 60),
+        ("rem", 50),
+        ("awake", 10),
+        ("light", 60),
+        ("deep", 50),
+        ("rem", 50),
+        ("awake", 10),
+    ];
+    let watch_layout = [
+        ("awake", 20),
+        ("light", 100),
+        ("deep", 120),
+        ("light", 60),
+        ("rem", 40),
+        ("awake", 10),
+        ("light", 60),
+        ("deep", 40),
+        ("rem", 20),
+        ("awake", 10),
+    ];
     push(
         "sim-ring",
         "dev.fungos.colmi-ring",
         "owner",
         "body.sleep.v1",
-        json!({"stage": "deep"}),
+        build_sleep(&ring_layout),
+        "health",
+    );
+    push(
+        "sim-pinetime",
+        "dev.fungos.pinetime",
+        "owner",
+        "body.sleep.v1",
+        build_sleep(&watch_layout),
         "health",
     );
     push(
@@ -876,21 +1144,38 @@ mod tests {
     }
 
     #[test]
-    fn sleep_stage_is_selected_not_averaged() {
-        let now = 10_000;
-        let mut signals = seeded(now);
-        signals.push(Signal {
-            signal_id: "watch-sleep".into(),
-            kind: "body.sleep.v1".into(),
-            source_device: "sim-pinetime".into(),
-            source_spore: "dev.fungos.pinetime".into(),
-            wearer: Some("owner".into()),
-            observed_at: now - 500,
-            quality: 1.0,
-            value: json!({"stage": "light"}),
-        });
-        let vitals = fuse(&signals, "owner", now, Policy::default());
-        assert_eq!(vitals.sleep.unwrap().value, json!("deep"));
+    fn sleep_session_selects_ring_stages_not_averaged() {
+        let now = 8 * 60 * 60 * 1_000 + 10_000;
+        let vitals = fuse(&seeded(now), "owner", now, Policy::default());
+        assert!(
+            vitals.sleep.is_none(),
+            "a full session has no legacy stage card"
+        );
+        let sleep = vitals.sleep_session.expect("ring sleep session");
+        assert_eq!(sleep.source_device, "sim-ring");
+        assert_eq!(sleep.time_in_bed_ms, 480 * 60_000);
+        assert_eq!(sleep.sleep_ms, 440 * 60_000);
+        assert_eq!(sleep.stage_ms.get("awake"), Some(&(40 * 60_000)));
+        assert_eq!(sleep.stage_ms.get("light"), Some(&(210 * 60_000)));
+        assert_eq!(sleep.stage_ms.get("deep"), Some(&(130 * 60_000)));
+        assert_eq!(sleep.stage_ms.get("rem"), Some(&(100 * 60_000)));
+        assert_eq!(sleep.freshness, Freshness::Fresh);
+    }
+
+    #[test]
+    fn sleep_session_ages_out_instead_of_staying_fresh() {
+        let now = 8 * 60 * 60 * 1_000 + 10_000;
+        let signals = seeded(now);
+        let stale_at = now + Policy::default().sleep_max_age_ms + 1;
+        let stale = fuse(&signals, "owner", stale_at, Policy::default())
+            .sleep_session
+            .expect("a 12h+ old night is still visible as stale");
+        assert_eq!(stale.freshness, Freshness::Stale);
+
+        let expired_at = now + Policy::default().sleep_max_age_ms * 2 + 1;
+        assert!(fuse(&signals, "owner", expired_at, Policy::default())
+            .sleep_session
+            .is_none());
     }
 
     #[test]

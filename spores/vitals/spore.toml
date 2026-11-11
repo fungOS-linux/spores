@@ -10,7 +10,7 @@ name = "vitals"
 version = "0.1.0"
 license = "MIT"
 summary = "Wearer-scoped health fusion across ring and watch signals"
-description = "Reads signal.sample.v1 records, applies the ring-primary/watch-fallback policy, and writes vitals.summary.v1, a latest-value bus frame, and the vitals.view.v1 record (activity rings plus cards) for the renderer Spore. Sleep stages are selected, not averaged; steps stay per device; stale values are unknown."
+description = "Reads signal.sample.v1 records, applies the ring-primary/watch-fallback policy, and writes vitals.summary.v1, a latest-value bus frame, and the vitals.view.v1 record (activity rings, sleep session, plus cards) for the renderer Spore. Sleep stages are selected, not averaged; steps stay per device; stale values are unknown."
 homepage = "https://github.com/fungOS-linux/spores"
 
 [engine]

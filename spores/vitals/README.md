@@ -68,6 +68,34 @@ the later sample's bucket rather than interpolating at bucket boundaries.
 A GPUI host composes the rings and cards into the actual window; the Spore owns
 the labels, values, units, sources, freshness, and the no-sum rule.
 
+## Sleep
+
+`body.sleep.v1` carries `start`, `end`, and a stage timeline, not one
+instantaneous stage. The Spore reduces it to this `vitals.view.v1` object:
+
+```json
+{
+  "schema": "vitals.sleep.v1",
+  "start": 1794352740000,
+  "end": 1794381540000,
+  "time_in_bed_ms": 28800000,
+  "sleep_ms": 26400000,
+  "efficiency": 0.9167,
+  "stage_ms": {"awake": 2400000, "light": 12600000, "deep": 7800000, "rem": 6000000},
+  "stages": [{"stage": "light", "start": 1794353940000, "end": 1794359340000}],
+  "source_device": "sim-ring",
+  "quality": 1.0,
+  "freshness": "fresh"
+}
+```
+
+The whole night comes from one source. Ring physiology is primary, the watch is
+the fallback, and greater stage coverage breaks a tie; stages are never averaged
+or stitched across devices. A completed session remains usable for
+`sleep_max_age_ms` (12 h by default) and then renders as stale. The Sleep card
+shows the sleep duration; a GPUI host can draw the stage timeline from
+`sleep_session.stages`.
+
 ## Records and bus
 
 - Reads `signal` (`signal.sample.v1`) and ignores malformed bodies.

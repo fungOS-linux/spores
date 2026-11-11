@@ -16,6 +16,7 @@ wit_bindgen::generate!({
 });
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::f32::consts::{FRAC_PI_2, TAU};
 use std::sync::Arc;
 
@@ -211,6 +212,7 @@ impl Render for VitalsView {
             .cloned()
             .unwrap_or_default();
         let rings = parse_rings(&self.view);
+        let sleep = parse_sleep(&self.view);
         let empty = self.view["empty"].as_bool().unwrap_or(false);
 
         let mut root = div()
@@ -269,36 +271,20 @@ impl Render for VitalsView {
         }
         root = root.child(hero);
 
-        if !rows.is_empty() {
-            let mut steps = div()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .p_4()
-                .rounded_xl()
-                .bg(rgb(PANEL))
-                .child(
-                    div()
-                        .flex()
-                        .justify_between()
-                        .items_center()
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(rgb(MUTED))
-                                .child("Steps by device"),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(DIM))
-                                .child("per device · never summed"),
-                        ),
-                );
-            for row in &rows {
-                steps = steps.child(step_row(row));
-            }
-            root = root.child(steps);
+        if sleep.is_some() && !rows.is_empty() {
+            root = root.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_start()
+                    .gap_4()
+                    .child(sleep_panel(sleep.as_ref().expect("sleep checked")))
+                    .child(steps_panel(&rows, false)),
+            );
+        } else if let Some(sleep) = &sleep {
+            root = root.child(sleep_panel(sleep));
+        } else if !rows.is_empty() {
+            root = root.child(steps_panel(&rows, true));
         }
 
         root
@@ -342,6 +328,273 @@ fn header(title: &str, wearer: &str, freshness: &str, device_count: usize) -> im
                 .child(dot(rgb(GREEN)))
                 .child(div().text_xs().text_color(rgb(GREEN)).child("LIVE")),
         )
+}
+
+fn steps_panel(rows: &[Value], full: bool) -> impl IntoElement {
+    let mut panel = div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .p_4()
+        .rounded_xl()
+        .bg(rgb(PANEL))
+        .max_w_full()
+        .child(
+            div()
+                .flex()
+                .justify_between()
+                .items_center()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(MUTED))
+                        .child("Steps by device"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(DIM))
+                        .child("per device · never summed"),
+                ),
+        );
+    if full {
+        panel = panel.w_full();
+    } else {
+        panel = panel.w(px(430.0)).flex_grow(1.0);
+    }
+    for row in rows {
+        panel = panel.child(step_row(row));
+    }
+    panel
+}
+
+#[derive(Clone)]
+struct SleepSummary {
+    start: u64,
+    end: u64,
+    time_in_bed_ms: u64,
+    sleep_ms: u64,
+    efficiency: f64,
+    stage_ms: BTreeMap<String, u64>,
+    stages: Vec<SleepStage>,
+    source: String,
+}
+
+#[derive(Clone)]
+struct SleepStage {
+    stage: String,
+    start: u64,
+    end: u64,
+}
+
+fn parse_sleep(view: &Value) -> Option<SleepSummary> {
+    let value = &view["sleep_session"];
+    if !value.is_object() {
+        return None;
+    }
+    let start = value["start"].as_u64()?;
+    let end = value["end"].as_u64()?;
+    if end <= start {
+        return None;
+    }
+    let stages = value["stages"]
+        .as_array()?
+        .iter()
+        .filter_map(|stage| {
+            Some(SleepStage {
+                stage: stage["stage"].as_str()?.to_string(),
+                start: stage["start"].as_u64()?,
+                end: stage["end"].as_u64()?,
+            })
+        })
+        .collect();
+    let mut stage_ms = BTreeMap::new();
+    for stage in ["awake", "light", "deep", "rem"] {
+        stage_ms.insert(stage.to_string(), 0);
+    }
+    if let Some(values) = value["stage_ms"].as_object() {
+        for (stage, duration) in values {
+            stage_ms.insert(stage.clone(), duration.as_u64().unwrap_or(0));
+        }
+    }
+    Some(SleepSummary {
+        start,
+        end,
+        time_in_bed_ms: value["time_in_bed_ms"].as_u64()?,
+        sleep_ms: value["sleep_ms"].as_u64()?,
+        efficiency: value["efficiency"].as_f64()?,
+        stage_ms,
+        stages,
+        source: value["source_device"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string(),
+    })
+}
+
+fn sleep_panel(sleep: &SleepSummary) -> impl IntoElement {
+    let total = sleep.end.saturating_sub(sleep.start).max(1);
+    let mut chart = div()
+        .relative()
+        .h(px(66.0))
+        .w_full()
+        .rounded_lg()
+        .bg(rgb(TRACK))
+        .overflow_hidden();
+    for stage in &sleep.stages {
+        let start = stage.start.max(sleep.start).min(sleep.end);
+        let end = stage.end.max(sleep.start).min(sleep.end);
+        if end <= start {
+            continue;
+        }
+        let left = (start - sleep.start) as f64 / total as f64;
+        let width = (end - start) as f64 / total as f64;
+        let (top, height) = sleep_stage_row(&stage.stage);
+        chart = chart.child(
+            div()
+                .absolute()
+                .top(px(top))
+                .left(relative(left as f32))
+                .w(relative(width as f32))
+                .h(px(height))
+                .bg(sleep_stage_color(&stage.stage)),
+        );
+    }
+
+    let mut legend = div().flex().flex_wrap().gap_3();
+    for stage in ["awake", "rem", "light", "deep"] {
+        let duration = sleep.stage_ms.get(stage).copied().unwrap_or(0);
+        legend = legend.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(dot(sleep_stage_color(stage)))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(SharedString::from(format!(
+                            "{} {}",
+                            sleep_stage_label(stage),
+                            format_duration_ms(duration)
+                        ))),
+                ),
+        );
+    }
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .p_4()
+        .rounded_xl()
+        .bg(rgb(PANEL))
+        .w(px(760.0))
+        .max_w_full()
+        .flex_grow(2.0)
+        .child(
+            div()
+                .flex()
+                .justify_between()
+                .items_center()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(div().text_sm().text_color(rgb(MUTED)).child("Sleep"))
+                        .child(
+                            div()
+                                .text_3xl()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(SharedString::from(format_duration_ms(sleep.sleep_ms))),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_end()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(TEXT))
+                                .child(SharedString::from(format!(
+                                    "{:.0}% efficiency",
+                                    sleep.efficiency * 100.0
+                                ))),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(DIM))
+                                .child(SharedString::from(format!(
+                                    "{} in bed · {}",
+                                    format_duration_ms(sleep.time_in_bed_ms),
+                                    sleep.source
+                                ))),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(DIM))
+                .child(SharedString::from(format!(
+                    "{} → {} UTC",
+                    clock_utc(sleep.start),
+                    clock_utc(sleep.end)
+                ))),
+        )
+        .child(chart)
+        .child(legend)
+}
+
+fn sleep_stage_color(stage: &str) -> Rgba {
+    match stage {
+        "awake" => rgb(AMBER),
+        "rem" => rgb(CYAN),
+        "light" => rgb(0x6ea8ff),
+        "deep" => rgb(PURPLE),
+        _ => rgb(DIM),
+    }
+}
+
+fn sleep_stage_row(stage: &str) -> (f32, f32) {
+    match stage {
+        "awake" => (0.0, 10.0),
+        "rem" => (18.0, 10.0),
+        "light" => (36.0, 10.0),
+        "deep" => (54.0, 10.0),
+        _ => (0.0, 10.0),
+    }
+}
+
+fn sleep_stage_label(stage: &str) -> &'static str {
+    match stage {
+        "awake" => "Awake",
+        "rem" => "REM",
+        "light" => "Light",
+        "deep" => "Deep",
+        _ => "Unknown",
+    }
+}
+
+fn format_duration_ms(ms: u64) -> String {
+    let minutes = ms / 60_000;
+    let hours = minutes / 60;
+    let remainder = minutes % 60;
+    if hours > 0 {
+        format!("{hours}h {remainder}m")
+    } else {
+        format!("{remainder}m")
+    }
+}
+
+fn clock_utc(ms: u64) -> String {
+    let day = ms % 86_400_000;
+    format!("{:02}:{:02}", day / 3_600_000, (day / 60_000) % 60)
 }
 
 fn ring_panel(rings: &[Ring], wearer: &str, freshness: &str) -> impl IntoElement {

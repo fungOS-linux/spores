@@ -3,7 +3,7 @@
 A **Spore UI**, not a native companion app. The guest:
 
 1. reads the Spore-owned `vitals.view.v1` record from `soil:records`;
-2. builds the Apple Health-style activity rings and metric cards with **GPUI**;
+2. builds the Apple Health-style activity rings, metric cards, and sleep hypnogram with **GPUI**;
 3. renders them through the Soil-provided `wasi:webgpu` device using GPUI Fast's
    offscreen `WgpuHeadlessRenderer`;
 4. presents the resulting texture through `soil:canvas-gpu`.
@@ -55,7 +55,9 @@ with no preopens, so the Spore cannot read a host path.
 
 The ring arcs are real GPUI path primitives. The dark/neon palette follows the
 ChartGPU panel language, while the guest stays on one GPUI/wgpu pipeline instead
-of adding a second GPU renderer.
+of adding a second GPU renderer. The sleep panel is a four-row hypnogram built
+from the selected `sleep_session.stages`; it never stitches two devices into one
+night.
 
 ## Build
 
