@@ -1,0 +1,13 @@
+// The store as a Spore UI: GPUI lays out the shopfront, wasi:webgpu renders it,
+// and soil:canvas-gpu presents the texture. The catalog is read over soil:http,
+// which the host checks against its origin allowlist — the guest never opens a
+// socket and never holds a credential.
+package fungos:store-view@0.2.0;
+
+world runner {
+  include wasi:webgpu/imports@0.3.0-rc.2;
+  import soil:canvas-gpu/surface@0.1.0;
+  import soil:http/http@0.1.0;
+
+  export run: async func() -> u32;
+}
