@@ -53,44 +53,38 @@ sidebar when it is folded), and calls `screen::resize`. A wheel notch scrolls
 the viewport through scrollback; the host hands back the moved viewport, so the
 Spore tracks no offset of its own.
 
-Keys typed before the shell has painted are held and replayed rather than
-written into the tty, which would echo them wherever the cursor happened to be.
+A keystroke goes to the pty the turn it arrives, and the Spore then waits on
+`soil:terminal-screen`'s `wait` rather than polling, so the echo is drawn as
+soon as the emulator publishes it. An idle terminal wakes once a tick.
 
 ## Sidebar targets
 
 The three targets in the sidebar — `studio`, `agora-one`, `home-pi` — are
-fixtures, not sessions. Making them real is the next piece of work, and it does
-not need a new contract:
+fixtures, not sessions. Making them real means asking **mycelium**, which is the
+thing that knows which hosts exist:
 
-1. The target list becomes host data: a catalogue of hosts (mycelium inventory,
-   or a config file) reached through a host call, the same way the launcher gets
-   its Spore list.
-2. Opening a target starts a local `ssh <host>` on the pty. The Spore still
-   renders a grid, so this is a host change plus a target list in the view.
-3. A mycelium transport later replaces `ssh` without the Spore noticing: the
-   contract is "a process on a pty", whichever side of the link it runs on.
+1. The target list comes from a host call backed by `soil:mycelium` — the same
+   inventory the network tooling reads, not a second list kept in the view and
+   not an `~/.ssh/config` scan. A host that mycelium does not know about is not
+   a target.
+2. Selecting one asks the host to open a session on that target. The transport
+   is mycelium's business: the Spore only asks for "a process on a pty" and
+   renders whatever comes back.
+3. The view keeps the fixtures only until (1) exists; a target row that cannot
+   be reached should say why (down, no route, no grant), which is information
+   mycelium already has.
 
-Selecting a target in the sidebar is therefore a request for a new session, not
-a local UI state change — which is why it belongs behind a host call rather than
-being faked in the view.
+## Running a different shell on the pty
 
-## What is real, and what is not
+`canvas-winit --command "<line>"` runs that command line on the pty instead of a
+login shell, through `sh -c`. That is how a Spore gets a **mush** shell today:
 
-Real: the GPUI view tree, Lilex text shaping, per-cell ANSI colours, cursor,
-font loading from embedded bytes, offscreen render, texture upload, and
-`soil:present`. Keyboard input polls the host's normalized key queue; the
-footer shows the last key and `escape` exits the loop. `canvas-winit` is the
-live presenter; `soil-webgpu --frame` runs the same module as a one-shot
-capture.
+```sh
+canvas-winit terminal_gpui.wasm --command "mush"
+```
 
-Not yet: the grid is `terminal-core`'s `ANSI_FIXTURE`; the sidebar targets are
-placeholders. The live Mycelium directory, PTY session, scrollback, and resize
-are still in `spores/terminal`, which links libghostty-vt and imports
-`soil:mycelium`. Moving those into this component is the next step; it needs a
-host that provides both `wasi:webgpu`/`soil:present` and the Mycelium session
-imports.
-
-## See also
-
-[`docs/gpui-spores.md`](../../docs/gpui-spores.md) is the path every new
-GPUI Spore starts from. This crate is its reference implementation.
+`mush` resolves its VFS root (`--root`, `MUSH_ROOT`, or
+`~/.local/share/fungos/vfs`) and its command engine
+(`--wasm`, `MUSH_WASM`, or the installed `~/.local/share/mush/module.wasm`) on
+its own, so the terminal needs no knowledge of either. A Desktop-bound session
+later passes `--root` and a project mount the same way.

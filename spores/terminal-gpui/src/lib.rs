@@ -41,9 +41,18 @@ const HEADER_H: f32 = 46.0;
 const GRID_PAD: f32 = 10.0;
 /// A cell's advance is not its ink: the last column needs room on its right or
 /// the glyph is clipped by the pane.
-const GRID_PAD_R: f32 = 18.0;
+const GRID_PAD_R: f32 = 22.0;
 const FOOTER_H: f32 = 26.0;
 const TOGGLE_W: f32 = 28.0;
+/// A tab's width is fixed so a click lands on it: the label ellipsizes before
+/// the geometry moves.
+const TAB_W: f32 = 112.0;
+const TAB_GAP: f32 = 4.0;
+const PLUS_W: f32 = 26.0;
+/// One sidebar row, and where the first one starts. Shared by the layout and
+/// the hit test for the same reason the tabs are.
+const TARGET_H: f32 = 46.0;
+const TARGET_TOP: f32 = 38.0;
 
 const DEFAULT_FG: u32 = 0xc8d3e0;
 
@@ -76,6 +85,10 @@ struct Target {
 
 struct TerminalView {
     grid: Grid,
+    /// The shells the host is running, in tab order.
+    sessions: Vec<screen::Session>,
+    /// What the last sidebar click had to say (a target with no session yet).
+    notice: Option<SharedString>,
     /// The sidebar can be folded away; the grid takes the width back.
     sidebar_open: bool,
     /// The last failure from the host, shown instead of a silent blank grid: a
@@ -143,6 +156,8 @@ impl TerminalView {
         };
         Self {
             grid,
+            sessions: Vec::new(),
+            notice: None,
             sidebar_open: true,
             error: None,
             generation,
@@ -246,6 +261,43 @@ impl TerminalView {
         if self.sidebar_open { SIDEBAR_W } else { 0.0 }
     }
 
+    /// Which tab the pointer is on, if it is on one, and the tab strip's own
+    /// "+" (which opens another shell).
+    fn tab_at(&self, x: f32, y: f32) -> Option<usize> {
+        if y >= HEADER_H {
+            return None;
+        }
+        let start = self.sidebar_width() + TOGGLE_W + 6.0;
+        if x < start {
+            return None;
+        }
+        let index = ((x - start) / (TAB_W + TAB_GAP)) as usize;
+        let within = (x - start) % (TAB_W + TAB_GAP) <= TAB_W;
+        (within && index < self.sessions.len()).then_some(index)
+    }
+
+    fn plus_at(&self, x: f32, y: f32) -> bool {
+        if y >= HEADER_H {
+            return false;
+        }
+        let start = self.sidebar_width() + TOGGLE_W + 6.0;
+        let after_tabs = start + self.sessions.len() as f32 * (TAB_W + TAB_GAP);
+        (after_tabs..after_tabs + PLUS_W).contains(&x)
+    }
+
+    /// Which sidebar target the pointer is on.
+    fn target_at(&self, x: f32, y: f32) -> Option<usize> {
+        if !self.sidebar_open || x >= SIDEBAR_W {
+            return None;
+        }
+        let offset = y - TARGET_TOP;
+        if offset < 0.0 {
+            return None;
+        }
+        let index = (offset / TARGET_H) as usize;
+        (index < self.targets.len()).then_some(index)
+    }
+
     /// The fold control sits at the head of the terminal pane.
     fn toggle_at(&self, x: f32, y: f32) -> bool {
         let left = self.sidebar_width();
@@ -278,9 +330,10 @@ impl TerminalView {
             Some(_) => (0xd97757, 0xf0b8a4),
             None => (0x7ee08a, 0xc8d3e0),
         };
-        let left = match &self.error {
-            Some(error) => format!("terminal: {error}"),
-            None => title,
+        let left = match (&self.error, &self.notice) {
+            (Some(error), _) => format!("terminal: {error}"),
+            (None, Some(notice)) => notice.to_string(),
+            (None, None) => title,
         };
         div()
             .h(px(FOOTER_H))
@@ -316,8 +369,7 @@ impl TerminalView {
                                 self.grid.cols, self.grid.rows
                             ))),
                     )
-                    .child("⌃B sidebar")
-                    .child("⌃Q quit"),
+                    .child("⌃B sidebar"),
             )
     }
 
@@ -327,23 +379,23 @@ impl TerminalView {
             .h_full()
             .flex()
             .flex_col()
-            .gap(px(2.0))
             .p(px(14.0))
+            .pt(px(14.0))
             .bg(rgb(0x11161d))
             .child(
                 div()
-                    .mb(px(10.0))
+                    .h(px(TARGET_TOP - 14.0))
                     .text_size(px(10.0))
                     .text_color(rgb(0x6d7b8c))
                     .child("MYCELIUM"),
             )
-            .children(self.targets.iter().map(|target| {
+            .children(self.targets.iter().enumerate().map(|(index, target)| {
                 let mut row = div()
+                    .h(px(TARGET_H))
                     .flex()
                     .items_center()
                     .gap(px(8.0))
                     .px(px(8.0))
-                    .py(px(6.0))
                     .rounded(px(6.0));
                 if target.selected {
                     row = row.bg(rgb(0x1b2430));
@@ -372,6 +424,7 @@ impl TerminalView {
                                 .child(target.kind),
                         ),
                 )
+                .into_any_element()
             }))
     }
 
@@ -386,41 +439,62 @@ impl TerminalView {
             .flex()
             .items_center()
             .justify_between()
-            .px(px(14.0))
+            .pr(px(14.0))
             .bg(rgb(0x0f141b))
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(px(6.0))
                     .child(
                         div()
                             .w(px(TOGGLE_W))
+                            .pl(px(14.0))
                             .text_size(px(13.0))
                             .text_color(rgb(0x8a99aa))
                             .child(if self.sidebar_open { "«" } else { "»" }),
                     )
+                    .children(self.sessions.iter().enumerate().map(|(index, session)| {
+                        let active = session.active;
+                        let mut tab = div()
+                            .w(px(TAB_W))
+                            .h(px(HEADER_H - 16.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .px(px(10.0))
+                            .rounded(px(7.0))
+                            .text_size(px(12.0))
+                            .text_color(if active { rgb(0xe6edf5) } else { rgb(0x8a99aa) });
+                        if active {
+                            tab = tab.bg(rgb(0x1b2430));
+                        }
+                        tab.child(
+                            div()
+                                .w(px(5.0))
+                                .h(px(5.0))
+                                .rounded(px(3.0))
+                                .bg(rgb(if active { 0x7ee08a } else { 0x3a4756 })),
+                        )
+                        .child(SharedString::from(format!(
+                            "{} {}",
+                            index + 1,
+                            session.title
+                        )))
+                    }))
                     .child(
                         div()
-                            .text_size(px(13.0))
-                            .text_color(rgb(0xe6edf5))
-                            .child("term.myc"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(rgb(0x6d7b8c))
-                            .child(SharedString::from(title)),
+                            .w(px(PLUS_W))
+                            .text_size(px(14.0))
+                            .text_color(rgb(0x8a99aa))
+                            .child("+"),
                     ),
             )
             .child(
                 div()
                     .text_size(px(10.0))
                     .text_color(rgb(0x6d7b8c))
-                    .child(SharedString::from(format!(
-                        "{}x{}",
-                        self.grid.cols, self.grid.rows
-                    ))),
+                    .child(SharedString::from(title)),
             )
     }
 }
@@ -464,6 +538,47 @@ fn toggle_sidebar(
 ) -> anyhow::Result<()> {
     window.update(cx, |view, _, cx| {
         view.sidebar_open = !view.sidebar_open;
+        cx.notify();
+    })?;
+    Ok(())
+}
+
+/// A sidebar target is a request for a session on that host. Only the local
+/// one can be honoured today: the others need mycelium, which knows which hosts
+/// exist and how to reach them. Saying so beats a row that does nothing.
+fn click_target(
+    window: &gpui::WindowHandle<TerminalView>,
+    cx: &mut HeadlessAppContext,
+    index: usize,
+) -> anyhow::Result<()> {
+    let local = window.update(cx, |view, _, _| {
+        let target = &view.targets[index];
+        let name = target.name.to_string();
+        let local = index == 0;
+        view.targets.iter_mut().enumerate().for_each(|(other, target)| {
+            target.selected = other == index;
+        });
+        (name, local)
+    })?;
+    let (name, local) = local;
+    if local {
+        if screen::sessions().map(|sessions| sessions.is_empty()).unwrap_or(true) {
+            let _ = screen::open_session(None);
+        } else if let Ok(sessions) = screen::sessions() {
+            if let Some(session) = sessions.first() {
+                let _ = screen::select_session(session.id);
+            }
+        }
+        window.update(cx, |view, _, cx| {
+            view.notice = None;
+            cx.notify();
+        })?;
+        return Ok(());
+    }
+    window.update(cx, |view, _, cx| {
+        view.notice = Some(SharedString::from(format!(
+            "{name}: mycelium has no session for this host yet"
+        )));
         cx.notify();
     })?;
     Ok(())
@@ -582,6 +697,11 @@ fn render_frame() -> anyhow::Result<()> {
     let mut dirty = true;
     let mut window_size = (width, height);
     let mut cells = (0, 0);
+    // The host starts no shell on its own: a terminal with no session is a
+    // blank window with a tab strip that cannot do anything.
+    if screen::sessions().map(|sessions| sessions.is_empty()).unwrap_or(true) {
+        let _ = screen::open_session(None);
+    }
     loop {
         // The window is the source of truth for how much space there is. Both
         // the emulator's grid and the GPUI window follow it, so a drag reaches
@@ -591,6 +711,25 @@ fn render_frame() -> anyhow::Result<()> {
             window_size = size;
             window.update(&mut cx, |_, window, _| {
                 window.resize(gpui::size(px(size.0 as f32), px(size.1 as f32)));
+            })?;
+            dirty = true;
+        }
+        // The tab strip is host state: two Spores showing the same terminal
+        // see the same shells, and a shell that exits disappears from both.
+        if let Ok(sessions) = screen::sessions() {
+            window.update(&mut cx, |view, _, cx| {
+                // The generated record has no `PartialEq`; a tab strip only
+                // cares about what it draws.
+                let same = view.sessions.len() == sessions.len()
+                    && view
+                        .sessions
+                        .iter()
+                        .zip(&sessions)
+                        .all(|(a, b)| a.id == b.id && a.title == b.title && a.active == b.active);
+                if !same {
+                    view.sessions = sessions;
+                    cx.notify();
+                }
             })?;
             dirty = true;
         }
@@ -641,17 +780,14 @@ fn render_frame() -> anyhow::Result<()> {
         }
         // Everything already queued goes to the pty on this turn: a key should
         // not wait for a poll timeout to reach the shell.
-        let mut quit = false;
         loop {
             let Some(event) = input::poll(0) else {
                 break;
             };
             match event {
                 input::Event::KeyInput(key) => {
-                    if key.control && key.key.eq_ignore_ascii_case("q") {
-                        quit = true;
-                        break;
-                    }
+                    // Ctrl-Q belongs to the running program (XON), not to the
+                    // terminal. The window closes the way any window does.
                     if key.control && key.key.eq_ignore_ascii_case("b") {
                         toggle_sidebar(&window, &mut cx, None)?;
                         dirty = true;
@@ -694,18 +830,36 @@ fn render_frame() -> anyhow::Result<()> {
                 }
                 input::Event::Button(button) => {
                     if button.pressed && button.button == input::PointerButton::Left {
-                        let target = window
+                        let fold = window
                             .update(&mut cx, |view, _, _| view.toggle_at(button.x, button.y))?;
-                        if target {
+                        let tab = window
+                            .update(&mut cx, |view, _, _| view.tab_at(button.x, button.y))?;
+                        let plus = window
+                            .update(&mut cx, |view, _, _| view.plus_at(button.x, button.y))?;
+                        let target = window
+                            .update(&mut cx, |view, _, _| view.target_at(button.x, button.y))?;
+                        if fold {
                             toggle_sidebar(&window, &mut cx, None)?;
+                            dirty = true;
+                        } else if let Some(index) = tab {
+                            let id = window
+                                .update(&mut cx, |view, _, _| view.sessions[index].id.clone())?;
+                            if let Err(error) = screen::select_session(id) {
+                                eprintln!("terminal: select: {error}");
+                            }
+                            dirty = true;
+                        } else if plus {
+                            if let Err(error) = screen::open_session(None) {
+                                eprintln!("terminal: open: {error}");
+                            }
+                            dirty = true;
+                        } else if let Some(index) = target {
+                            click_target(&window, &mut cx, index)?;
                             dirty = true;
                         }
                     }
                 }
             }
-        }
-        if quit {
-            break;
         }
         // Then sleep until the emulator publishes or a tick passes, instead of
         // polling the grid: the echo of a keystroke is drawn the moment it
