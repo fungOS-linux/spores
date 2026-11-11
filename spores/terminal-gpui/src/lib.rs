@@ -14,11 +14,11 @@ wit_bindgen::generate!({
 });
 
 use gpui::{
-    AnyElement, AppContext as _, Context, FontWeight, HeadlessAppContext, IntoElement,
-    PlatformTextSystem, Render, SharedString, Window, div, prelude::*, px, rgb, size,
+    AnyElement, AnyWindowHandle, AppContext as _, Context, FontWeight, HeadlessAppContext,
+    IntoElement, PlatformTextSystem, Render, SharedString, Window, div, prelude::*, px, rgb, size,
 };
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
-use soil::present::surface;
+use soil::present::{input, surface};
 use std::{borrow::Cow, sync::Arc};
 use terminal_core::{ANSI_FIXTURE, Grid, render};
 
@@ -31,8 +31,8 @@ const DEFAULT_FG: u32 = 0xc8d3e0;
 
 /// xterm's first sixteen colours; indices above that are the 6x6x6 cube.
 const ANSI: [u32; 16] = [
-    0x1b1f27, 0xd14b4b, 0x4f9e5a, 0xc9a227, 0x4b7fd1, 0x9a6ac9, 0x3fa7a0, 0xc8d3e0,
-    0x5c6773, 0xff6b6b, 0x7ee08a, 0xffd166, 0x7aa2ff, 0xc792ea, 0x64d8d0, 0xffffff,
+    0x1b1f27, 0xd14b4b, 0x4f9e5a, 0xc9a227, 0x4b7fd1, 0x9a6ac9, 0x3fa7a0, 0xc8d3e0, 0x5c6773,
+    0xff6b6b, 0x7ee08a, 0xffd166, 0x7aa2ff, 0xc792ea, 0x64d8d0, 0xffffff,
 ];
 
 fn ansi_color(value: u32, default: u32) -> u32 {
@@ -59,6 +59,7 @@ struct Target {
 struct TerminalView {
     grid: Grid,
     targets: Vec<Target>,
+    last_key: SharedString,
 }
 
 impl TerminalView {
@@ -66,10 +67,26 @@ impl TerminalView {
         Self {
             // The same ANSI fixture the native mock and the cell-grid spore use.
             grid: render(ANSI_FIXTURE.as_bytes(), 80, 24),
+            last_key: SharedString::from("none"),
             targets: vec![
-                Target { name: "studio", kind: "macOS · this machine", up: true, selected: true },
-                Target { name: "agora-one", kind: "Linux · RTX 4090", up: true, selected: false },
-                Target { name: "home-pi", kind: "Linux · aarch64", up: false, selected: false },
+                Target {
+                    name: "studio",
+                    kind: "macOS · this machine",
+                    up: true,
+                    selected: true,
+                },
+                Target {
+                    name: "agora-one",
+                    kind: "Linux · RTX 4090",
+                    up: true,
+                    selected: false,
+                },
+                Target {
+                    name: "home-pi",
+                    kind: "Linux · aarch64",
+                    up: false,
+                    selected: false,
+                },
             ],
         }
     }
@@ -80,7 +97,10 @@ impl TerminalView {
             let mut cells = Vec::new();
             let mut col = 0;
             while col < self.grid.cols {
-                let cell = self.grid.cell(row, col).expect("grid is row-major and complete");
+                let cell = self
+                    .grid
+                    .cell(row, col)
+                    .expect("grid is row-major and complete");
                 let width = cell.width.max(1);
                 let mut fg = ansi_color(cell.style.fg, DEFAULT_FG);
                 let mut bg = ansi_color(cell.style.bg, 0);
@@ -261,10 +281,60 @@ impl Render for TerminalView {
                             .bg(rgb(0x0f141b))
                             .text_size(px(10.0))
                             .text_color(rgb(0x6d7b8c))
-                            .child("connected · mycelium ssh studio"),
+                            .child(SharedString::from(format!(
+                                "connected · mycelium ssh studio · last key: {}",
+                                self.last_key
+                            ))),
                     ),
             )
     }
+}
+
+fn present_frame(
+    context: &WgpuContext,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> anyhow::Result<()> {
+    let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("term.myc frame"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    context.queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    let texture = wgpu_wasi_webgpu::host_texture(texture);
+    surface::present(&texture).map_err(|error| anyhow::anyhow!("present: {error}"))?;
+    Ok(())
 }
 
 fn render_frame() -> anyhow::Result<()> {
@@ -288,49 +358,34 @@ fn render_frame() -> anyhow::Result<()> {
     let window = cx.open_window(size(px(width as f32), px(height as f32)), |_, cx| {
         cx.new(|_| TerminalView::new())
     })?;
-    cx.run_until_parked();
-    let image = cx.capture_screenshot(window.into())?;
+    let any: AnyWindowHandle = window.into();
 
-    let image_width = image.width();
-    let image_height = image.height();
-    let texture = context.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("term.myc frame"),
-        size: wgpu::Extent3d {
-            width: image_width,
-            height: image_height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::COPY_DST
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    context.queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        image.as_raw(),
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(image_width * 4),
-            rows_per_image: Some(image_height),
-        },
-        wgpu::Extent3d {
-            width: image_width,
-            height: image_height,
-            depth_or_array_layers: 1,
-        },
-    );
-    let texture = wgpu_wasi_webgpu::host_texture(texture);
-    surface::present(&texture).map_err(|error| anyhow::anyhow!("present: {error}"))?;
+    loop {
+        // `capture_screenshot` renders the last drawn frame; a notify only
+        // marks the view dirty. Draw explicitly so a key update is visible.
+        cx.update_window(any, |_, window, app| {
+            let _ = window.draw(app);
+        })?;
+        let image = cx.capture_screenshot(any)?;
+        present_frame(&context, image.width(), image.height(), image.as_raw())?;
+
+        if !input::interactive() {
+            break;
+        }
+        match input::poll(16) {
+            Some(key) => {
+                if key.key == "escape" {
+                    break;
+                }
+                let label = key.text.clone().unwrap_or_else(|| key.key.clone());
+                window.update(&mut cx, |view, _, cx| {
+                    view.last_key = SharedString::from(label);
+                    cx.notify();
+                })?;
+            }
+            None => {}
+        }
+    }
     Ok(())
 }
 

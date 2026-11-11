@@ -52,6 +52,18 @@ implementation reads the GPUI frame back to RGBA, uploads it into an
 COPY_SRC`, and passes that texture to `present`. A later host can grow a
 zero-copy path; the contract does not change.
 
+## Input
+
+Keyboard input is a host import, not a winit event handed to the guest.
+`soil:present/input` offers `interactive() -> bool` and
+`poll(timeout-ms) -> option<key>`. The host normalizes keys and queues them;
+the Spore decides what they mean. A one-shot capture host returns
+`interactive() = false`, so the guest renders one frame and exits;
+`canvas-winit` returns true and feeds winit keyboard events into the queue.
+
+Pointer input and hit-testing are the next layer. The Spore already owns its
+hit regions (GPUI does the hit test); the host only normalizes and delivers.
+
 ## The GPUI fork
 
 GPUI is used from [`fungOS-linux/gpui-fast`](https://github.com/fungOS-linux/gpui-fast/tree/wasip2),
@@ -131,16 +143,17 @@ physical size the host reports.
 - `crates/soil-webgpu` — one-shot CLI presenter used by the fixtures and by
   `--capture` checks.
 - `crates/canvas-winit` (soil) — a winit window that presents a GPUI Spore
-  frame natively. It is a presenter, not a scene host: the Spore is unchanged.
-  One frame per run today; the long-lived loop and input are next.
+  frame natively, with a live keyboard loop. It is a presenter, not a scene
+  host: the Spore is unchanged. One window per process today; the launcher and
+  PTY session are next.
 - Canvas's external-surface path is the compositor-side host; the web bridge is
   still deferred.
 
 ## What is deferred
 
-- **Native live host.** `canvas-winit` presents one frame today. It needs a
-  long-lived guest loop, `soil:surface` input, and the launcher/catalog before
-  it can replace `term.myc`.
+- **Native live host.** `canvas-winit` presents and accepts keyboard input
+  today. It still needs pointer input, a catalog/launcher, a PTY-backed
+  terminal, and the macOS bundle before it can replace `term.myc`.
 - **HTTP/SSE bridge in the host.** Frames out, pointer/key in, carried by the
   same WIT shapes. Deferred, but it belongs in the soil/spore host rather than
   in each page.
