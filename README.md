@@ -122,6 +122,8 @@ spores/consent             system consent popup
 spores/dfm-report          DFM report renderer
 spores/mush                sandboxed VFS shell
 spores/hue                 Philips Hue CLI over the local bridge API
+spores/lights              room-first Hue lights UI (Lua)
+spores/lights-host         loopback browser host for the lights view
 spores/spotify             Spotify Connect remote for RASpotify
 spores/tui                 ratatui dashboard that emits ANSI frames
 spores/cli-http            the narrow host-mediated HTTP seam shared by CLI spores
