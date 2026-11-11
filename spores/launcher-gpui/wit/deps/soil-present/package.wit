@@ -1,0 +1,43 @@
+package soil:present@0.1.0;
+
+/// Presentation-only bridge from a standard `wasi:webgpu` texture to the
+/// host compositor. This does not create a second GPU device ABI and does
+/// not expose a window or swapchain to the guest.
+interface surface {
+  use wasi:webgpu/webgpu@0.3.0-rc.2.{gpu-texture};
+
+  /// Host-selected physical compositor extent.
+  size: func() -> tuple<u32, u32>;
+
+  /// Copy one guest-rendered texture into the compositor's next frame.
+  present: func(texture: borrow<gpu-texture>) -> result<_, string>;
+}
+
+
+/// Keyboard events from the presenter. The Spore decides what they mean; the
+/// host only normalizes them and queues them for the guest to poll.
+interface input {
+  record key {
+    /// Normalized key name: "a", "enter", "escape", "arrow-down", ...
+    key: string,
+    /// Printable text when the key produced one.
+    text: option<string>,
+    pressed: bool,
+    shift: bool,
+    control: bool,
+    alt: bool,
+    meta: bool,
+  }
+
+  /// True when a live presenter is attached and the guest should keep polling.
+  /// A one-shot capture host returns false and the guest exits after one frame.
+  interactive: func() -> bool;
+
+  /// Wait up to `timeout-ms` for one key. Zero polls without waiting.
+  poll: func(timeout-ms: u32) -> option<key>;
+}
+
+world imports {
+  import surface;
+  import input;
+}

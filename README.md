@@ -113,6 +113,7 @@ spores/terminal            terminal Spore
 spores/terminal-core       terminal semantics shared by the tmux and host front ends
 spores/terminal-host       native terminal host
 spores/terminal-gpui       terminal view rendered by GPUI inside a wasm32-wasip2 Spore
+spores/launcher-gpui       GPUI launcher: installed Spores, selection, and launch
 spores/crm                 CRM Spore over namespaced records
 spores/contacts            personal contacts + explicit CRM projections
 spores/notify              notification tray and ringer

@@ -143,16 +143,16 @@ physical size the host reports.
 - `crates/soil-webgpu` — one-shot CLI presenter used by the fixtures and by
   `--capture` checks.
 - `crates/canvas-winit` (soil) — a winit window that presents a GPUI Spore
-  frame natively, with a live keyboard loop. It is a presenter, not a scene
-  host: the Spore is unchanged. One window per process today; the launcher and
-  PTY session are next.
+  frame natively, with a live keyboard loop and a `soil:spore/catalog` host.
+  It scans `--spores DIR`, and `launch` starts `canvas-winit <module>` in a new
+  window. [`spores/launcher-gpui`](../spores/launcher-gpui) is its front end.
 - Canvas's external-surface path is the compositor-side host; the web bridge is
   still deferred.
 
 ## What is deferred
 
-- **Native live host.** `canvas-winit` presents and accepts keyboard input
-  today. It still needs pointer input, a catalog/launcher, a PTY-backed
+- **Native live host.** `canvas-winit` presents, accepts keyboard input, and
+  launches catalog entries. It still needs pointer input, a PTY-backed
   terminal, and the macOS bundle before it can replace `term.myc`.
 - **HTTP/SSE bridge in the host.** Frames out, pointer/key in, carried by the
   same WIT shapes. Deferred, but it belongs in the soil/spore host rather than

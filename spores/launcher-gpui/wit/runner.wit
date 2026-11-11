@@ -1,0 +1,8 @@
+package fungos:launcher-gpui@0.1.0;
+
+world runner {
+  import soil:present/surface@0.1.0;
+  import soil:present/input@0.1.0;
+  import soil:spore/catalog@0.1.0;
+  export run: async func() -> u32;
+}
