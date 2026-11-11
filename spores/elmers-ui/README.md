@@ -24,6 +24,11 @@ Edges are not drawn as lines: the GPUI fork's headless renderer has no rotate or
 path primitive yet, so a graph is expressed by grouping and emphasis rather than
 by a line per link. When the fork grows a line, the layout does not change.
 
+One thing the picture does show: an owner column is whatever `/graph` calls an
+owner, verbatim. A workflow whose frontmatter annotation was parsed with the
+surrounding prose shows up as its own column of one, which is how
+`lib/exec/serves` (owners `['`', 'is', 'deliberately', …]`) was found.
+
 ## Scope
 
 Read-only, deliberately. The Spore asks the sidecar one question — `GET /runs`
@@ -64,3 +69,31 @@ cp target/wasm32-wasip2/release/spore_elmers_ui.wasm module.wasm
 it, so a host that cannot provide it refuses this package by name instead of
 instantiating it half-blind. That is the one piece between this Spore and a
 live board; `spores/spotify` is the reference for the fetch shim.
+
+## Look at it in a window
+
+A wasm component cannot open a window by itself, so `native/` is a small
+desktop binary that compiles [`src/view.rs`](src/view.rs) directly: the same
+layout and render code the Spore runs, with `soil:http` swapped for two files on
+disk. Nothing in `view.rs` knows which of the two is driving it.
+
+```sh
+curl -s 127.0.0.1:8792/runs  > /tmp/elmers-runs.json
+curl -s 127.0.0.1:8792/graph > /tmp/elmers-graph.json
+
+cd spores/elmers-ui/native
+cargo run -- --runs /tmp/elmers-runs.json --graph /tmp/elmers-graph.json
+cargo run -- … --brain          # open on the graph
+```
+
+The preview polls the two files every 2 s, so re-running the `curl`s updates an
+open window; `--runs`/`--graph` pick other paths.
+
+On macOS, GPUI needs Apple's Metal compiler, which Command Line Tools do not
+ship — if `xcode-select -p` prints the CLT path, prefix the build with
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`, or the fork's
+`gpui_apple` build script fails with `unable to find utility "metal"`.
+
+`cargo test` here also runs the view's parser tests. Their fixtures are copied
+from live responses, which is how the `started_at`-arrives-as-a-string bug was
+found and why the clock column is not silently blank.
