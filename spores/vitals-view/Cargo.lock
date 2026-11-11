@@ -3341,6 +3341,7 @@ dependencies = [
  "anyhow",
  "gpui",
  "gpui_wgpu",
+ "lyon",
  "serde_json",
  "wgpu",
  "wgpu-wasi-webgpu",

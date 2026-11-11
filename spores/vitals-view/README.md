@@ -3,14 +3,16 @@
 A **Spore UI**, not a native companion app. The guest:
 
 1. reads the Spore-owned `vitals.view.v1` record from `soil:records`;
-2. builds the cards with **GPUI**;
+2. builds the Apple Health-style activity rings and metric cards with **GPUI**;
 3. renders them through the Soil-provided `wasi:webgpu` device using GPUI Fast's
    offscreen `WgpuHeadlessRenderer`;
 4. presents the resulting texture through `soil:canvas-gpu`.
 
 Canvas owns the window, compositor, input, and capture. The Spore owns the UI
-structure, labels, values, units, sources, freshness, and the no-total rule. No
-window, swapchain, or native handle enters the guest.
+structure, labels, values, units, sources, freshness, and the no-total rule. The
+rings are display scales, not a second health policy: Move uses the primary
+motion device's steps and never a sum. No window, swapchain, or native handle
+enters the guest.
 
 ![vitals-view rendered through soil:canvas-gpu](assets/vitals-view.png)
 
@@ -50,6 +52,10 @@ lease; the Spore cannot keep drawing to a hidden window. The only font is the
 bundled IBM Plex Sans face (SIL OFL 1.1); a WASI component has no system fonts.
 The host supplies an empty WASI context: std's filesystem import is linked, but
 with no preopens, so the Spore cannot read a host path.
+
+The ring arcs are real GPUI path primitives. The dark/neon palette follows the
+ChartGPU panel language, while the guest stays on one GPUI/wgpu pipeline instead
+of adding a second GPU renderer.
 
 ## Build
 

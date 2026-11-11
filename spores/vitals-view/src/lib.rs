@@ -1,5 +1,6 @@
-//! Vitals view Spore: GPUI lays out the cards, `wasi:webgpu` renders them, and
-//! `soil:canvas-gpu` presents the texture to Canvas.
+//! Vitals view Spore: GPUI lays out the cards and activity rings,
+//! `wasi:webgpu` renders them, and `soil:canvas-gpu` presents the texture to
+//! Canvas.
 //!
 //! The guest never gets a window or a swapchain. It reads the Spore-owned
 //! `vitals.view.v1` record, builds a GPUI view, renders through the
@@ -15,14 +16,17 @@ wit_bindgen::generate!({
 });
 
 use std::borrow::Cow;
+use std::f32::consts::{FRAC_PI_2, TAU};
 use std::sync::Arc;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, rgb, AnyWindowHandle, Context, HeadlessAppContext, IntoElement, ParentElement,
-    PlatformTextSystem as _, Render, SharedString, Styled, Window,
+    canvas, div, point, px, relative, rgb, AnyWindowHandle, Bounds, Context, FontWeight,
+    HeadlessAppContext, IntoElement, ParentElement, Path, PathBuilder, PathStyle, Pixels,
+    PlatformTextSystem as _, Point, Render, Rgba, SharedString, StrokeOptions, Styled, Window,
 };
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
+use lyon::tessellation::{LineCap, LineJoin};
 use serde_json::{json, Value};
 use soil::canvas_gpu::surface;
 use soil::records::records;
@@ -31,6 +35,20 @@ use soil::records::records;
 /// fonts, so the Spore ships the one face its view names.
 const FONT: &[u8] = include_bytes!("../assets/IBMPlexSans-Regular.ttf");
 const FONT_FAMILY: &str = "IBM Plex Sans";
+
+const BG: u32 = 0x070b12;
+const PANEL: u32 = 0x0e1622;
+const PANEL_RAISED: u32 = 0x111c2a;
+const TRACK: u32 = 0x1b2938;
+const TEXT: u32 = 0xe7eef7;
+const MUTED: u32 = 0x8b9bb0;
+const DIM: u32 = 0x5d7088;
+const GREEN: u32 = 0x32e88b;
+const ROSE: u32 = 0xff5d8f;
+const CYAN: u32 = 0x54d6ff;
+const AMBER: u32 = 0xf5b95b;
+const PURPLE: u32 = 0xb59cff;
+const ORANGE: u32 = 0xff9b5c;
 
 struct Component;
 export!(Component);
@@ -75,6 +93,7 @@ fn empty_view(wearer: &str) -> Value {
         "wearer": wearer,
         "freshness": "unknown",
         "empty": true,
+        "rings": [],
         "cards": [],
         "steps": {"rows": []},
     })
@@ -182,71 +201,102 @@ impl Render for VitalsView {
         let title = self.view["title"].as_str().unwrap_or("Vitals");
         let wearer = self.view["wearer"].as_str().unwrap_or("unknown");
         let freshness = self.view["freshness"].as_str().unwrap_or("unknown");
+        let device_count = self.view["devices"]
+            .as_array()
+            .map(|devices| devices.len())
+            .unwrap_or(0);
         let cards = self.view["cards"].as_array().cloned().unwrap_or_default();
         let rows = self.view["steps"]["rows"]
             .as_array()
             .cloned()
             .unwrap_or_default();
+        let rings = parse_rings(&self.view);
+        let empty = self.view["empty"].as_bool().unwrap_or(false);
 
         let mut root = div()
             .flex()
             .flex_col()
-            .gap_4()
+            .gap_5()
             .p_6()
             .size_full()
-            .bg(rgb(0x0d1117))
-            .text_color(rgb(0xe6edf3))
-            .child(
-                div()
-                    .text_2xl()
-                    .child(SharedString::from(title.to_string())),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(rgb(0x8b949e))
-                    .child(SharedString::from(format!(
-                        "Wearer: {wearer} · {freshness}"
-                    ))),
-            );
+            .bg(rgb(BG))
+            .text_color(rgb(TEXT))
+            .child(header(title, wearer, freshness, device_count));
 
-        if cards.is_empty() {
+        if empty {
             root = root.child(
                 div()
                     .p_4()
-                    .rounded_lg()
-                    .bg(rgb(0x161b22))
-                    .text_color(rgb(0x8b949e))
+                    .rounded_xl()
+                    .bg(rgb(0x122033))
+                    .text_sm()
+                    .text_color(rgb(0x9ec7ff))
                     .child("No vitals view recorded yet. Run the vitals Spore seed/once first."),
             );
+        }
+
+        let display_rings = if rings.is_empty() {
+            placeholder_rings()
         } else {
-            let mut grid = div().flex().flex_wrap().gap_4();
+            rings
+        };
+
+        let mut hero = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_4()
+            .child(ring_panel(&display_rings, wearer, freshness));
+
+        if cards.is_empty() {
+            hero = hero.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_5()
+                    .rounded_xl()
+                    .bg(rgb(PANEL))
+                    .text_color(rgb(MUTED))
+                    .child("Waiting for the first vitals view."),
+            );
+        } else {
+            let mut grid = div().flex().flex_wrap().gap_3().w(px(774.0)).max_w_full();
             for card in &cards {
                 grid = grid.child(card_element(card));
             }
-            root = root.child(grid);
+            hero = hero.child(grid);
         }
+        root = root.child(hero);
 
         if !rows.is_empty() {
             let mut steps = div()
                 .flex()
                 .flex_col()
-                .gap_1()
-                .p_3()
-                .rounded_lg()
-                .bg(rgb(0x161b22))
-                .child(div().text_sm().text_color(rgb(0x8b949e)).child("Steps"));
-            for row in &rows {
-                let device = row["device"].as_str().unwrap_or("device");
-                let count = row["count"].as_u64().unwrap_or(0);
-                steps = steps.child(
+                .gap_3()
+                .p_4()
+                .rounded_xl()
+                .bg(rgb(PANEL))
+                .child(
                     div()
                         .flex()
                         .justify_between()
-                        .gap_8()
-                        .child(SharedString::from(device.to_string()))
-                        .child(SharedString::from(count.to_string())),
+                        .items_center()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(MUTED))
+                                .child("Steps by device"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(DIM))
+                                .child("per device · never summed"),
+                        ),
                 );
+            for row in &rows {
+                steps = steps.child(step_row(row));
             }
             root = root.child(steps);
         }
@@ -255,35 +305,485 @@ impl Render for VitalsView {
     }
 }
 
+fn header(title: &str, wearer: &str, freshness: &str, device_count: usize) -> impl IntoElement {
+    div()
+        .flex()
+        .justify_between()
+        .items_center()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                    div()
+                        .text_3xl()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(SharedString::from(title.to_string())),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(MUTED))
+                        .child(SharedString::from(format!(
+                            "Wearer: {wearer} · {freshness} · {device_count} devices"
+                        ))),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_1()
+                .rounded_full()
+                .bg(rgb(0x10251b))
+                .child(dot(rgb(GREEN)))
+                .child(div().text_xs().text_color(rgb(GREEN)).child("LIVE")),
+        )
+}
+
+fn ring_panel(rings: &[Ring], wearer: &str, freshness: &str) -> impl IntoElement {
+    let center = rings
+        .iter()
+        .find(|ring| ring.id == "heart")
+        .or_else(|| rings.first());
+    let center_value = center
+        .map(Ring::display_value)
+        .unwrap_or_else(|| "—".to_string());
+    let center_unit = center.map(|ring| ring.unit.clone()).unwrap_or_default();
+    let center_label = center.map(|ring| ring.label.clone()).unwrap_or_default();
+
+    let paint_specs = rings.to_vec();
+    let mut legend = div().flex().flex_col().gap_2();
+    for ring in rings {
+        legend = legend.child(
+            div()
+                .flex()
+                .justify_between()
+                .items_center()
+                .gap_3()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(dot(ring.color()))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(TEXT))
+                                .child(SharedString::from(ring.label.clone())),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(DIM))
+                                .child(SharedString::from(format!(
+                                    "{} · {}",
+                                    ring.source, ring.freshness
+                                ))),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(TEXT))
+                        .child(SharedString::from(value_with_unit(
+                            &ring.display_value(),
+                            &ring.unit,
+                        ))),
+                ),
+        );
+    }
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .w(px(380.0))
+        .p_5()
+        .rounded_2xl()
+        .bg(rgb(PANEL))
+        .child(
+            div()
+                .flex()
+                .justify_between()
+                .items_center()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(MUTED))
+                        .child("Activity rings"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(DIM))
+                        .child(SharedString::from(format!("{wearer} · {freshness}"))),
+                ),
+        )
+        .child(
+            div().flex().justify_center().child(
+                div()
+                    .relative()
+                    .w(px(320.0))
+                    .h(px(320.0))
+                    .child(
+                        canvas(
+                            move |_, _, _| {},
+                            move |bounds, _, window, _| paint_rings(bounds, &paint_specs, window),
+                        )
+                        .absolute()
+                        .top(px(0.0))
+                        .left(px(0.0))
+                        .w(px(320.0))
+                        .h(px(320.0)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(0.0))
+                            .left(px(0.0))
+                            .w(px(320.0))
+                            .h(px(320.0))
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .text_3xl()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(SharedString::from(center_value)),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .child(SharedString::from(center_unit)),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(DIM))
+                                    .child(SharedString::from(center_label)),
+                            ),
+                    ),
+            ),
+        )
+        .child(legend)
+}
+
 fn card_element(card: &Value) -> impl IntoElement {
+    let id = card["id"].as_str().unwrap_or("metric");
     let label = card["label"].as_str().unwrap_or("");
     let value = display_value(&card["value"]);
     let unit = card["unit"].as_str().unwrap_or("");
     let display = value_with_unit(&value, unit);
     let source = card["source_device"].as_str().unwrap_or("no source");
     let freshness = card["freshness"].as_str().unwrap_or("unknown");
+    let quality = card["quality"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0);
+    let accent = card_color(id);
+    let fraction = quality as f32;
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .w(px(250.0))
+        .p_4()
+        .rounded_xl()
+        .bg(rgb(PANEL_RAISED))
+        .child(
+            div()
+                .h(px(3.0))
+                .w_full()
+                .rounded_full()
+                .bg(accent)
+                .opacity(0.9),
+        )
+        .child(
+            div()
+                .flex()
+                .justify_between()
+                .items_center()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(MUTED))
+                        .child(SharedString::from(label.to_string())),
+                )
+                .child(dot(freshness_color(freshness))),
+        )
+        .child(
+            div()
+                .text_3xl()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(SharedString::from(display)),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(DIM))
+                .child(SharedString::from(source.to_string())),
+        )
+        .child(
+            div()
+                .h(px(3.0))
+                .w_full()
+                .rounded_full()
+                .bg(rgb(TRACK))
+                .child(
+                    div()
+                        .h_full()
+                        .w(relative(fraction))
+                        .rounded_full()
+                        .bg(accent),
+                ),
+        )
+}
+
+fn step_row(row: &Value) -> impl IntoElement {
+    let device = row["device"].as_str().unwrap_or("device");
+    let count = row["count"].as_u64().unwrap_or(0);
+    let fraction = (count as f64 / 10_000.0).clamp(0.0, 1.0) as f32;
+    let accent = device_color(device);
 
     div()
         .flex()
         .flex_col()
         .gap_1()
-        .w(px(340.0))
-        .p_3()
-        .rounded_lg()
-        .bg(rgb(0x161b22))
         .child(
             div()
-                .text_sm()
-                .text_color(rgb(0x8b949e))
-                .child(SharedString::from(label.to_string())),
+                .flex()
+                .justify_between()
+                .items_center()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(dot(accent))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(TEXT))
+                                .child(SharedString::from(device.to_string())),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(TEXT))
+                        .child(SharedString::from(format_count(count as f64))),
+                ),
         )
-        .child(div().text_2xl().child(SharedString::from(display)))
         .child(
             div()
-                .text_xs()
-                .text_color(rgb(0x6e7681))
-                .child(SharedString::from(format!("{source} · {freshness}"))),
+                .h(px(6.0))
+                .w_full()
+                .rounded_full()
+                .bg(rgb(TRACK))
+                .child(
+                    div()
+                        .h_full()
+                        .w(relative(fraction))
+                        .rounded_full()
+                        .bg(accent),
+                ),
         )
+}
+
+#[derive(Clone)]
+struct Ring {
+    id: String,
+    label: String,
+    value: Option<f64>,
+    max: f64,
+    unit: String,
+    source: String,
+    freshness: String,
+}
+
+impl Ring {
+    fn fraction(&self) -> f32 {
+        let Some(value) = self.value else {
+            return 0.0;
+        };
+        if self.max <= 0.0 {
+            return 0.0;
+        }
+        (value / self.max).clamp(0.0, 1.0) as f32
+    }
+
+    fn display_value(&self) -> String {
+        match self.value {
+            Some(value) if self.unit == "steps" => format_count(value),
+            Some(value) => format_number(value),
+            None => "—".to_string(),
+        }
+    }
+
+    fn color(&self) -> Rgba {
+        ring_color(&self.id)
+    }
+}
+
+fn parse_rings(view: &Value) -> Vec<Ring> {
+    view["rings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|ring| {
+            Some(Ring {
+                id: ring["id"].as_str()?.to_string(),
+                label: ring["label"].as_str()?.to_string(),
+                value: ring["value"].as_f64(),
+                max: ring["max"].as_f64().unwrap_or(1.0),
+                unit: ring["unit"].as_str().unwrap_or("").to_string(),
+                source: ring["source_device"]
+                    .as_str()
+                    .unwrap_or("no source")
+                    .to_string(),
+                freshness: ring["freshness"].as_str().unwrap_or("unknown").to_string(),
+            })
+        })
+        .collect()
+}
+
+fn placeholder_rings() -> Vec<Ring> {
+    vec![
+        Ring {
+            id: "move".to_string(),
+            label: "Move".to_string(),
+            value: None,
+            max: 10_000.0,
+            unit: "steps".to_string(),
+            source: "no source".to_string(),
+            freshness: "unknown".to_string(),
+        },
+        Ring {
+            id: "heart".to_string(),
+            label: "Heart".to_string(),
+            value: None,
+            max: 180.0,
+            unit: "bpm".to_string(),
+            source: "no source".to_string(),
+            freshness: "unknown".to_string(),
+        },
+        Ring {
+            id: "oxygen".to_string(),
+            label: "Oxygen".to_string(),
+            value: None,
+            max: 100.0,
+            unit: "%".to_string(),
+            source: "no source".to_string(),
+            freshness: "unknown".to_string(),
+        },
+    ]
+}
+
+fn paint_rings(bounds: Bounds<Pixels>, rings: &[Ring], window: &mut Window) {
+    let center = bounds.center();
+    let extent = f32::from(bounds.size.width).min(f32::from(bounds.size.height));
+    let width = 12.0;
+    let gap = 18.0;
+    let outer = extent / 2.0 - width / 2.0 - 2.0;
+
+    for (index, ring) in rings.iter().take(3).enumerate() {
+        let radius = outer - index as f32 * gap;
+        if radius <= width {
+            break;
+        }
+        let color = ring.color();
+        if let Some(track) = arc_path(center, radius, width, 1.0) {
+            window.paint_path(track, color.alpha(0.10));
+        }
+        let fraction = ring.fraction();
+        if fraction > 0.0 {
+            if let Some(glow) = arc_path(center, radius, width + 9.0, fraction) {
+                window.paint_path(glow, color.alpha(0.12));
+            }
+            if let Some(arc) = arc_path(center, radius, width, fraction) {
+                window.paint_path(arc, color);
+            }
+        }
+    }
+}
+
+fn arc_path(center: Point<Pixels>, radius: f32, width: f32, fraction: f32) -> Option<Path<Pixels>> {
+    let fraction = fraction.clamp(0.0, 1.0);
+    if fraction <= 0.0 {
+        return None;
+    }
+
+    let start = -FRAC_PI_2;
+    let sweep = TAU * fraction;
+    let steps = ((sweep / TAU) * 128.0).ceil().max(8.0) as usize;
+    let mut builder = PathBuilder::stroke(px(width)).with_style(PathStyle::Stroke(
+        StrokeOptions::default()
+            .with_line_width(width)
+            .with_line_cap(LineCap::Round)
+            .with_line_join(LineJoin::Round),
+    ));
+    builder.move_to(point(
+        center.x + px(radius * start.cos()),
+        center.y + px(radius * start.sin()),
+    ));
+    for step in 1..=steps {
+        let angle = start + sweep * (step as f32 / steps as f32);
+        builder.line_to(point(
+            center.x + px(radius * angle.cos()),
+            center.y + px(radius * angle.sin()),
+        ));
+    }
+    builder.build().ok()
+}
+
+fn dot(color: Rgba) -> impl IntoElement {
+    div().w(px(7.0)).h(px(7.0)).rounded_full().bg(color)
+}
+
+fn ring_color(id: &str) -> Rgba {
+    match id {
+        "move" => rgb(GREEN),
+        "heart" => rgb(ROSE),
+        "oxygen" => rgb(CYAN),
+        _ => rgb(AMBER),
+    }
+}
+
+fn card_color(id: &str) -> Rgba {
+    match id {
+        "heart_rate" => rgb(ROSE),
+        "hrv" => rgb(AMBER),
+        "spo2" => rgb(CYAN),
+        "temperature" => rgb(ORANGE),
+        "sleep" => rgb(PURPLE),
+        "motion" => rgb(GREEN),
+        _ => rgb(AMBER),
+    }
+}
+
+fn device_color(device: &str) -> Rgba {
+    if device.contains("pinetime") {
+        rgb(GREEN)
+    } else if device.contains("ring") {
+        rgb(CYAN)
+    } else {
+        rgb(AMBER)
+    }
+}
+
+fn freshness_color(freshness: &str) -> Rgba {
+    match freshness {
+        "fresh" => rgb(GREEN),
+        "stale" => rgb(AMBER),
+        "expired" => rgb(ROSE),
+        _ => rgb(DIM),
+    }
 }
 
 fn display_value(value: &Value) -> String {
@@ -296,7 +796,7 @@ fn display_value(value: &Value) -> String {
             } else if let Some(integer) = value.as_u64() {
                 integer.to_string()
             } else {
-                format!("{:.1}", value.as_f64().unwrap_or_default())
+                format_number(value.as_f64().unwrap_or_default())
             }
         }
         other => other.to_string(),
@@ -304,10 +804,33 @@ fn display_value(value: &Value) -> String {
 }
 
 fn value_with_unit(value: &str, unit: &str) -> String {
+    if value == "—" {
+        return value.to_string();
+    }
     match unit.trim() {
         "" => value.to_string(),
         "%" => format!("{value}%"),
         "C" => format!("{value} °C"),
         unit => format!("{value} {unit}"),
     }
+}
+
+fn format_number(value: f64) -> String {
+    if (value - value.round()).abs() < 0.05 {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.1}")
+    }
+}
+
+fn format_count(value: f64) -> String {
+    let digits = (value.round() as u64).to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, character) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(character);
+    }
+    out
 }

@@ -17,6 +17,13 @@ pub const SOURCE: &str = "dev.fungos.vitals";
 pub const SCHEMA: &str = "vitals.summary.v1";
 pub const POLICY_VERSION: &str = "vitals-fusion-v1";
 
+/// Display bounds for the activity rings. These are presentation scales, not
+/// health targets; a wearer profile can replace them without changing the
+/// `vitals.view.v1` shape.
+const MOVE_RING_MAX_STEPS: u64 = 10_000;
+const HEART_RING_MAX_BPM: u64 = 180;
+const OXYGEN_RING_MAX_PERCENT: u64 = 100;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceKind {
     Ring,
@@ -173,6 +180,7 @@ impl Vitals {
     }
     #[must_use]
     pub fn to_view(&self) -> Value {
+        let rings = activity_rings(self);
         let cards = vec![
             card("heart_rate", "Heart rate", self.heart_rate.as_ref(), "bpm"),
             card("hrv", "HRV", self.hrv.as_ref(), "ms"),
@@ -198,6 +206,7 @@ impl Vitals {
             "updated_at": self.window_end,
             "freshness": freshness_name(self.freshness),
             "empty": self.devices.is_empty(),
+            "rings": rings,
             "cards": cards,
             // A GPUI renderer draws one row per device; there is deliberately
             // no `total` field to accidentally render a summed step count.
@@ -207,6 +216,58 @@ impl Vitals {
             "source": SOURCE,
         })
     }
+}
+
+fn activity_rings(vitals: &Vitals) -> Vec<Value> {
+    let move_value = vitals
+        .primary_motion_device
+        .as_ref()
+        .and_then(|device| vitals.steps.get(device))
+        .copied();
+    let move_ring = json!({
+        "id": "move",
+        "label": "Move",
+        "value": move_value,
+        "max": MOVE_RING_MAX_STEPS,
+        "unit": "steps",
+        "source_device": vitals.primary_motion_device,
+        "freshness": if move_value.is_some() {
+            freshness_name(vitals.freshness)
+        } else {
+            "unknown"
+        },
+        "detail": "primary device only",
+    });
+
+    let heart_value = vitals
+        .heart_rate
+        .as_ref()
+        .and_then(|reading| reading.value.as_u64());
+    let heart_ring = json!({
+        "id": "heart",
+        "label": "Heart",
+        "value": heart_value,
+        "max": HEART_RING_MAX_BPM,
+        "unit": "bpm",
+        "source_device": vitals.heart_rate.as_ref().map(|reading| reading.source_device.clone()),
+        "freshness": vitals.heart_rate.as_ref().map(|reading| freshness_name(reading.freshness)).unwrap_or("unknown"),
+    });
+
+    let oxygen_value = vitals
+        .spo2
+        .as_ref()
+        .and_then(|reading| reading.value.as_u64());
+    let oxygen_ring = json!({
+        "id": "oxygen",
+        "label": "Oxygen",
+        "value": oxygen_value,
+        "max": OXYGEN_RING_MAX_PERCENT,
+        "unit": "%",
+        "source_device": vitals.spo2.as_ref().map(|reading| reading.source_device.clone()),
+        "freshness": vitals.spo2.as_ref().map(|reading| freshness_name(reading.freshness)).unwrap_or("unknown"),
+    });
+
+    vec![move_ring, heart_ring, oxygen_ring]
 }
 
 fn card(id: &str, label: &str, reading: Option<&Reading>, unit: &str) -> Value {
@@ -668,6 +729,26 @@ mod tests {
         }));
         assert_eq!(view["steps"]["rows"].as_array().unwrap().len(), 2);
         assert!(view["steps"].get("total").is_none());
+        assert_eq!(view["rings"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn view_rings_use_primary_steps_not_a_total() {
+        let now = 10_000;
+        let view = fuse(&seeded(now), "owner", now, Policy::default()).to_view();
+        let rings = view["rings"].as_array().expect("rings");
+        let move_ring = rings.iter().find(|ring| ring["id"] == "move").unwrap();
+        assert_eq!(move_ring["value"], 4_231);
+        assert_eq!(move_ring["source_device"], "sim-pinetime");
+        assert!(move_ring.get("total").is_none());
+
+        let heart_ring = rings.iter().find(|ring| ring["id"] == "heart").unwrap();
+        assert_eq!(heart_ring["value"], 58);
+        assert_eq!(heart_ring["max"], 180);
+
+        let oxygen_ring = rings.iter().find(|ring| ring["id"] == "oxygen").unwrap();
+        assert_eq!(oxygen_ring["value"], 97);
+        assert_eq!(oxygen_ring["max"], 100);
     }
 
     #[test]
@@ -676,6 +757,8 @@ mod tests {
         let view = fuse(&[], "owner", now, Policy::default()).to_view();
         let cards = view["cards"].as_array().expect("cards");
         assert!(cards.iter().all(|card| card["value"].is_null()));
+        let rings = view["rings"].as_array().expect("rings");
+        assert!(rings.iter().all(|ring| ring["value"].is_null()));
         assert_eq!(view["empty"], true);
     }
 }

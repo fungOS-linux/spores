@@ -38,22 +38,29 @@ vitals loop [--wearer W] [--iterations N] [--interval-ms N]
 
 ## Spore UI
 
-`view()` returns the renderer-agnostic card tree:
+`view()` returns the renderer-agnostic view tree:
 
 ```json
 {
   "schema": "vitals.view.v1",
   "title": "Vitals",
   "wearer": "owner",
+  "rings": [
+    {"id":"move","label":"Move","value":4231,"max":10000,"unit":"steps","source_device":"sim-pinetime","freshness":"fresh","detail":"primary device only"},
+    {"id":"heart","label":"Heart","value":58,"max":180,"unit":"bpm","source_device":"sim-ring","freshness":"fresh"},
+    {"id":"oxygen","label":"Oxygen","value":97,"max":100,"unit":"%","source_device":"sim-ring","freshness":"fresh"}
+  ],
   "cards": [{"id":"heart_rate","label":"Heart rate","value":58,"unit":"bpm","source_device":"sim-ring","freshness":"fresh"}],
   "steps": {"rows":[{"device":"sim-pinetime","count":4231},{"device":"sim-ring","count":9000}],"primary_device":"sim-pinetime"},
   "empty": false
 }
 ```
 
-There is deliberately no step `total` field. A GPUI host composes the cards
-into the actual window; the Spore owns the labels, values, units, sources,
-freshness, and the no-sum rule.
+The rings are display scales for the current readings, not a second fusion
+policy. Move uses the primary motion device's step count; there is deliberately
+no step `total` field. A GPUI host composes the rings and cards into the actual
+window; the Spore owns the labels, values, units, sources, freshness, and the
+no-sum rule.
 
 ## Records and bus
 
