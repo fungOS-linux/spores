@@ -5,6 +5,9 @@ package fungos:rooms@0.1.0;
 
 world rooms {
   import soil:records/records@0.1.0;
+  import soil:mic/capture@1.0.0;
+  import soil:voice/session@0.1.0;
+  import wasi:audio/playback@0.1.0;
 
   export run: func(args: list<string>) -> result<_, string>;
 }

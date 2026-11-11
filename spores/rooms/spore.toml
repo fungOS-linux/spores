@@ -34,10 +34,14 @@ surfaces = ["canvas", "web"]
 [grants]
 "soil:canvas" = "present the room directory, buses and the selected room"
 "soil:records" = "own rooms, membership, messages and admission in the rooms namespace"
+"soil:mic" = "capture speech while you are in a call"
+"soil:voice" = "carry speech to the other participants"
+"wasi:audio" = "play what the other participants say"
 
-# Media is host-owned. The room adapter uses soil:mic, soil:camera and
-# soil:screencast internally; this Spore receives state and surface aliases,
-# and asks soil:creds for a room-scoped media token.
+# Media is host-owned, and the Spore composes it: capture through soil:mic,
+# carry speech with soil:voice, play it through wasi:audio. A browser joins the
+# same room through a bridge, and that bridge is what asks soil:creds for a
+# room-scoped media token -- this Spore never signs one.
 
 [denied]
 transport = ["socket", "quic", "iroh"]

@@ -1,0 +1,79 @@
+// Voice sessions over Iroh.
+//
+// A Spore names a peer the host has granted and exchanges 20 ms PCM frames with
+// it. The host owns the codec, the transport, the jitter buffer and the devices:
+// Opus, QUIC datagrams, ordering and concealment are all behind this boundary,
+// and a guest never sees an endpoint id it was not granted, a socket or a codec
+// handle.
+//
+// `soil:mic` captures and `soil:audio` plays, so a room Spore composes the three
+// rather than owning a media stack: capture -> send, receive -> play.
+package soil:voice@0.1.0;
+
+interface session {
+  enum state {
+    /// Bound and waiting for a peer.
+    listening,
+    connecting,
+    connected,
+    closed,
+  }
+
+  record status {
+    state: state,
+    frames-sent: u64,
+    frames-received: u64,
+    /// Sequences the jitter buffer gave up on and the decoder concealed.
+    frames-lost: u64,
+    /// `endpoint@address` a peer can dial, when this session listens.
+    local: option<string>,
+  }
+
+  enum error {
+    /// The host did not grant this peer.
+    denied,
+    /// The peer string or a frame was malformed.
+    invalid,
+    /// The connection could not be established or was lost.
+    unavailable,
+    /// No session is open.
+    not-connected,
+    /// A frame or a backlog exceeded what this host will carry.
+    over-budget,
+    closed,
+    io,
+  }
+
+  /// Dial a peer, written `endpoint-id@address`.
+  open: func(peer: string) -> result<status, error>;
+
+  /// Bind `address` and accept one peer.
+  listen: func(address: string) -> result<status, error>;
+
+  /// Queue one 20 ms frame (960 mono samples at 48 kHz, in -1.0..=1.0).
+  ///
+  /// f32 rather than s16 because that is what `soil:mic` produces and
+  /// `wasi:audio` consumes: a room Spore composes the three without converting.
+  /// The host converts to the codec's integer samples at this boundary.
+  send: func(pcm: list<f32>) -> result<u64, error>;
+
+  /// Wait at most `timeout-ms` for one decoded frame, in -1.0..=1.0. `none`
+  /// means the session is still connected but no speech arrived; it is not an
+  /// error.
+  receive: func(timeout-ms: u32) -> result<option<list<f32>>, error>;
+
+  /// The session's current status. Named `current` because a record and a
+  /// function cannot share the name `status` in one interface.
+  current: func() -> status;
+
+  /// Stop the session and close the connection.
+  close: func();
+}
+
+world voice-host {
+  import session;
+}
+
+world voice-guest {
+  import session;
+}

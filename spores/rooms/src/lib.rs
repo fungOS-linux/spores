@@ -18,11 +18,20 @@
 //!   admit <room> <session>
 //!   deny <room> <session>
 //!   code <room>
+//!   call.join <room> <member> <endpoint@address>
+//!   call.mute <on|off>
+//!   call.tick [frames]
+//!   call.leave
 
 wit_bindgen::generate!({ path: "wit", world: "rooms", generate_all });
 
+use std::cell::RefCell;
+
 use serde_json::{Value, json};
+use soil::mic::capture as mic;
 use soil::records::records;
+use soil::voice::session as voice;
+use wasi::audio::playback as audio;
 
 const NAMESPACE: &str = "rooms";
 const ROOM_SCHEMA: &str = "fungos.room/room@1";
@@ -534,6 +543,134 @@ fn save(state: &State) -> Result<(), String> {
     Ok(())
 }
 
+/// An open call: three host capabilities, held together.
+///
+/// The Spore has no threads, so it never pumps on its own: the host calls
+/// `call.tick` and one tick moves one frame each way. That keeps the Spore a
+/// command surface and the audio clock in the host.
+struct Call {
+    room: String,
+    member: String,
+    mic: mic::Mic,
+    audio: audio::Output,
+    muted: bool,
+}
+
+thread_local! {
+    static CALL: RefCell<Option<Call>> = const { RefCell::new(None) };
+}
+
+fn call_status() -> Value {
+    CALL.with(|call| match call.borrow().as_ref() {
+        None => json!({"state": "idle"}),
+        Some(call) => {
+            let status = voice::current();
+            json!({
+                "state": "connected",
+                "room": call.room,
+                "member": call.member,
+                "muted": call.muted,
+                "voice": {
+                    "state": format!("{:?}", status.state).to_lowercase(),
+                    "frames_sent": status.frames_sent,
+                    "frames_received": status.frames_received,
+                    "frames_lost": status.frames_lost,
+                },
+            })
+        }
+    })
+}
+
+fn call_join(args: &[String]) -> Result<String, String> {
+    let room = args.get(1).ok_or("call.join needs a room")?.clone();
+    let member = args.get(2).ok_or("call.join needs a member")?.clone();
+    let peer = args.get(3).ok_or("call.join needs a peer, endpoint@address")?.clone();
+    if CALL.with(|call| call.borrow().is_some()) {
+        return Err("a call is already open".into());
+    }
+    let mic = mic::open("a room call").map_err(|error| format!("microphone: {error:?}"))?;
+    // One voice session per Spore, so the host owns it rather than handing out
+    // a handle: `voice::*` below speaks for this call.
+    voice::open(&peer).map_err(|error| format!("voice: {error:?}"))?;
+    // The room speaks mono at 48 kHz; the host converts to whatever the device
+    // or the Isochrone sink wants.
+    let output = audio::open(audio::Format {
+        sample_rate: 48_000,
+        channels: 1,
+    })
+    .map_err(|error| format!("audio: {error:?}"))?;
+    CALL.with(|call| {
+        *call.borrow_mut() = Some(Call {
+            room,
+            member,
+            mic,
+            audio: output,
+            muted: false,
+        })
+    });
+    Ok(call_status().to_string())
+}
+
+fn call_leave() -> Result<String, String> {
+    let call = CALL.with(|call| call.borrow_mut().take());
+    let Some(call) = call else {
+        return Ok(json!({"state": "idle"}).to_string());
+    };
+    let _ = call.mic.close();
+    voice::close();
+    let _ = call.audio.close();
+    Ok(json!({"state": "idle", "left": call.room}).to_string())
+}
+
+fn call_mute(args: &[String]) -> Result<String, String> {
+    let muted = match args.get(1).map(String::as_str) {
+        Some("on") => true,
+        Some("off") => false,
+        _ => return Err("call.mute needs on or off".into()),
+    };
+    CALL.with(|call| {
+        let mut call = call.borrow_mut();
+        let Some(call) = call.as_mut() else {
+            return Err("no call is open".to_string());
+        };
+        call.muted = muted;
+        Ok(call_status().to_string())
+    })
+}
+
+/// One pump. The host owns the clock; each tick moves at most `frames` in each
+/// direction, so a slow host shortens the audio rather than stalling the world.
+fn call_tick(args: &[String]) -> Result<String, String> {
+    let ticks: u32 = args
+        .get(1)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(2);
+    CALL.with(|call| {
+        let mut call = call.borrow_mut();
+        let Some(call) = call.as_mut() else {
+            return Err("no call is open".to_string());
+        };
+        for _ in 0..ticks {
+            if !call.muted
+                && let Some(pcm) = call
+                    .mic
+                    .read(960, 10)
+                    .map_err(|error| format!("microphone: {error:?}"))?
+            {
+                voice::send(&pcm.samples).map_err(|error| format!("voice send: {error:?}"))?;
+            }
+            if let Some(pcm) = voice::receive(1)
+                .map_err(|error| format!("voice receive: {error:?}"))?
+            {
+                call.audio
+                    .write(&pcm)
+                    .map_err(|error| format!("audio write: {error:?}"))?;
+            }
+        }
+        Ok(call_status().to_string())
+    })
+}
+
 fn run_action(args: &[String]) -> Result<String, String> {
     let action = args.first().map(String::as_str).unwrap_or("help");
     let mut state = load()?;
@@ -545,6 +682,8 @@ fn run_action(args: &[String]) -> Result<String, String> {
                 "say <room> <member> <text>", "gate <room> <open|closed>",
                 "request <room> <session> [name]", "admit <room> <session>",
                 "deny <room> <session>", "code <room>",
+                "call.join <room> <member> <endpoint@address>",
+                "call.mute <on|off>", "call.tick [frames]", "call.leave",
             ]
         })
         .to_string()),
@@ -588,6 +727,10 @@ fn run_action(args: &[String]) -> Result<String, String> {
             save(&state)?;
             Ok(state.snapshot(Some(room), member).to_string())
         }
+        "call.join" => call_join(args),
+        "call.leave" => call_leave(),
+        "call.mute" => call_mute(args),
+        "call.tick" => call_tick(args),
         "gate" => {
             let room = args.get(1).ok_or("gate needs a room")?;
             let closed = match args.get(2).map(String::as_str) {
