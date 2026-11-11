@@ -51,3 +51,21 @@ Install, fetch an index, or reach a network. This package holds `soil:canvas`
 and nothing else, and denies `soil:spore.catalog`, `soil:spore.install` and
 `soil:http`. Installing is a host capability with its own verification and
 consent; the store asks, the host decides.
+
+# In a browser
+
+The package also ships the same store as a page, `web/index.html`. A host web
+view (or `store.myc` in a browser) presents it over the catalog API: hero art,
+a rotating showcase of the listings that carry screenshots, the category chips,
+the same search, and a page per package with its screenshots, grants and
+reviews.
+
+Links are shareable: `/s/<spore-id>` opens one listing, and the page keeps its
+route in the URL, so a link copied out of the store reopens the same shelf.
+Search is answered by the store service, not the page, so the shell, the page and
+`soil-store search` cannot disagree about what matches a word.
+
+The page adds no grant to this package. Its requests belong to the host's web
+view; a `soil:http` declared here would be a capability the Lua view cannot use.
+Choosing **Install** on the page is a host intent like any other, and stays
+disabled until the host exposes it to the web view.

@@ -6,16 +6,21 @@
 # package revision, which is why the two grants it will need are denied below
 # rather than declared: a grant this package cannot call is a claim, not a
 # capability.
+#
+# The same storefront also ships as a page (`web/index.html`): the shell draws
+# the composition, a browser draws the page, and both read the same catalog. The
+# page's requests belong to the host's web view, which is why it adds no grant —
+# a `soil:http` on this package would be a claim the Lua view cannot use.
 
 schema = 1
 
 [spore]
 id = "dev.fungos.store"
 name = "store"
-version = "0.1.0"
+version = "0.2.0"
 license = "MIT"
 summary = "Browse, review and install Spore packages"
-description = "The storefront: categories, screenshots, ratings and a classified update queue, with install and update as named intents the host executes."
+description = "The storefront: categories, screenshots, ratings and a classified update queue, with install and update as named intents the host executes. The shell draws it as a composition; a browser draws the same store from web/index.html, with shareable links to each listing."
 homepage = "https://github.com/fungOS-linux/spores"
 
 [docs]
@@ -40,6 +45,19 @@ hot_reload = true
 default = "canvas"
 canvas_module = "spore-dev-store"
 surfaces = ["canvas", "web", "native"]
+
+# The shell draws the composition: a canvas surface whose artifact is this
+# package's `[ui] entry`.
+[[surfaces]]
+name = "canvas"
+kind = "canvas"
+
+# The same store as a page: what `store.myc` can serve to a browser and what a
+# host web view presents. `web/index.html` is the conventional artifact, so the
+# surface names its kind and nothing else.
+[[surfaces]]
+name = "store"
+kind = "web"
 
 # The host allowlists an exact id, role, digest and publisher before treating a
 # surface as the store. The role is what makes the storefront the trusted face;
