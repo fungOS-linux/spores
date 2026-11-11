@@ -20,8 +20,8 @@ wit_bindgen::generate!({
 });
 
 use gpui::{
-    AnyWindowHandle, AppContext as _, Context, HeadlessAppContext, IntoElement, PlatformTextSystem,
-    Render, SharedString, Window, div, prelude::*, px, rgb, size,
+    AnyElement, AnyWindowHandle, AppContext as _, Context, HeadlessAppContext, IntoElement,
+    PlatformTextSystem, Render, SharedString, Window, div, prelude::*, px, rgb, size,
 };
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
 use soil::present::{input, surface};
@@ -32,6 +32,8 @@ const LILEX_BOLD: &[u8] = include_bytes!("../assets/Lilex-Bold.ttf");
 
 /// The sidecar's read-only run list. One origin, named once.
 const RUNS_URL: &str = "http://127.0.0.1:8792/runs";
+/// The workflow graph the dashboard's "brain" view draws.
+const GRAPH_URL: &str = "http://127.0.0.1:8792/graph";
 const MAX_BODY: u32 = 512 * 1024;
 const TIMEOUT_MS: u32 = 5_000;
 
@@ -43,6 +45,9 @@ const MUTED: u32 = 0x6d7b8c;
 const OK: u32 = 0x4f9e5a;
 const BAD: u32 = 0xd14b4b;
 const WAIT: u32 = 0xc9a227;
+const SPEND: u32 = 0xf0a26b;
+const PICKED: u32 = 0x2c3a4c;
+const LINKED: u32 = 0x1e2a37;
 
 const HEADER_H: f32 = 44.0;
 const FOOTER_H: f32 = 26.0;
@@ -127,7 +132,76 @@ fn format_clock(secs: i64) -> String {
     format!("{hh:02}:{mm:02}")
 }
 
+/// Which surface the window is showing. Both read from the same sidecar.
+#[derive(Clone, Copy, PartialEq)]
+enum View {
+    Runs,
+    Brain,
+}
+
+/// One workflow as `GET /graph` describes it: identity, owner, and what it
+/// calls. Everything the brain view draws is in here.
+struct Workflow {
+    name: String,
+    owner: String,
+    links: Vec<String>,
+    model_spend: String,
+    gated: bool,
+}
+
+fn parse_graph(body: &[u8]) -> Result<Vec<Workflow>, String> {
+    let value: serde_json::Value =
+        serde_json::from_slice(body).map_err(|error| format!("graph is not JSON: {error}"))?;
+    let list = value
+        .get("workflows")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "graph response has no 'workflows' array".to_string())?;
+    let mut workflows = Vec::with_capacity(list.len());
+    for entry in list {
+        let text = |key: &str| {
+            entry
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let owner = entry
+            .get("owners")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|owners| owners.first())
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unowned")
+            .to_string();
+        let links = entry
+            .get("links")
+            .and_then(serde_json::Value::as_array)
+            .map(|links| {
+                links
+                    .iter()
+                    .filter_map(|link| link.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        workflows.push(Workflow {
+            name: text("name"),
+            owner,
+            links,
+            model_spend: text("model_spend"),
+            gated: entry
+                .get("gated")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+        });
+    }
+    Ok(workflows)
+}
+
 struct Board {
+    view: View,
+    workflows: Vec<Workflow>,
+    picked: usize,
+    graph_error: Option<SharedString>,
+    graph_at: Option<std::time::Instant>,
     runs: Vec<Run>,
     selected: usize,
     error: Option<SharedString>,
@@ -138,6 +212,11 @@ struct Board {
 impl Board {
     fn new() -> Self {
         Self {
+            view: View::Runs,
+            workflows: Vec::new(),
+            picked: 0,
+            graph_error: None,
+            graph_at: None,
             runs: Vec::new(),
             selected: 0,
             error: None,
@@ -157,6 +236,29 @@ impl Board {
             Err(error) => self.error = Some(SharedString::from(error)),
         }
         self.fetched_at = Some(std::time::Instant::now());
+    }
+
+    /// The graph changes only when a workflow is edited, so it is fetched on
+    /// demand rather than on the run refresh tick.
+    fn refresh_graph(&mut self) {
+        match fetch_body(GRAPH_URL).and_then(|body| parse_graph(&body)) {
+            Ok(workflows) => {
+                let keep = self.picked.min(workflows.len().saturating_sub(1));
+                self.workflows = workflows;
+                self.picked = keep;
+                self.graph_error = None;
+            }
+            Err(error) => self.graph_error = Some(SharedString::from(error)),
+        }
+        self.graph_at = Some(std::time::Instant::now());
+    }
+
+    fn move_picked(&mut self, delta: i32) {
+        if self.workflows.is_empty() {
+            return;
+        }
+        let max = self.workflows.len() as i32 - 1;
+        self.picked = (self.picked as i32 + delta).clamp(0, max) as usize;
     }
 
     fn move_selection(&mut self, delta: i32) {
@@ -182,6 +284,18 @@ impl Board {
         (ok, bad, other)
     }
 
+    fn tab(&self, label: &'static str, view: View, key: &'static str) -> impl IntoElement {
+        let active = self.view == view;
+        div()
+            .px(px(8.0))
+            .py(px(3.0))
+            .rounded(px(6.0))
+            .bg(rgb(if active { ROW_HOVER } else { PANEL }))
+            .text_size(px(11.0))
+            .text_color(rgb(if active { TEXT } else { MUTED }))
+            .child(SharedString::from(format!("{label} {key}")))
+    }
+
     fn header(&self) -> impl IntoElement {
         let (ok, bad, other) = self.counts();
         div()
@@ -202,12 +316,8 @@ impl Board {
                             .text_color(rgb(TEXT))
                             .child("Elmers"),
                     )
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(rgb(MUTED))
-                            .child("runs (read-only)"),
-                    ),
+                    .child(self.tab("runs", View::Runs, "1"))
+                    .child(self.tab("brain", View::Brain, "2")),
             )
             .child(
                 div()
@@ -343,6 +453,95 @@ impl Board {
         panel
     }
 
+    /// The brain: one column per owning function, every workflow a card.
+    ///
+    /// The fork has no line or path primitive in the headless renderer, so the
+    /// graph is drawn by grouping and emphasis rather than by edges: selecting
+    /// a workflow lights up the ones it calls, wherever they sit.
+    fn brain_body(&self) -> AnyElement {
+        let mut owners: Vec<&str> = Vec::new();
+        for workflow in &self.workflows {
+            if !owners.contains(&workflow.owner.as_str()) {
+                owners.push(&workflow.owner);
+            }
+        }
+        let picked = self.workflows.get(self.picked);
+        let linked: Vec<&str> = picked
+            .map(|workflow| workflow.links.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+
+        let mut body = div()
+            .flex_1()
+            .p(px(12.0))
+            .flex()
+            .flex_row()
+            .gap(px(10.0))
+            .overflow_hidden();
+        if self.workflows.is_empty() {
+            body = body.child(div().text_size(px(12.0)).text_color(rgb(MUTED)).child(
+                match &self.graph_error {
+                    Some(error) => error.clone(),
+                    None => SharedString::from("loading the graph…"),
+                },
+            ));
+            return body.into_any_element();
+        }
+        body.children(owners.iter().map(|owner| {
+            let cards: Vec<&Workflow> = self
+                .workflows
+                .iter()
+                .filter(|workflow| workflow.owner == *owner)
+                .collect();
+            div()
+                .w(px(196.0))
+                .flex()
+                .flex_col()
+                .gap(px(3.0))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(rgb(WAIT))
+                        .child(SharedString::from(format!("{owner} · {}", cards.len()))),
+                )
+                .children(cards.into_iter().map(|workflow| {
+                    let is_picked = picked.map(|p| p.name == workflow.name).unwrap_or(false);
+                    let is_linked = linked.contains(&workflow.name.as_str());
+                    let fill = if is_picked {
+                        PICKED
+                    } else if is_linked {
+                        LINKED
+                    } else {
+                        PANEL
+                    };
+                    let dot = if workflow.gated {
+                        BAD
+                    } else if workflow.model_spend != "none" && !workflow.model_spend.is_empty() {
+                        SPEND
+                    } else {
+                        MUTED
+                    };
+                    div()
+                        .px(px(6.0))
+                        .py(px(3.0))
+                        .bg(rgb(fill))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(div().w(px(5.0)).h(px(5.0)).rounded(px(3.0)).bg(rgb(dot)))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(px(10.0))
+                                .text_color(rgb(if is_picked { TEXT } else { 0xb9c4d1 }))
+                                .child(SharedString::from(workflow.name.clone())),
+                        )
+                }))
+        }))
+        .into_any_element()
+    }
+
     fn footer(&self) -> impl IntoElement {
         div()
             .h(px(FOOTER_H))
@@ -355,7 +554,10 @@ impl Board {
                 div()
                     .text_size(px(10.0))
                     .text_color(rgb(MUTED))
-                    .child("j/k move   r refresh   q quit"),
+                    .child(match self.view {
+                        View::Runs => "j/k move   r refresh   1 runs   2 brain   q quit",
+                        View::Brain => "j/k pick   r reload graph   1 runs   2 brain   q quit",
+                    }),
             )
             .child(
                 div()
@@ -382,21 +584,23 @@ impl Render for Board {
             .bg(rgb(BG))
             .font_family("Lilex")
             .child(self.header())
-            .child(
-                div()
+            .child(match self.view {
+                View::Runs => div()
                     .flex_1()
                     .flex()
                     .flex_row()
                     .overflow_hidden()
                     .child(self.list())
-                    .child(self.detail()),
-            )
+                    .child(self.detail())
+                    .into_any_element(),
+                View::Brain => self.brain_body(),
+            })
             .child(self.footer())
     }
 }
 
 /// The only host call in the package: one bounded, allowlisted GET.
-fn fetch_runs(url: &str) -> Result<Vec<Run>, String> {
+fn fetch_body(url: &str) -> Result<Vec<u8>, String> {
     use soil::http::http as abi;
     let response = abi::fetch(&abi::Request {
         url: url.to_string(),
@@ -412,9 +616,13 @@ fn fetch_runs(url: &str) -> Result<Vec<Run>, String> {
     })
     .map_err(|error| format!("http: {error:?}"))?;
     if response.status != 200 {
-        return Err(format!("runs: HTTP {}", response.status));
+        return Err(format!("{url}: HTTP {}", response.status));
     }
-    parse_runs(&response.body)
+    Ok(response.body)
+}
+
+fn fetch_runs(url: &str) -> Result<Vec<Run>, String> {
+    parse_runs(&fetch_body(url)?)
 }
 
 fn present_frame(
@@ -544,21 +752,54 @@ fn render_frame() -> anyhow::Result<()> {
                         "q" => return Ok(()),
                         "j" | "arrow-down" => {
                             window.update(&mut cx, |board, _, cx| {
-                                board.move_selection(1);
+                                match board.view {
+                                    View::Runs => board.move_selection(1),
+                                    View::Brain => board.move_picked(1),
+                                }
                                 cx.notify();
                             })?;
                             dirty = true;
                         }
                         "k" | "arrow-up" => {
                             window.update(&mut cx, |board, _, cx| {
-                                board.move_selection(-1);
+                                match board.view {
+                                    View::Runs => board.move_selection(-1),
+                                    View::Brain => board.move_picked(-1),
+                                }
+                                cx.notify();
+                            })?;
+                            dirty = true;
+                        }
+                        "1" => {
+                            window.update(&mut cx, |board, _, cx| {
+                                board.view = View::Runs;
+                                cx.notify();
+                            })?;
+                            dirty = true;
+                        }
+                        "2" | "tab" => {
+                            window.update(&mut cx, |board, _, cx| {
+                                board.view = View::Brain;
+                                // The graph changes when a workflow is edited,
+                                // not on every tick; reload it when the view is
+                                // opened and it is already stale.
+                                let stale = board
+                                    .graph_at
+                                    .map(|at| at.elapsed().as_secs() >= 30)
+                                    .unwrap_or(true);
+                                if stale {
+                                    board.refresh_graph();
+                                }
                                 cx.notify();
                             })?;
                             dirty = true;
                         }
                         "r" => {
                             window.update(&mut cx, |board, _, cx| {
-                                board.refresh();
+                                match board.view {
+                                    View::Runs => board.refresh(),
+                                    View::Brain => board.refresh_graph(),
+                                }
                                 cx.notify();
                             })?;
                             dirty = true;

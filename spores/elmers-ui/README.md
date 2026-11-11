@@ -1,15 +1,28 @@
 # elmers-ui
 
-A read-only board of Elmers workflow runs, drawn by GPUI inside a Spore.
+Two read-only views of Elmers, drawn by GPUI inside a Spore: **runs** and
+**brain**.
 
 ```
-┌ Elmers   runs (read-only)              12 ok  1 error  0 other ┐
+┌ Elmers  [runs 1] [brain 2]            12 ok  1 error  0 other ┐
 │ ● notifications/pr            19:42  │  notifications/pr     ok  19:42
 │ ● notifications/marbles       19:41  │  {"message_id": 7605}
 │ ● dev/pr-close-marble         19:40  │
 │                                      │
 └ j/k move   r refresh   q quit     12 runs · refreshed 2s ago ┘
 ```
+
+## The brain view
+
+`GET /graph` is the same document the dashboard's d3-force brain draws: every
+workflow, the function that owns it, and what it calls. Here it is laid out as
+one column per function — deterministic, no simulation, so the picture only
+changes when the graph does — and selecting a workflow (j/k) lights up the
+workflows it calls, wherever they sit.
+
+Edges are not drawn as lines: the GPUI fork's headless renderer has no rotate or
+path primitive yet, so a graph is expressed by grouping and emphasis rather than
+by a line per link. When the fork grows a line, the layout does not change.
 
 ## Scope
 
@@ -22,6 +35,7 @@ different review.
 |---|---|
 | list runs, status, time, result/error | start or stop a run |
 | show one run's payload | edit or read workflow files |
+| draw the workflow graph | mutate it |
 | refresh every 5 s, or on `r` | reach any origin but the sidecar |
 
 ## Contract
