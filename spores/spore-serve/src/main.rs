@@ -207,12 +207,21 @@ fn handle(mut stream: TcpStream, config: &Arc<Config>) -> Result<(), String> {
     match (request.method.as_str(), path) {
         ("GET", "/") => {
             let page = INDEX_HTML.replace("__TITLE__", &config.title);
-            respond(
-                &mut stream,
-                "200 OK",
-                "text/html; charset=utf-8",
-                page.as_bytes(),
-            )
+            // The shell is 22 KB of HTML and JS that changes only when this
+            // binary does. `no-store` made every reload fetch it again; an ETag
+            // makes a reload a 304, which is one round trip and no body.
+            let etag = etag_for(page.as_bytes());
+            let fresh = request.headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("if-none-match") && value.trim() == etag
+            });
+            if fresh {
+                let head = format!(
+                    "HTTP/1.1 304 Not Modified\r\netag: {etag}\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(head.as_bytes());
+                return Ok(());
+            }
+            respond_page(&mut stream, page.as_bytes(), &etag)
         }
         ("GET", "/health") => respond(&mut stream, "200 OK", "text/plain; charset=utf-8", b"ok\n"),
         // Warm a channel without watching it.
@@ -974,6 +983,31 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
+}
+
+/**
+ * A stable tag for the page bytes. Not a cryptographic hash: it only has to
+ * change when the page does, and a host that ships one binary per build has
+ * nothing to collide with.
+ */
+fn etag_for(body: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in body {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("\"{:x}-{:x}\"", hash, body.len())
+}
+
+fn respond_page(stream: &mut TcpStream, body: &[u8], etag: &str) -> Result<(), String> {
+    let head = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\netag: {etag}\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n",
+        body.len()
+    );
+    stream
+        .write_all(head.as_bytes())
+        .map_err(|e| e.to_string())?;
+    stream.write_all(body).map_err(|e| e.to_string())
 }
 
 fn respond(

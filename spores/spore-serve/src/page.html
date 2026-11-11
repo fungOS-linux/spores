@@ -223,6 +223,10 @@
     const size = first && first.transform ? Math.round(first.transform.scale[0] * (meta.base || 16) * 1.25) : '?';
     stats.textContent = `${meta.cols || '?'}x${meta.rows || '?'} · ${size}px` +
       (session ? ` · session ${session}` : '');
+    // The pty learns the cell count from the first frame, not from a guess made
+    // before it: the sidebar is part of the grid, and until a frame arrives the
+    // page does not know how wide it is.
+    resize();
   }
 
   // Frames are pushed, not polled: the producer changes, the host renders once,
@@ -284,7 +288,11 @@
     if (meta.cols === cols && meta.rows === rows) { sentSize = key; return; }
     sentSize = key;
     post('/resize', JSON.stringify({ cols, rows }));
-    // The scene is rendered for a surface size; a new size is a new stream.
+  }
+
+  // The window changed under the scene, so the surface is a different surface.
+  function reflow() {
+    resize();
     connect();
   }
 
@@ -543,17 +551,19 @@
     switchTo(tab.id);
   });
 
-  window.addEventListener('resize', resize);
+  window.addEventListener('resize', reflow);
   window.addEventListener('click', () => document.body.focus());
   (async () => {
-    await ensureSession();
+    // A URL that already names a session starts at once. Asking for the session
+    // list first put a round trip in front of the first frame, for a value the
+    // URL already had.
+    if (!session) await ensureSession();
     if (!session) {
       // Nothing to attach to: the picker is the only useful thing on screen.
       empty.classList.remove('show');
       openPicker();
       return;
     }
-    resize();
     connect();
   })();
 })();
