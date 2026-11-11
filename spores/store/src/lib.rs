@@ -29,6 +29,7 @@ use gpui::{
 };
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
 use serde_json::Value;
+use soil::http::http;
 use soil::present::surface;
 use soil::spore::catalog;
 
@@ -76,21 +77,59 @@ struct Row {
     publisher: String,
 }
 
+/// The remote catalog, as the store service publishes it. A host that grants no
+/// origin answers nothing, and the view falls back to what is installed.
+fn remote() -> Option<serde_json::Value> {
+    let request = http::Request {
+        url: format!("{ORIGIN}/api/catalog"),
+        method: http::Method::Get,
+        headers: vec![http::Header { name: "accept".to_string(), value: "application/json".to_string() }],
+        body: None,
+        credential: None,
+        max_bytes: 1 << 20,
+        timeout_ms: 4_000,
+    };
+    let response = http::fetch(&request).ok()?;
+    if response.status != 200 {
+        return None;
+    }
+    serde_json::from_slice(&response.body).ok()
+}
+
 fn catalog_rows() -> Result<(Vec<Row>, String), String> {
-    let entries = catalog::entries().map_err(|error| format!("catalog: {error:?}"))?;
-    let mut rows: Vec<Row> = entries
-        .into_iter()
-        .map(|entry| Row {
+    let installed = catalog::entries().map_err(|error| format!("catalog: {error:?}"))?;
+    let mut rows: Vec<Row> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    if let Some(remote) = remote() {
+        for entry in remote["entries"].as_array().cloned().unwrap_or_default() {
+            let id = entry["id"].as_str().unwrap_or("").to_string();
+            let document = &entry["document"];
+            seen.insert(id.clone());
+            rows.push(Row {
+                name: document["name"].as_str().or(entry["id"].as_str()).unwrap_or("?").to_string(),
+                summary: document["summary"].as_str().unwrap_or("").to_string(),
+                version: entry["version"].as_str().unwrap_or("").to_string(),
+                state: entry["state"].as_str().unwrap_or("available").to_string(),
+                rating: entry["ratings"]["current"]["weighted"].as_f64().filter(|value| *value > 0.0),
+                publisher: entry["publisher"].as_str().unwrap_or("unknown").to_string(),
+            });
+        }
+    }
+    for entry in installed {
+        if seen.contains(&entry.id) {
+            continue;
+        }
+        rows.push(Row {
             name: if entry.title.is_empty() { entry.name.clone() } else { entry.title.clone() },
             summary: entry.summary.clone(),
             version: entry.version.clone(),
             state: "installed".to_string(),
             rating: None,
             publisher: "installed".to_string(),
-        })
-        .collect();
+        });
+    }
     rows.sort_by_key(|row| row.name.to_lowercase());
-    Ok((rows, "installed".to_string()))
+    Ok((rows, "store".to_string()))
 }
 
 /// Who is asking. Without a gateway on this path the honest answer is the
