@@ -38,3 +38,7 @@ host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
 [presentation]
 badge = "H"
 color = "#f5c542"
+# The package's own mark: a file in the package, so a launcher draws it
+# with no network and the lock covers it. `icon` stays the CID form a
+# store fetches.
+mark = "assets/icon.svg"
