@@ -2281,6 +2281,14 @@ name = "spore-markdown"
 version = "0.1.0"
 
 [[package]]
+name = "spore-pulse"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "spore-search"
 version = "0.1.0"
 
