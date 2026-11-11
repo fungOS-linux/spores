@@ -7,7 +7,7 @@
 //
 // So the bar imports what it reads and the manifest stays the app declaration:
 //
-//   soil:canvas  - present the bar
+//   soil:surface - present the bar
 //   soil:time    - wall clock (wall-clock, 1.1.0) and elapsed time
 //   soil:device  - battery
 //   soil:shell   - workspaces and focus (package does not exist yet)
@@ -20,7 +20,8 @@
 package fungos:chrome-spore@0.1.0;
 
 world chrome-spore {
-  import soil:canvas/surface@1.0.0;
+  import soil:surface/surface@1.1.0;
+  import soil:surface/theme@1.1.0;
   import soil:time/time@1.1.0;
   import soil:device/battery@0.1.0;
 }

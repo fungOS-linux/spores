@@ -63,3 +63,17 @@ spores/spore-browser-host/wit/deps/soil-spore/spore.wit f129fa88029744ed09a3a9f3
 # of import, and the enum could not say so before.
 
 spores/surface-probe/wit/deps/soil-surface-import/package.wit 2e9482b034b952c44d02ec9ea17004ba372a4474
+
+# --- soil-surface.wit + soil-input -----------------------------------------
+# source:      fungOS-linux/soil, wit/soil-surface.wit and wit/soil-input
+# soil-commit: surface freeze 1.1.0
+#
+# The canvas package retired: chrome and dragshift import the frozen surface
+# world, whose theme interface sits behind the theme generation. Input types
+# are vendored as their own package rather than restated in the surface file.
+
+spores/dragshift/wit/deps/soil-surface.wit e58932babc960328edb94267bbb13f24000709d4
+spores/chrome/wit/deps/soil-surface.wit e58932babc960328edb94267bbb13f24000709d4
+spores/dragshift/wit/deps/soil-input/package.wit b2c3877cba008a5dde64c11de34e50e6fc0ac38b
+spores/chrome/wit/deps/soil-input/package.wit b2c3877cba008a5dde64c11de34e50e6fc0ac38b
+spores/surface-probe/wit/deps/soil-input/package.wit b2c3877cba008a5dde64c11de34e50e6fc0ac38b
