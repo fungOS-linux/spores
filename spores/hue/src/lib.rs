@@ -58,6 +58,7 @@ enum Action {
     Brightness(u8),
     Color(u8, u8, u8),
     Scene(String),
+    SceneId(String),
     Pair,
     Help,
 }
@@ -128,6 +129,7 @@ impl Command {
                 Action::Color(r, g, b)
             }
             "scene" => Action::Scene(operand.clone().ok_or("scene: expected a scene name")?),
+            "scene-id" => Action::SceneId(operand.clone().ok_or("scene-id: expected a scene id")?),
             other => return Err(format!("unknown command: {other}")),
         };
 
@@ -195,6 +197,7 @@ impl Command {
             Action::Brightness(value) => self.set_brightness(http, *value),
             Action::Color(r, g, b) => self.set_color(http, *r, *g, *b),
             Action::Scene(name) => self.recall_scene(http, name),
+            Action::SceneId(id) => self.recall_scene_id(http, id),
             Action::Pair => self.pair(http),
         }
     }
@@ -426,6 +429,14 @@ impl Command {
         Ok(format!("{}: scene {label}", self.label()))
     }
 
+    fn recall_scene_id(&self, http: &mut dyn Http, id: &str) -> Result<String, String> {
+        let response = self.put(http, &self.action_path(), json!({ "scene": id }))?;
+        if self.json {
+            return Ok(pretty(&response));
+        }
+        Ok(format!("{}: scene {id}", self.label()))
+    }
+
     fn label(&self) -> String {
         match &self.target {
             Target::Group(id) => format!("group {id}"),
@@ -449,6 +460,7 @@ commands:
   bri N               set brightness 0-254
   color #RRGGBB       set colour as CIE xy
   scene NAME          recall a scene by name (case-insensitive)
+  scene-id ID         recall a scene by bridge id
 
 examples:
   hue --bridge http://192.168.1.10 pair
@@ -758,6 +770,18 @@ mod tests {
         assert_eq!(
             http.requests[0].credential.as_deref(),
             Some("geode://home/hue/bridge")
+        );
+    }
+
+    #[test]
+    fn scene_ids_are_recalled_without_a_name_lookup() {
+        let mut http = MockHttp::new([json!([{ "success": {} }])]);
+        let output = run(&base("scene-id abc123"), &mut http).unwrap();
+        assert_eq!(output, "group 0: scene abc123");
+        assert_eq!(http.requests.len(), 1);
+        assert_eq!(
+            http.requests[0].body.as_deref(),
+            Some(br#"{"scene":"abc123"}"#.as_slice())
         );
     }
 
