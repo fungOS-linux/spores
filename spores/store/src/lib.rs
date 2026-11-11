@@ -75,6 +75,29 @@ struct Source {
     total: usize,
 }
 
+/// A package's own mark: the badge and colour its manifest declares for a
+/// launcher row, and later the artwork a listing points at. The store draws
+/// what the package says about itself rather than inventing a colour for it.
+struct Mark {
+    badge: String,
+    color: Option<u32>,
+}
+
+impl Mark {
+    fn of(title: &str, badge: &str, color: Option<u32>) -> Self {
+        let badge = if badge.is_empty() || badge == "?" {
+            title
+                .chars()
+                .next()
+                .map(|value| value.to_uppercase().to_string())
+                .unwrap_or_else(|| "?".to_string())
+        } else {
+            badge.to_string()
+        };
+        Self { badge, color }
+    }
+}
+
 struct Row {
     /// What a person reads. A listing's name when the index has one, the
     /// installed package's own title when it does not, and the id's last
@@ -82,9 +105,19 @@ struct Row {
     title: String,
     id: String,
     summary: String,
+    description: String,
     version: String,
     installed_version: Option<String>,
     state: String,
+    mark: Mark,
+    /// What applying the offering would cost, when the store has planned it:
+    /// `live` applies now, `restart` at the next launch, `reboot` after one.
+    change: Option<Change>,
+}
+
+struct Change {
+    class: String,
+    reason: String,
 }
 
 /// One GET against the store service. The host owns the origin policy: a
@@ -109,12 +142,69 @@ fn get(path: &str) -> Option<serde_json::Value> {
     serde_json::from_slice(&response.body).ok()
 }
 
+/// What the store host knows about a package it has on disk. The catalog rows
+/// describe what is for sale; this describes what the package says about
+/// itself, which is the same answer for a row and for the machine list.
+#[derive(Default)]
+struct Facts {
+    title: String,
+    summary: String,
+    description: String,
+    badge: String,
+    color: Option<u32>,
+}
+
+fn facts_of() -> std::collections::BTreeMap<String, Facts> {
+    let mut facts = std::collections::BTreeMap::new();
+    let Some(apps) = get("/api/apps") else {
+        return facts;
+    };
+    for app in apps["apps"].as_array().cloned().unwrap_or_default() {
+        let id = app["id"].as_str().unwrap_or_default().to_string();
+        if id.is_empty() {
+            continue;
+        }
+        facts.insert(
+            id,
+            Facts {
+                title: title_of(&app["name"].as_str().unwrap_or_default().to_string()),
+                summary: app["summary"].as_str().unwrap_or_default().to_string(),
+                description: app["description"].as_str().unwrap_or_default().to_string(),
+                badge: app["badge"].as_str().unwrap_or_default().to_string(),
+                color: parse_color(app["color"].as_str().unwrap_or_default()),
+            },
+        );
+    }
+    facts
+}
+
+/// The store's own plan, which is the closest thing to release notes this
+/// system has: it says what changed and what applying it costs.
+fn plan_of() -> std::collections::BTreeMap<String, Change> {
+    let mut plan = std::collections::BTreeMap::new();
+    let Some(value) = get("/api/plan") else {
+        return plan;
+    };
+    for update in value["updates"].as_array().cloned().unwrap_or_default() {
+        let id = update["id"].as_str().unwrap_or_default().to_string();
+        if id.is_empty() {
+            continue;
+        }
+        plan.insert(
+            id,
+            Change {
+                class: update["class"].as_str().unwrap_or_default().to_string(),
+                reason: update["reason"].as_str().unwrap_or_default().to_string(),
+            },
+        );
+    }
+    plan
+}
+
 fn catalog_rows() -> Result<(Vec<Row>, Source), String> {
     let installed = catalog::entries().map_err(|error| format!("catalog: {error:?}"))?;
-    let known: std::collections::BTreeMap<String, (String, String)> = installed
-        .iter()
-        .map(|entry| (entry.id.clone(), (entry.title.clone(), entry.summary.clone())))
-        .collect();
+    let facts = facts_of();
+    let plan = plan_of();
 
     let mut source = Source {
         name: None,
@@ -134,26 +224,39 @@ fn catalog_rows() -> Result<(Vec<Row>, Source), String> {
                 continue;
             }
             let document = &entry["document"];
-            // Until the index carries a listing, a package installed on this
-            // machine is the only honest source of a name and a sentence: it
-            // described itself when it was built. Nothing here is invented,
-            // and an absent summary stays absent.
-            let local = known.get(&id);
+            let local = facts.get(&id);
+            // Until the index carries a listing, the package installed on this
+            // machine is the only honest source of a name, a sentence and a
+            // mark: it described itself when it was built. Nothing here is
+            // invented, and an absent description stays absent.
+            let title = document["name"]
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| local.map(|facts| facts.title.clone()))
+                .unwrap_or_else(|| title_of(&id));
             rows.push(Row {
-                title: document["name"]
-                    .as_str()
-                    .map(str::to_string)
-                    .or_else(|| local.map(|entry| entry.0.clone()))
-                    .unwrap_or_else(|| title_of(&id)),
-                id: id.clone(),
+                mark: Mark::of(
+                    &title,
+                    local.map(|facts| facts.badge.as_str()).unwrap_or_default(),
+                    local.and_then(|facts| facts.color),
+                ),
+                title,
                 summary: document["summary"]
                     .as_str()
                     .map(str::to_string)
-                    .or_else(|| local.map(|entry| entry.1.clone()))
+                    .or_else(|| local.map(|facts| facts.summary.clone()))
+                    .unwrap_or_default(),
+                description: local
+                    .map(|facts| facts.description.clone())
                     .unwrap_or_default(),
                 version: entry["version"].as_str().unwrap_or_default().to_string(),
                 installed_version: entry["installed_version"].as_str().map(str::to_string),
                 state: entry["state"].as_str().unwrap_or("available").to_string(),
+                change: plan.get(&id).map(|change| Change {
+                    class: change.class.clone(),
+                    reason: change.reason.clone(),
+                }),
+                id: id.clone(),
             });
             listed.insert(id);
         }
@@ -162,17 +265,41 @@ fn catalog_rows() -> Result<(Vec<Row>, Source), String> {
         if listed.contains(&entry.id) {
             continue;
         }
+        let local = facts.get(&entry.id);
+        let title = local
+            .map(|facts| facts.title.clone())
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| title_of(&entry.id));
         rows.push(Row {
-            title: entry.title,
-            id: entry.id,
+            mark: Mark::of(
+                &title,
+                local.map(|facts| facts.badge.as_str()).unwrap_or_default(),
+                local.and_then(|facts| facts.color),
+            ),
             summary: entry.summary,
+            description: local
+                .map(|facts| facts.description.clone())
+                .unwrap_or_default(),
             version: entry.version,
             installed_version: None,
             state: "installed".to_string(),
+            change: None,
+            title,
+            id: entry.id,
         });
     }
     rows.sort_by_key(|row| row.title.to_lowercase());
     Ok((rows, source))
+}
+
+/// `#rrggbb` as the renderer wants it. A colour the manifest got wrong is the
+/// same as no colour: the tile falls back instead of drawing something odd.
+fn parse_color(value: &str) -> Option<u32> {
+    let hex = value.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+    u32::from_str_radix(hex, 16).ok()
 }
 
 /// Who is asking. A loopback request is the machine itself; a request through
@@ -309,17 +436,31 @@ fn render() -> Result<(), String> {
 
 /// A window with no scrollbar has to be arithmetic: every section states the
 /// height it needs, and the view decides what fits before it draws anything.
+///
+/// The page is one column, never the whole window: a store is read, and a row
+/// that runs from edge to edge is a row whose eye has to travel.
+const MAX_COLUMN: f32 = 920.0;
+const MIN_MARGIN: f32 = 32.0;
 const HEADER_H: f32 = 56.0;
 const PAGE_PAD: f32 = 24.0;
 const STRIP_H: f32 = 48.0;
 const SECTION_GAP: f32 = 20.0;
 const HEAD_H: f32 = 22.0;
 const HEAD_GAP: f32 = 8.0;
-const ROW_H: f32 = 68.0;
+const ROW_H: f32 = 74.0;
 const ROW_GAP: f32 = 8.0;
-const CHIP_W: f32 = 188.0;
-const CHIP_H: f32 = 30.0;
+const TILE: f32 = 40.0;
+const CHIP_W: f32 = 220.0;
+const CHIP_H: f32 = 38.0;
 const CHIP_GAP: f32 = 8.0;
+
+fn column(width: f32) -> f32 {
+    (width - MIN_MARGIN * 2.0).min(MAX_COLUMN)
+}
+
+fn page_margin(width: f32) -> f32 {
+    ((width - column(width)) / 2.0).max(MIN_MARGIN.min(width / 2.0))
+}
 
 struct StoreView {
     rows: Vec<Row>,
@@ -349,7 +490,8 @@ impl Render for StoreView {
             .flex()
             .flex_col()
             .gap_5()
-            .p_6()
+            .py_6()
+            .px(px(page_margin(self.width)))
             .flex_1()
             .overflow_hidden()
             .child(status_strip(
@@ -377,7 +519,7 @@ impl Render for StoreView {
         if !installed.is_empty() {
             body = body.child(machine_section(
                 &installed,
-                self.width,
+                column(self.width),
                 machine_space,
                 self.source.name.is_none(),
             ));
@@ -392,7 +534,7 @@ impl Render for StoreView {
             .size_full()
             .bg(rgb(BG))
             .text_color(rgb(TEXT))
-            .child(header(&self.account, &self.source))
+            .child(header(&self.account, &self.source, self.width))
             .child(body)
     }
 }
@@ -478,14 +620,18 @@ fn action_section(title: &str, rows: &[&Row], total: usize, action: &str) -> imp
         .child(list)
 }
 
-/// One package, in the shape a person reads it: what it is, why it might
-/// matter, where it is going, and — when the host can act — the one thing you
-/// can do about it.
+/// One package, in the shape a person reads it: its own mark, what it is, what
+/// it says about itself, where it is going, and — when the host can act — the
+/// one thing you can do about it.
 fn package_row(row: &Row, action: Option<&str>) -> impl IntoElement {
-    let secondary = if row.summary.is_empty() {
-        row.id.clone()
-    } else {
+    let secondary = if !row.description.is_empty() {
+        row.description.clone()
+    } else if !row.summary.is_empty() {
         row.summary.clone()
+    } else if let Some(change) = row.change.as_ref() {
+        change.reason.clone()
+    } else {
+        row.id.clone()
     };
     // An update that keeps its version number is a rebuild: the digest moved,
     // the label did not. Saying so is cheaper than looking broken.
@@ -497,22 +643,24 @@ fn package_row(row: &Row, action: Option<&str>) -> impl IntoElement {
     div()
         .flex()
         .items_center()
-        .gap_4()
+        .gap_3()
         .h(px(ROW_H))
-        .px_4()
+        .px_3()
         .rounded_lg()
         .bg(rgb(PANEL))
         .border_1()
         .border_color(rgb(EDGE))
+        .child(tile(&row.mark, TILE))
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap_1()
                 .flex_1()
+                .overflow_hidden()
                 .child(
                     div()
-                        .text_base()
+                        .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(SharedString::from(row.title.clone())),
                 )
@@ -520,18 +668,67 @@ fn package_row(row: &Row, action: Option<&str>) -> impl IntoElement {
                     div()
                         .text_xs()
                         .text_color(rgb(MUTED))
-                        .whitespace_nowrap()
-                        .overflow_hidden()
+                        .whitespace_normal()
+                        .line_clamp(2)
                         .child(SharedString::from(secondary)),
                 ),
         )
         .child(
             div()
-                .text_xs()
-                .text_color(rgb(MUTED))
-                .child(SharedString::from(version)),
+                .flex()
+                .items_center()
+                .gap_2()
+                .when_some(row.change.as_ref(), |cluster, change| {
+                    cluster.child(change_chip(&change.class))
+                })
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(SharedString::from(version)),
+                ),
         )
         .when_some(action, |row, label| row.child(button(label)))
+}
+
+/// The mark a package chose for itself: a rounded square in its own colour with
+/// the badge it declared. A package that declared nothing gets a quiet tile
+/// rather than a colour the store made up.
+fn tile(mark: &Mark, size: f32) -> impl IntoElement {
+    let declared = mark.color.is_some();
+    let fill = mark.color.unwrap_or(PANEL_RAISED);
+    let ink = if declared { BG } else { MUTED };
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .w(px(size))
+        .h(px(size))
+        .rounded_lg()
+        .bg(rgb(fill))
+        .border_1()
+        .border_color(rgb(if declared { fill } else { EDGE }))
+        .child(
+            div()
+                .text_size(px(size * 0.4))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(ink))
+                .child(SharedString::from(mark.badge.clone())),
+        )
+}
+
+/// `live`, `restart`, `reboot`: what the store will make you do to get the
+/// change. Quiet, because it is a fact about the update and not a warning.
+fn change_chip(class: &str) -> impl IntoElement {
+    div()
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .bg(rgb(EDGE))
+        .text_color(rgb(MUTED))
+        .text_size(px(10.0))
+        .font_weight(FontWeight::MEDIUM)
+        .child(SharedString::from(class.to_uppercase()))
 }
 
 fn button(label: &str) -> impl IntoElement {
@@ -589,31 +786,40 @@ fn installed_chip(row: &Row) -> impl IntoElement {
     div()
         .flex()
         .items_center()
-        .justify_between()
         .gap_2()
         .w(px(CHIP_W))
         .h(px(CHIP_H))
-        .px_3()
-        .rounded_md()
+        .px_2()
+        .rounded_lg()
         .bg(rgb(PANEL))
         .border_1()
         .border_color(rgb(EDGE))
+        .child(tile(&row.mark, 22.0))
         .child(
             div()
-                .text_xs()
-                .font_weight(FontWeight::MEDIUM)
-                .child(SharedString::from(row.title.clone())),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(MUTED))
-                .child(SharedString::from(row.version.clone())),
+                .flex()
+                .flex_col()
+                .flex_1()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(SharedString::from(row.title.clone())),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(SharedString::from(row.version.clone())),
+                ),
         )
 }
 
 fn chips_per_line(width: f32) -> usize {
-    let usable = (width - PAGE_PAD * 2.0 + CHIP_GAP).max(CHIP_W);
+    let usable = (width + CHIP_GAP).max(CHIP_W);
     (usable / (CHIP_W + CHIP_GAP)).floor().max(1.0) as usize
 }
 
@@ -660,7 +866,7 @@ fn nothing_to_show(source: &Source) -> impl IntoElement {
         )
 }
 
-fn header(account: &Account, source: &Source) -> impl IntoElement {
+fn header(account: &Account, source: &Source, width: f32) -> impl IntoElement {
     let mark = match (&source.name, source.verified) {
         (None, _) => ("no store reached", MUTED),
         (Some(_), true) => ("signature verified", GOOD),
@@ -670,7 +876,7 @@ fn header(account: &Account, source: &Source) -> impl IntoElement {
         .flex()
         .items_center()
         .gap_4()
-        .px_6()
+        .px(px(page_margin(width)))
         .h(px(HEADER_H))
         .bg(rgb(PANEL))
         .border_b_1()
@@ -751,7 +957,8 @@ fn chip(account: &Account) -> impl IntoElement {
 }
 
 /// `dev.fungos.vitals-view` has no listing yet, so the best name available is
-/// its own last segment, read as words.
+/// its own last segment, read as words. A manifest's `title` wins wherever one
+/// is declared; the host applies the same rule to its own catalog.
 fn title_of(id: &str) -> String {
     let tail = id.rsplit('.').next().unwrap_or(id);
     let mut title = String::with_capacity(tail.len());
