@@ -113,15 +113,16 @@ row. Ranking is per-query learned and resettable per item.
 
 ## 2. What exists today
 
-There are **two** different things called a launcher on `pi/inbox-canvas`, and
-they do not overlap.
+There were **two** different things called a launcher, and they do not overlap.
+The package browser has since been renamed `spores/spore-browser` so that
+"launcher" means one thing.
 
-### `spores/launcher` — a package browser
+### `spores/spore-browser` — a package browser
 
 38 lines of module, 49 of Lua. It imports `soil:spore/catalog`, lists installed
 Spore packages with their launch surfaces, and calls `catalog.launch(id, surface)`.
-It is the installed-app browser, not a root search. `spores/launcher-host` is its
-wasmtime host.
+It is the installed-Spore browser, not a root search.
+`spores/spore-browser-host` is its wasmtime host.
 
 ### `spores/chrome` — the shell, with a launcher region
 
@@ -146,7 +147,7 @@ defines what acting on a row does.
 ### The capability that already exists for this
 
 `soil:spore@0.1.0` (`catalog.entries`, `catalog.launch`) is the installed-package
-catalog. It is used by `spores/launcher` but is **not yet in soil's canonical
+catalog. It is used by `spores/spore-browser` but is **not yet in soil's canonical
 `wit/` directory** and is therefore not enforced by `crates/soil-abi`. That is a
 consolidation bug, not a design gap — see [Consolidation](#5-consolidation).
 
@@ -291,15 +292,16 @@ work is split across two packages plus a host plus a WIT package that soil does
 not know about. Sequence:
 
 1. **Canonicalise `soil:spore`.** Move `spore.wit` from
-   `spores/launcher/wit/deps/soil-spore/` into soil's `wit/soil-spore.wit`, add
+   `spores/spore-browser/wit/deps/soil-spore/` into soil's `wit/soil-spore.wit`, add
    it to the table in soil's `README.md`, and add coverage in
    `crates/soil-abi` so an accidental ABI change fails the build. Everything else
    depends on this being real.
 2. **Land `pi/inbox-canvas` on `main`** as-is. The chrome regions are good and
    they are the UI we want; do not rewrite them during the merge.
-3. **Rename.** `spores/launcher` (package browser) becomes
-   `spores/spore-browser`, or folds into the chrome launcher as its `spores`
-   scope. Two packages named launcher will confuse every future reader.
+3. ~~**Rename.**~~ Done on 2026-11-07: the package browser is
+   `spores/spore-browser` with `dev.fungos.spore-browser`, and its host is
+   `spores/spore-browser-host`. The `launcher` region stays where it belongs, in
+   `spores/chrome`.
 4. **Then build the middle** described in §4 against the existing view.
 
 ## 6. What we deliberately do not copy

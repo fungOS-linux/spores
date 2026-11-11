@@ -6,6 +6,15 @@ name = "crm"
 version = "0.1.0"
 license = "Apache-2.0 OR MIT"
 summary = "CRM Spore over namespaced records, with per-brand CRM namespaces and a pipeline board"
+description = "A CRM whose data is records: per-brand namespaces, a pipeline board, and no network path of its own."
+
+[docs]
+usage = ["crm", "crm --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["productivity", "communication"]
+keywords = ["crm", "pipeline", "leads", "records"]
 
 [engine]
 soil = ">=0.1"
@@ -27,6 +36,9 @@ surfaces = ["canvas", "native", "web"]
 [grants]
 "soil:records" = "read/write the granted CRM, calls and messages namespaces; read contacts"
 
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
 [denied]
 "soil:http" = ["the CRM Spore has no network authority"]
 "wasi:filesystem" = ["the host maps namespaces to books"]

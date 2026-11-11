@@ -1,0 +1,40 @@
+# Hue Spore: a CLI over the Philips Hue bridge's local HTTP API.
+schema = 1
+
+[spore]
+id = "dev.fungos.hue"
+name = "hue"
+version = "0.1.0"
+license = "MIT"
+summary = "Control Philips Hue lights, groups and scenes from the command line"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { http = "0.1.0" }
+
+[module]
+path = "module.wasm"
+
+[launch]
+# A CLI: the host runs it with arguments and prints the result. It does not
+# open a window, so there is no Lua UI to JIT.
+default = "native"
+surfaces = ["native"]
+
+[grants]
+"soil:http" = "talk to the Hue bridge the host allowlists"
+
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
+[denied]
+# The bridge key is a secret the host owns; the Spore receives an opaque
+# credential handle, never the bytes.
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+
+[presentation]
+badge = "H"
+color = "#f5c542"

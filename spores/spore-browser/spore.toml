@@ -1,0 +1,54 @@
+# Installed-Spore browser. The host owns discovery and execution.
+schema = 1
+
+[spore]
+id = "dev.fungos.spore-browser"
+name = "spore-browser"
+version = "0.1.0"
+license = "MIT"
+summary = "Browse installed Spores and launch one bounded surface"
+description = "A browser over what is installed: each Spore's identity, declared surfaces and grants, with launch as a host action rather than something the view performs."
+homepage = "https://github.com/fungOS-linux/spores"
+
+[docs]
+usage = ["spore-browser", "spore-browser --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["system", "developer-tools"]
+keywords = ["spores", "launcher", "catalog", "browser"]
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { spore = "0.1.0", canvas = "1.0.0" }
+
+[module]
+path = "module.wasm"
+
+[ui]
+entry = "ui/browser.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+surfaces = ["canvas", "web", "native"]
+
+[grants]
+"soil:spore" = "list installed Spore packages; launch a declared Spore surface"
+"soil:canvas" = "present the browser"
+
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
+[denied]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+
+[presentation]
+# A launcher row needs to be recognisable without reading it. A monogram is a
+# character, not an asset: it cannot go missing on someone else's machine, and it
+# reads at the size a launcher actually draws.
+badge = "L"
+color = "#c9a6ff"

@@ -1,0 +1,7 @@
+spore-lock 1
+spore dev.fungos.rooms
+version 0.1.0
+file e44a5d1b9df1011a93be0bb06908d9c6a5bea5f27d88dff03d3e36b85de3d4dc 1419 spore.toml
+file da96799cb015778ebc82d4bbf6881872fc9dc080e9a1d0b4e0cd2af1e456bd82 44055 ui/rooms.lua
+file 525334351f3fc55b08f0ca87e3b00cace81a10fd15caa6f33bde00ed9095765f 3708 ui/snapshot.lua
+digest ed6000847c31d574335d0201b8c607aa088f2dd39b9d91fe24ac710bb65aac62

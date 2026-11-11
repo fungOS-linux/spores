@@ -1,0 +1,48 @@
+# Fixture-driven gallery for the shared fungos.ui dashboard nodes.
+#
+# This is a UI-only Spore: it owns composition, not data or authority. The
+# fixture is deliberate so the component vocabulary can be reviewed and
+# screenshotted without a live metrics backend.
+schema = 1
+
+[spore]
+id = "dev.fungos.gallery"
+name = "gallery"
+version = "0.1.0"
+license = "MIT"
+summary = "Dashboard primitive gallery for the shared Spore UI library"
+description = "A fixture-driven gallery of the shared dashboard primitives: stat, gauge, table and chart, rendered from one synthetic document."
+homepage = "https://github.com/fungOS-linux/spores"
+
+[docs]
+usage = ["gallery", "gallery --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["developer-tools", "graphics"]
+keywords = ["ui", "components", "gallery", "dashboard"]
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { canvas = "1.0.0" }
+
+[ui]
+entry = "ui/gallery.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+surfaces = ["canvas", "web"]
+
+[grants]
+"soil:canvas" = "present the dashboard component gallery"
+
+[denied]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+
+[presentation]
+badge = "G"
+color = "#8b9dff"

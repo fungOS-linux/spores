@@ -1,0 +1,12 @@
+// Installed-Spore browser: list installed Spores and ask the host to launch one.
+package fungos:spore-browser@0.1.0;
+
+world spore-browser {
+  import soil:spore/catalog@0.1.0;
+
+  /// Installed Spore catalog as JSON bytes.
+  export snapshot: func() -> result<list<u8>, string>;
+
+  /// Ask the host to launch one declared surface.
+  export launch: func(id: string, surface: string) -> result<string, string>;
+}

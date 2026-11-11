@@ -1,0 +1,45 @@
+schema = 1
+
+[spore]
+id = "dev.fungos.pulse"
+name = "pulse"
+version = "0.1.0"
+license = "MIT"
+summary = "Cron schedules and webhook ingress health: what runs on a timer and what arrives unasked"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { canvas = "1.0.0", records = "0.1.0" }
+
+[ui]
+entry = "ui/console.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+# The composed Lua UI Canvas launches for this app. Composition writes it into
+# the runtime modules directory; the launcher opens it as a window.
+canvas_module = "spore-dev-pulse"
+surfaces = ["canvas", "native", "web"]
+
+[grants]
+# The console is the writer for the schedule and the reader for the ingress.
+# Both are explicit: a viewer that could not write would make every edit a
+# shell command, and a writer that could not read would paint an empty page.
+"soil:records" = "read pulse.cron, pulse.run, pulse.target and the Confluence hook/delivery records"
+"soil:canvas" = "present the console surface"
+
+[denied]
+# The clock is an argument, not a capability: the scheduler hands the console
+# the instant it renders at, which is what makes a snapshot reproducible.
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+
+[presentation]
+# A launcher row needs to be recognisable without reading it. A monogram is a
+# character, not an asset: it cannot go missing on someone else's machine.
+badge = "P"
+color = "#d9a55a"

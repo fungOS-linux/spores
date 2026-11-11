@@ -6,6 +6,15 @@ name = "consent"
 version = "0.1.0"
 license = "Apache-2.0 OR MIT"
 summary = "Trusted host consent popup for Unibus, Spore Store and outbound actions"
+description = "The one prompt that asks a person to approve a capability set. It is a host surface, not an app: it cannot be replaced by a Spore that would like different answers."
+
+[docs]
+usage = ["consent"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["system", "security"]
+keywords = ["consent", "permissions", "trust", "capabilities"]
 
 [engine]
 soil = ">=0.1"

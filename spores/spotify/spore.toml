@@ -1,0 +1,36 @@
+# Spotify Spore: a remote for RASpotify and any other Connect device.
+schema = 1
+
+[spore]
+id = "dev.fungos.spotify"
+name = "spotify"
+version = "0.1.0"
+license = "MIT"
+summary = "Play, pause, transfer and inspect Spotify playback from the command line"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { http = "0.1.0" }
+
+[module]
+path = "module.wasm"
+
+[launch]
+default = "native"
+surfaces = ["native"]
+
+[grants]
+"soil:http" = "call the Spotify Web API through the host's allowlisted origin"
+
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
+[denied]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+
+[presentation]
+badge = "S"
+color = "#1db954"

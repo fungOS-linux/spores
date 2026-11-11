@@ -1,0 +1,14 @@
+// Hue Spore ABI.
+//
+// The Spore owns argument parsing and Hue semantics. The host owns the bridge
+// connection: it decides which origins are reachable, injects the application
+// key, and caps every request and response.
+package fungos:hue@0.1.0;
+
+world hue {
+  import soil:http/http@0.1.0;
+
+  /// Run one command. The host passes the Spore's argv (without a program name)
+  /// and prints whatever the call returns.
+  export run: func(args: list<string>) -> result<string, string>;
+}

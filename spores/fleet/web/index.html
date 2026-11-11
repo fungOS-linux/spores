@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Fleet</title>
+  <style>
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0d0f14;color:#e6ebf5;font:13px ui-sans-serif,-apple-system,Helvetica,Arial,sans-serif}
+    canvas{display:block;width:100%;height:100%}
+    #status{position:fixed;right:14px;bottom:10px;color:#6a6a6a;font-size:11px;pointer-events:none}
+  </style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="status">loading</div>
+<script>
+// The page draws the fleet's scene document; it does not know what a peer is.
+// Nodes carry `transform.translation` / `transform.scale` in the -4..4 space,
+// `ink` as a role, and — because this document came from a preview — the
+// resolved `rgb` and text `px` as well. A host resolves those two itself; the
+// page can only draw them.
+const canvas = document.getElementById('scene');
+const ctx = canvas.getContext('2d');
+const frame = document.createElement('canvas');
+const paint = frame.getContext('2d');
+const status = document.getElementById('status');
+let dpr = 1, size = { w: 0, h: 0 };
+let tag = null, inFlight = false;
+
+const INKS = {
+  background: '#0d0f14', surface: '#1d222b', text: '#e8ecf4', muted: '#919baa',
+  primary: '#6ca8ff', success: '#7ad68e', warning: '#f5be50', info: '#70cdff',
+  danger: '#ff7a7a',
+};
+
+function fillOf(node) {
+  const alpha = node.opacity ?? 1;
+  if (node.rgb) {
+    const [r, g, b] = node.rgb;
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  const hex = INKS[node.ink] || INKS.text;
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
+
+function fit() {
+  const next = { w: innerWidth, h: innerHeight };
+  if (next.w === size.w && next.h === size.h && canvas.width > 0) return false;
+  dpr = window.devicePixelRatio || 1;
+  size = next;
+  canvas.width = Math.floor(size.w * dpr);
+  canvas.height = Math.floor(size.h * dpr);
+  frame.width = canvas.width;
+  frame.height = canvas.height;
+  return true;
+}
+
+function draw(scene, w, h) {
+  paint.setTransform(dpr, 0, 0, dpr, 0, 0);
+  paint.clearRect(0, 0, w, h);
+  const xOf = (u) => (u + 4) / 8 * w;
+  const yOf = (u) => (4 - u) / 8 * h;
+
+  const nodes = [...(scene.nodes || [])].sort(
+    (a, b) => ((a.transform?.translation?.[2] ?? 0) - (b.transform?.translation?.[2] ?? 0)));
+
+  for (const node of nodes) {
+    const t = node.transform || {};
+    const [x, y] = t.translation || [0, 0, 0];
+    const [sx, sy] = t.scale || [1, 1, 1];
+    paint.fillStyle = fillOf(node);
+    if (node.type === 'rect') {
+      const px = xOf(x), py = yOf(y);
+      const rw = sx / 8 * w, rh = sy / 8 * h;
+      const radius = Math.min(node.radius || 0, rw / 2, rh / 2);
+      // Scene rotation is counter-clockwise about the node's own origin in a
+      // y-up space; the page is y-down, so the sign flips.
+      const rot = t.rotation?.[2] || 0;
+      paint.save();
+      paint.translate(px, py);
+      if (rot) paint.rotate(-rot);
+      paint.beginPath();
+      if (paint.roundRect) paint.roundRect(0, 0, rw, rh, radius);
+      else paint.rect(0, 0, rw, rh);
+      paint.fill();
+      paint.restore();
+    } else if (node.type === 'text') {
+      paint.font = `${node.px}px ui-sans-serif, -apple-system, Helvetica, Arial, sans-serif`;
+      paint.textBaseline = 'top';
+      paint.fillText(node.text || '', xOf(x), yOf(y));
+    }
+  }
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(frame, 0, 0);
+}
+
+async function refresh() {
+  if (inFlight) return;
+  inFlight = true;
+  fit();
+  const w = Math.round(size.w), h = Math.round(size.h);
+  try {
+    const headers = tag ? { 'if-none-match': tag } : {};
+    const response = await fetch(`scene.json?w=${w}&h=${h}`, { cache: 'no-cache', headers });
+    if (response.status === 304) return;
+    if (!response.ok) throw new Error(`scene ${response.status}: ${await response.text()}`);
+    const scene = await response.json();
+    if (scene.error) throw new Error(scene.error);
+    tag = response.headers.get('etag');
+    draw(scene, w, h);
+    status.textContent = `${scene.nodes.length} nodes · ${new Date().toLocaleTimeString()}`;
+  } catch (error) {
+    status.textContent = String(error.message || error);
+  } finally {
+    inFlight = false;
+  }
+}
+
+let pending = 0;
+addEventListener('resize', () => {
+  clearTimeout(pending);
+  pending = setTimeout(refresh, 120);
+});
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

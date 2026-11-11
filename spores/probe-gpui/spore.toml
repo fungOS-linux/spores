@@ -1,0 +1,23 @@
+# Probe: a Spore that shows what the host is telling it.
+schema = 1
+
+[spore]
+id = "dev.fungos.probe"
+name = "probe"
+title = "Probe"
+version = "0.1.0"
+license = "MIT"
+summary = "What the host is telling this Spore"
+description = "Surface size and scale, pointer position and buttons, the last key with its modifiers, and the sessions the host is running. A harness for the presenter, and a second Spore in the launcher."
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { spore = "0.1.0", canvas = "1.0.0" }
+
+[module]
+path = "module.wasm"
+
+[launch]
+default = "canvas"
+surfaces = ["canvas"]

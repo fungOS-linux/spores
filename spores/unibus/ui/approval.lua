@@ -29,6 +29,13 @@ local function base()
   return t.body or 16
 end
 
+-- Canvas has no layout service (see docs/interaction-gap.md). Prefer the host's
+-- `canvas.layout` when one provides it, otherwise lay the tree out in Lua.
+local function lay(tree, width, height)
+  if canvas and canvas.layout then return canvas.layout(tree, width, height) end
+  return ui.layout(tree, width, height)
+end
+
 local function nx(px) return -4 + 8 * px / DESIGN_W end
 local function ny(px) return 4 - 8 * px / DESIGN_H end
 local function sw(px) return 8 * px / DESIGN_W end
@@ -39,10 +46,17 @@ local function text_scale(px)
   return px / ((base() or 16) * 1.25)
 end
 
-local function rect(id, x, y, w, h, ink, opacity, radius)
+-- Canvas rejects ink roles it does not know rather than falling back to body
+-- text. A surface the theme does not name has to be spelled with one it does.
+local INK = { surface = "muted", background = "muted" }
+local function ink(name)
+  return INK[name] or name
+end
+
+local function rect(id, x, y, w, h, role, opacity, radius)
   canvas.rect {
     id = id,
-    ink = ink or "surface",
+    ink = ink(role or "surface"),
     opacity = opacity or 1.0,
     radius = radius or 12,
     translation = { nx(x), ny(y), Z },
@@ -50,11 +64,11 @@ local function rect(id, x, y, w, h, ink, opacity, radius)
   }
 end
 
-local function label(id, value, x, y, px, ink, z)
+local function label(id, value, x, y, px, role, z)
   canvas.text {
     id = id,
     text = tostring(value or ""),
-    ink = ink or "text",
+    ink = ink(role or "text"),
     translation = { nx(x), ny(y), z or (Z + 0.1) },
     scale = { text_scale(px), text_scale(px), 1 },
   }
@@ -179,7 +193,7 @@ end
 function M.render(snapshot)
   snapshot = snapshot or {}
   local tree = layout_tree(snapshot)
-  local laid = canvas.layout(tree, DESIGN_W, DESIGN_H)
+  local laid = lay(tree, DESIGN_W, DESIGN_H)
   -- Window body and border.
   rect("approval-window", 0, 0, DESIGN_W, DESIGN_H, "surface", 1.0, 16)
   rect("approval-border", 0, 0, DESIGN_W, DESIGN_H, "primary", 0.22, 16)

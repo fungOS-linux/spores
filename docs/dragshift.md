@@ -80,16 +80,28 @@ host refuses an unsupported capability by name rather than degrading silently.
 This is the part that most needs to feel good, so it matters that the scene can
 draw it.
 
-Canvas exposes `group`, `text`, `rect`, `image` and `mesh`. There is no vector
-path primitive (`docs/content-rendering.md`), and a radial menu is wedges.
-**`mesh` is enough**: each slice is a triangle fan plus an arc strip, text is
-anchored on the slice's bisector at a fixed radius, and hover is a colour role
-change on the active slice.
+Canvas exposes `group`, `text`, `rect`, `image` and `mesh`, and every node carries
+a `rotation`. There is no polygon primitive, and `mesh` takes a *host-declared
+asset* rather than inline geometry, so it is not the answer here.
+
+**The ring is built from rotated rects.** `ui.radial` lays a short run of rects
+along each slice's arc, each rotated by a real quaternion about Z. That is
+geometry, not a picture of geometry: the slices are drawn by the same renderer as
+everything else, they scale with the surface, and each one carries a hit region
+the host registers like any other control. `segments` trades node count for
+smoothness — Canvas bounds a scene at 1024 nodes and defaults to 256, so a
+nine-slice ring at six segments costs 54 rects plus labels and hit regions.
+
+One radius for both axes, deliberately: a rotated rect only stays a rect in a
+square frame, so the ring is sized by the shorter axis rather than letting the
+surface's aspect ratio shear every slice into a parallelogram.
 
 The interaction is a ring with a second ring for Convert/Tools, toggled by a
 tap — the same model upstream uses. That is state, so it lives in the Spore: the
-view is a function of the snapshot, and the snapshot carries `ring`, `hover_index`,
-`count`, `items[{label, enabled}]`, and the source summary.
+view is a function of the snapshot, and the snapshot carries `ring`, `selected`,
+`slices[{id, label, available}]`, and the source summary. A slice this build
+cannot honour is drawn, not hidden, and is not pressable — the ring says what it
+will not do.
 
 Liquid glass is a *renderer* effect, not a scene one. If we want refraction, it
 is a host feature (capture what is behind the surface, blur and tint) applied to

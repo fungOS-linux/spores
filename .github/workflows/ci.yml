@@ -13,8 +13,62 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # A vendored soil contract that drifted from its record is a Spore built
+      # against an interface the host may no longer have. Cheap and offline, so
+      # it runs before anything that has to compile.
+      - name: Vendored WIT provenance
+        run: sh tools/check-wit-provenance.sh
       - name: Lua
         run: sudo apt-get update && sudo apt-get install -y lua5.4
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+
+      # The Lua API is part of the package ABI, so a Spore without ui/API.md is
+      # a build failure. The checker lives in the SDK (`tend api-check`) rather
+      # than being copied here, so there is one implementation of the rule.
+      - name: Check out the Spore tooling
+        uses: actions/checkout@v4
+        with:
+          repository: fungOS-linux/fungos-sdk
+          path: _sdk
+          # The SDK's default branch is `master`; `tend api-check` and the
+          # documented-action check landed on `main`. Without this, the step
+          # below ran a `tend` that does not implement the subcommand and died
+          # with `missing view: api-check` before reading a single Spore's docs.
+          ref: main
+
+      # A view names its library through `require`, so rendering one needs an SDK
+      # checkout, and the page needs a real scene to draw. `cargo test` skips both
+      # rather than failing on a machine without an SDK, which means CI has to run
+      # them here or the view goes untested.
+      - name: Worklog view
+        working-directory: spores/worklog
+        env:
+          FUNGOS_SDK: ${{ github.workspace }}/_sdk
+        run: |
+          lua5.4 tests/ui_fixture.lua
+          lua5.4 ../../tools/shot.lua ui/worklog.lua examples/worklog_mock.lua \
+            ../themes/graphite.lua /tmp/scene.json 1182 1569
+          node --experimental-vm-modules tests/page_smoke.mjs /tmp/scene.json
+
+      # The files view has one extra thing to prove: the snapshot `files-serve`
+      # generates from a real tree is a Lua literal, and the page routes a press.
+      - name: Files view
+        working-directory: spores/files
+        env:
+          FUNGOS_SDK: ${{ github.workspace }}/_sdk
+        run: |
+          lua5.4 tests/ui_fixture.lua
+          lua5.4 ../../tools/shot.lua ui/files.lua examples/files_mock.lua \
+            ../themes/graphite.lua /tmp/files-scene.json 1182 820
+          node tests/page_smoke.mjs /tmp/files-scene.json
+          cargo run -q -p spore-files --bin files-serve -- --root spore=. --once > /tmp/files.lua
+          lua5.4 -e 'local t = assert(loadfile("/tmp/files.lua"))(); assert(t.title == "files"); assert(#t.roots == 1)'
+
+      - name: Spore Lua API docs
+        run: |
+          lua5.4 _sdk/tools/tend.lua api-check \
+            --root spores \
+            --baseline tools/api-baseline.txt \
+            --strict-baseline

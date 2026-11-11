@@ -107,3 +107,56 @@ assert(other_copy ~= copy, "selection did not change the view")
 assert(other_copy:find(other.title, 1, true), "newly selected subject is not drawn")
 
 print("ui: ok")
+
+-- The real Canvas host provides no `widget.hit`: its `widget` is the theming
+-- library (pixel_space, button, panel, label, badge, metric) and Soil exposes no
+-- hit targets. Rendering there must not crash, and a hit spec must not vanish.
+--
+-- This exercises the guard directly rather than through the render path: the
+-- fixture's placeholder layout never produces the row ids the hit loop looks
+-- for, so a render-level assertion would pass without ever reaching the guard.
+local themed_widget = _G.widget
+
+_G.widget = {}
+drawn = { rects = {}, texts = {} }
+for index = #inbox.pending_hits, 1, -1 do inbox.pending_hits[index] = nil end
+
+local rendered, render_error = pcall(inbox.render, snapshot)
+assert(rendered, "render crashed without widget.hit: " .. tostring(render_error))
+assert(#drawn.texts > 0, "the no-hit host drew nothing")
+
+inbox.hit({ id = "probe", label = "hit", x = 0, y = 0, width = 1, height = 1 })
+assert(#inbox.pending_hits == 1, "hit spec was dropped instead of kept for the host")
+assert(inbox.pending_hits[1].id == "probe", "kept the wrong spec")
+
+local delivered = nil
+_G.widget = { hit = function(spec) delivered = spec end }
+inbox.hit({ id = "probe2", label = "hit", x = 0, y = 0, width = 1, height = 1 })
+assert(delivered and delivered.id == "probe2", "hit was not delivered to a host that provides it")
+assert(#inbox.pending_hits == 1, "a delivered hit should not also be queued")
+
+_G.widget = themed_widget
+
+print("ui: no-hit host ok")
+
+-- Canvas has no layout service either, so a view that asks the host to lay out
+-- its tree cannot run there. Prove the fallback runs, and that it draws the same
+-- copy, by removing the layout stub from the fake host.
+local real_layout = _G.canvas.layout
+_G.canvas.layout = nil
+drawn = { rects = {}, texts = {} }
+
+local laid_ok, laid_error = pcall(inbox.render, snapshot)
+_G.canvas.layout = real_layout
+
+assert(laid_ok, "render failed without canvas.layout: " .. tostring(laid_error))
+assert(#drawn.texts > 0, "the layout fallback drew nothing")
+assert(#drawn.rects > 0, "the layout fallback drew no rects")
+
+local laid_copy = {}
+for _, spec in ipairs(drawn.texts) do laid_copy[#laid_copy + 1] = tostring(spec.text) end
+local laid_text = table.concat(laid_copy, "\n")
+assert(laid_text:find(selected.title, 1, true), "the layout fallback lost the selected thread")
+assert(laid_text:find(account, 1, true), "the layout fallback lost the account")
+
+print("ui: layout fallback ok")

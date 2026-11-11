@@ -1,0 +1,12 @@
+{
+  "event": "page_updated",
+  "timestamp": 1767323045000,
+  "username": "ajmwagar",
+  "spaceKey": "FPL",
+  "page": {
+    "id": "948231",
+    "title": "Confluence webhook ingress architecture",
+    "spaceKey": "FPL",
+    "version": { "number": 7 }
+  }
+}

@@ -1,0 +1,23 @@
+[package]
+name = "spore-fleet"
+description = "Fleet view over mycelium peer and topology facts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "fleet"
+
+# The view host: the same Lua view the wall draws, served to a browser. It is a
+# native process because reading the daemon's JSON and speaking HTTP are exactly
+# the authorities a Spore must not hold.
+[[bin]]
+name = "fleet-serve"
+path = "src/bin/serve.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

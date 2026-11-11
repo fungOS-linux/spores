@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; background: #0b0e11; overflow: hidden; }
+  #screen { position: fixed; inset: 0; overflow: hidden; }
+  #screen .n { position: absolute; }
+  #screen .t {
+    white-space: pre;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    line-height: 1;
+    letter-spacing: 0;
+  }
+  #menu {
+    position: fixed; top: 8px; right: 8px; z-index: 20;
+    font: 11px ui-monospace, monospace; color: #8395a2; background: #141b21;
+    border: 1px solid #1c252d; border-radius: 6px; padding: 4px 8px; cursor: pointer;
+    opacity: .25; transition: opacity .2s;
+  }
+  #menu:hover, body:hover #menu { opacity: 1; }
+  #picker {
+    position: fixed; inset: 0; z-index: 30; display: none;
+    background: rgba(11,14,17,.92); padding: 24px 28px; overflow: auto;
+    font: 12px ui-monospace, monospace; color: #dce5ea;
+  }
+  #picker.open { display: block; }
+  #picker h2 { font-size: 11px; letter-spacing: .12em; color: #8395a2; margin: 18px 0 8px; text-transform: uppercase; }
+  #picker button {
+    display: block; width: 100%; max-width: 520px; text-align: left;
+    background: #141b21; color: #dce5ea; border: 1px solid #1c252d; border-radius: 6px;
+    padding: 7px 10px; margin: 0 0 4px; font: inherit; cursor: pointer;
+  }
+  #picker button:hover { border-color: #7dd3a8; }
+  #picker .live { color: #7dd3a8; }
+  #picker .meta { color: #5b6b78; margin-left: 8px; }
+  #picker input {
+    display: block; width: 100%; max-width: 520px; box-sizing: border-box;
+    background: #0b0e11; color: #dce5ea; border: 1px solid #1c252d; border-radius: 6px;
+    padding: 7px 10px; margin: 0 0 6px; font: inherit;
+  }
+  #picker .row { display: flex; align-items: stretch; gap: 4px; max-width: 520px; }
+  #picker .row button { flex: 1; }
+  #picker .close {
+    width: 34px; flex: none; text-align: center; color: #8395a2;
+  }
+  #picker .close:hover { color: #ff8f8f; border-color: #ff8f8f; }
+  #hover {
+    position: fixed; display: none; pointer-events: none; z-index: 5;
+    background: rgba(255,255,255,.07); border-radius: 6px;
+  }
+  #notice {
+    position: fixed; left: 50%; top: 18%; transform: translateX(-50%); z-index: 25;
+    max-width: 640px; display: none; padding: 10px 14px; border-radius: 8px;
+    background: #1b1214; border: 1px solid #5a2b2f; color: #ffb4b4;
+    font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap;
+  }
+  #notice.show { display: block; }
+  #empty {
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    font: 13px ui-monospace, monospace; color: #5b6b78; pointer-events: none;
+  }
+  #empty.show { display: flex; }
+  #hint {
+    position: fixed; right: 10px; bottom: 8px; z-index: 10;
+    font: 11px ui-monospace, monospace; color: #5b6b78; opacity: .0;
+    transition: opacity .2s; pointer-events: none;
+  }
+  body:hover #hint { opacity: .7; }
+  #hint b { color: #7dd3a8; font-weight: 600; }
+  #hint .num { color: #8395a2; }
+</style>
+</head>
+<body>
+<div id="screen"></div>
+<button id="menu" type="button">sessions</button>
+<div id="picker"></div>
+<div id="empty">no output yet — the shell is still starting, or this target has nothing to show</div>
+<div id="notice"></div>
+<div id="hover"></div>
+<div id="hint"><span id="stats" class="num"></span> · <b>sessions</b> to switch</div>
+<script>
+(() => {
+  const screen = document.getElementById('screen');
+  const notice = document.getElementById('notice');
+  const stats = document.getElementById('stats');
+  const hover = document.getElementById('hover');
+  const empty = document.getElementById('empty');
+
+  // A blank screen is not a diagnosis. Anything that throws is shown on the page
+  // instead of leaving a grey field and a console nobody is looking at.
+  function fail(message) {
+    notice.textContent = String(message);
+    notice.classList.add('show');
+  }
+  window.addEventListener('error', (event) => fail(event.message || 'script error'));
+  window.addEventListener('unhandledrejection', (event) => fail(event.reason && event.reason.message || event.reason));
+  // The session is the page's whole context: without it the producer picks a
+  // default for the scene but has nothing to resize, so the pty keeps its own
+  // size and the grid is stretched to the window. Adopt the default explicitly.
+  let session = new URLSearchParams(location.search).get('session') || '';
+  async function ensureSession() {
+    if (session) return session;
+    try {
+      const response = await fetch('/sessions');
+      const body = await response.json();
+      const list = body.sessions || [];
+      const live = list.find((item) => !item.exited) || list[0];
+      if (live) {
+        session = String(live.id);
+        const url = new URL(location.href);
+        url.searchParams.set('session', session);
+        history.replaceState(null, '', url);
+      }
+    } catch (error) {
+      // The picker will say what went wrong when it opens.
+    }
+    return session;
+  }
+  const qs = (extra) => {
+    const p = new URLSearchParams(extra || {});
+    if (session) p.set('session', session);
+    if (sidebarOffset > 0) p.set('sidebar', String(sidebarOffset));
+    const text = p.toString();
+    return text ? '?' + text : '';
+  };
+  // Producer requests carry the session and nothing else: `sidebar` is a render
+  // input, and the PTY has no sidebar to scroll.
+  const producerQs = (extra) => {
+    const p = new URLSearchParams(extra || {});
+    if (session) p.set('session', session);
+    const text = p.toString();
+    return text ? '?' + text : '';
+  };
+
+  // A terminal is sized in cells, not stretched to the window: pick a font size
+  // and let the grid follow. The view fits that grid to the same surface, so the
+  // page and the scene agree on where a cell is.
+  const FONT = 14;
+  const CELL_W = FONT * 0.6;
+  const CELL_H = FONT * 1.2;
+
+  let meta = {};
+  let sentSize = '';
+  let rendering = false;
+  // How far the device list is scrolled. The view draws the list, so this is a
+  // render input, not a DOM position: the page has no rows to move.
+  let sidebarOffset = 0;
+
+  // The scene is the Canvas space: x runs -4..4 left to right, y runs 4..-4 top
+  // to bottom. Inverting them is not the same operation, and using the x rule for
+  // y draws the grid upside down — the first rows land past the bottom edge and
+  // the screen appears to start at the bottom and build upward.
+  function fromX(value, total) { return (value + 4) / 8 * total; }
+  function fromY(value, total) { return (4 - value) / 8 * total; }
+  function spanX(value, total) { return value / 8 * total; }
+  function spanY(value, total) { return value / 8 * total; }
+
+  function draw(scene) {
+    const W = window.innerWidth, H = window.innerHeight;
+    const frag = document.createDocumentFragment();
+    for (const node of scene.nodes || []) {
+      const t = node.transform || {};
+      const tr = t.translation || [0, 0, 0];
+      const sc = t.scale || [0, 0, 1];
+      const left = fromX(tr[0], W);
+      const top = fromY(tr[1], H);
+      if (node.type === 'rect') {
+        const el = document.createElement('div');
+        el.className = 'n';
+        el.style.left = left + 'px';
+        el.style.top = top + 'px';
+        el.style.width = spanX(sc[0], W) + 'px';
+        el.style.height = spanY(sc[1], H) + 'px';
+        if (node.rgb) el.style.background = `rgb(${node.rgb[0]},${node.rgb[1]},${node.rgb[2]})`;
+        if (node.opacity !== undefined) el.style.opacity = node.opacity;
+        if (node.radius) el.style.borderRadius = (node.radius / 8 * W) + 'px';
+        frag.appendChild(el);
+      } else if (node.type === 'text') {
+        const el = document.createElement('span');
+        el.className = 'n t';
+        el.style.left = left + 'px';
+        el.style.top = top + 'px';
+        // The node's scale is the view's request in the surface's own units:
+        // `scale * body * 1.25` px. `px` from the renderer is a preview
+        // convention and is not the size the layout reserved.
+        const scale = (node.transform && node.transform.scale && node.transform.scale[0]) || 1;
+        el.style.fontSize = (scale * (meta.base || 16) * 1.25) + 'px';
+        if (node.rgb) el.style.color = `rgb(${node.rgb[0]},${node.rgb[1]},${node.rgb[2]})`;
+        // A line is one node with styled runs, not one node per colour change:
+        // the runs are inline spans, so the line stays a single box and a
+        // terminal row costs one node instead of one per run.
+        if (Array.isArray(node.runs) && node.runs.length) {
+          for (const run of node.runs) {
+            const piece = document.createElement('span');
+            piece.textContent = run.text || '';
+            if (run.rgb) piece.style.color = `rgb(${run.rgb[0]},${run.rgb[1]},${run.rgb[2]})`;
+            el.appendChild(piece);
+          }
+        } else {
+          el.textContent = node.text || '';
+        }
+        frag.appendChild(el);
+      }
+    }
+    screen.replaceChildren(frag);
+  }
+
+  function apply(scene) {
+    meta = scene.meta || meta;
+    if (meta.title) document.title = meta.title;
+    // Adopt the offset the view actually used: the view clamps against the rows
+    // that fit, and the page has to scroll the list it is looking at, not the
+    // one it asked for.
+    if (meta.sidebar && typeof meta.sidebar.offset === 'number') sidebarOffset = meta.sidebar.offset;
+    notice.classList.remove('show');
+    draw(scene);
+    empty.classList.toggle('show', !(scene.nodes || []).some((node) => node.type === 'text'));
+    const first = (scene.nodes || []).find((node) => node.type === 'text');
+    const size = first && first.transform ? Math.round(first.transform.scale[0] * (meta.base || 16) * 1.25) : '?';
+    stats.textContent = `${meta.cols || '?'}x${meta.rows || '?'} · ${size}px` +
+      (session ? ` · session ${session}` : '');
+    // The pty learns the cell count from the first frame, not from a guess made
+    // before it: the sidebar is part of the grid, and until a frame arrives the
+    // page does not know how wide it is.
+    resize();
+  }
+
+  // Frames are pushed, not polled: the producer changes, the host renders once,
+  // the page draws. A keystroke reaches the screen in one round trip instead of
+  // waiting for the next tick, and an idle terminal costs nothing.
+  let source = null;
+  function connect() {
+    if (source) { source.close(); source = null; }
+    if (typeof EventSource !== 'function') return poll();
+    const w = window.innerWidth, h = window.innerHeight;
+    source = new EventSource('/events' + qs({ w, h }));
+    source.onmessage = (event) => {
+      try {
+        apply(JSON.parse(event.data));
+      } catch (error) {
+        fail('scene is not JSON: ' + error.message);
+      }
+    };
+    source.addEventListener('error', () => {
+      // EventSource reconnects on its own; a closed stream means the host went
+      // away, and the retry will find it again when it is back.
+    });
+  }
+
+  async function poll() {
+    const w = window.innerWidth, h = window.innerHeight;
+    try {
+      const response = await fetch('/scene.json' + qs({ w, h }), { cache: 'no-store' });
+      if (response.ok) apply(await response.json());
+      else fail('scene ' + response.status);
+    } catch (error) {
+      if (error instanceof SyntaxError) fail('scene is not JSON: ' + error.message);
+    }
+  }
+
+  // Switching is a reconnect, not a navigation: a reload blanks the screen until
+  // the first frame arrives, which is the black flash.
+  function switchTo(id) {
+    if (String(id) === String(session)) return;
+    session = String(id);
+    const url = new URL(location.href);
+    url.searchParams.set('session', session);
+    history.replaceState(null, '', url);
+    connect();
+  }
+
+  function post(path, body) {
+    return fetch(path + producerQs(), { method: 'POST', body }).catch(() => {});
+  }
+
+  function resize() {
+    // The sidebar is part of the scene, so the grid gets what is left of the
+    // window, not the whole window.
+    const sidebar = meta.sidebar ? meta.sidebar.width : 0;
+    const cols = Math.max(20, Math.floor((window.innerWidth - sidebar) / CELL_W));
+    const rows = Math.max(6, Math.floor(window.innerHeight / CELL_H));
+    const key = cols + 'x' + rows;
+    if (key === sentSize) return;
+    if (meta.cols === cols && meta.rows === rows) { sentSize = key; return; }
+    sentSize = key;
+    post('/resize', JSON.stringify({ cols, rows }));
+  }
+
+  // The window changed under the scene, so the surface is a different surface.
+  function reflow() {
+    resize();
+    connect();
+  }
+
+  function encode(event) {
+    if (event.metaKey) return '';
+    const named = {
+      Enter: '\r', Backspace: '\x7f', Tab: '\t', Escape: '\x1b',
+      ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D',
+      Home: '\x1b[H', End: '\x1b[F', Delete: '\x1b[3~',
+      PageUp: '\x1b[5~', PageDown: '\x1b[6~',
+    };
+    let text = named[event.key] || (event.key.length === 1 ? event.key : '');
+    if (!text) return '';
+    if (event.ctrlKey && event.key.length === 1) {
+      const code = event.key.toUpperCase().charCodeAt(0);
+      if (code >= 64 && code < 128) text = String.fromCharCode(code - 64);
+    }
+    if (event.altKey) text = '\x1b' + text;
+    return text;
+  }
+
+  const picker = document.getElementById('picker');
+  const menu = document.getElementById('menu');
+  let pickerOpen = false;
+
+  const GROUPS = [['shell', 'shells'], ['ssh', 'hosts'], ['fleet', 'fleet'], ['mush', 'desktops']];
+
+  function button(html, onclick, className) {
+    const element = document.createElement('button');
+    element.type = 'button';
+    element.innerHTML = html;
+    element.onclick = onclick;
+    if (className) element.className = className;
+    return element;
+  }
+
+  async function openPicker() {
+    pickerOpen = true;
+    picker.classList.add('open');
+    picker.replaceChildren(Object.assign(document.createElement('h2'), { textContent: 'loading…' }));
+    try {
+      const [sessions, targets] = await Promise.all([
+        fetch('/sessions' + producerQs()).then((r) => r.json()),
+        fetch('/targets' + producerQs()).then((r) => r.json()),
+      ]);
+      const parts = [];
+
+      const filter = document.createElement('input');
+      filter.placeholder = 'filter devices and sessions';
+      filter.autofocus = true;
+      parts.push(filter);
+
+      const body = document.createElement('div');
+      parts.push(body);
+
+      const draw = (needle) => {
+        body.replaceChildren();
+        // Headings belong to the filtered list, not to the overlay: a heading
+        // appended once outside `draw` would survive every keystroke and stack up.
+        const heading = (text) => body.append(Object.assign(document.createElement('h2'), { textContent: text }));
+        const match = (item) => !needle ||
+          (item.label || '').toLowerCase().includes(needle) ||
+          (item.name || '').toLowerCase().includes(needle) ||
+          (item.detail || '').toLowerCase().includes(needle);
+
+        heading('sessions');
+        const live = (sessions.sessions || []).filter(match);
+        if (!live.length) {
+          body.append(Object.assign(document.createElement('div'), {
+            textContent: 'none open', className: 'meta',
+          }));
+        }
+        for (const item of live) {
+          const row = document.createElement('div');
+          row.className = 'row';
+          row.append(
+            button(`<span class="live">${item.exited ? '·' : '●'}</span> ${item.label || item.target}` +
+              `<span class="meta">session ${item.id}</span>`,
+              () => { location.search = '?session=' + item.id; }),
+            button('×', async (event) => {
+              event.stopPropagation();
+              await fetch('/sessions/' + item.id + producerQs(), { method: 'DELETE' }).catch(() => {});
+              row.remove();
+            }, 'close'),
+          );
+          body.append(row);
+        }
+
+        for (const [kind, title] of GROUPS) {
+          const items = (targets.targets || []).filter((item) => item.kind === kind && match(item));
+          if (!items.length) continue;
+          heading(title);
+          for (const item of items) {
+            body.append(button(
+              `${item.label || item.name}<span class="meta">${item.detail || kind}</span>`,
+              async () => {
+                const response = await fetch('/sessions' + producerQs(), {
+                  method: 'POST',
+                  body: JSON.stringify({ target: item.name }),
+                });
+                if (response.ok) {
+                  const opened = await response.json();
+                  location.search = '?session=' + opened.id;
+                }
+              },
+            ));
+          }
+        }
+      };
+
+      filter.addEventListener('input', () => draw(filter.value.trim().toLowerCase()));
+      // `parts` has to reach the overlay: without this the picker stays on the
+      // "loading…" heading forever while the lists sit in a detached div.
+      picker.replaceChildren(...parts);
+      draw('');
+      requestAnimationFrame(() => filter.focus());
+    } catch (error) {
+      picker.replaceChildren(Object.assign(document.createElement('h2'), { textContent: 'could not list sessions' }));
+    }
+  }
+
+  menu.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (pickerOpen) { pickerOpen = false; picker.classList.remove('open'); }
+    else openPicker();
+  });
+  picker.addEventListener('click', (event) => {
+    if (event.target === picker) { pickerOpen = false; picker.classList.remove('open'); }
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if (pickerOpen) {
+      if (event.key === 'Escape') { pickerOpen = false; picker.classList.remove('open'); }
+      return;
+    }
+    const text = encode(event);
+    if (!text) return;
+    event.preventDefault();
+    post('/input', new TextEncoder().encode(text));
+  });
+
+  // The producer owns the scrollback; the page only says how far the wheel moved.
+  // A wheel over the device list scrolls that list instead: the pointer is the
+  // only thing that says which of the two panels the user means.
+  window.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const delta = event.deltaMode === 1 ? event.deltaY : event.deltaY / 24;
+    const step = Math.trunc(delta);
+    if (!step) return;
+    if (meta.sidebar && event.clientX <= meta.sidebar.width) {
+      scrollSidebar(step);
+      return;
+    }
+    post('/scroll', JSON.stringify({ delta: step }));
+  }, { passive: false });
+
+  function scrollSidebar(step) {
+    const sidebar = meta.sidebar || {};
+    const total = sidebar.total || 0;
+    const visible = sidebar.visible || 0;
+    const offset = typeof sidebar.offset === 'number' ? sidebar.offset : sidebarOffset;
+    const next = Math.min(Math.max(0, total - visible), Math.max(0, offset + step));
+    if (next === offset) return;
+    sidebarOffset = next;
+    connect();
+  }
+
+  // A paste is text typed quickly: same path as a keystroke, so the shell decides
+  // what to do with it (including bracketed paste, which it sets up itself).
+  window.addEventListener('paste', (event) => {
+    const text = event.clipboardData && event.clipboardData.getData('text');
+    if (!text) return;
+    event.preventDefault();
+    post('/input', new TextEncoder().encode(text));
+  });
+
+  // A click in the sidebar is a device or a session. The view published where
+  // each row landed, so this is a lookup, not a second copy of the layout.
+  function sidebarHit(x, y) {
+    const sidebar = meta.sidebar;
+    if (!sidebar || x > sidebar.width) return null;
+    for (const item of Object.values(sidebar.items || {})) {
+      if (y >= item.y && y < item.y + item.height) return item;
+    }
+    return null;
+  }
+
+  window.addEventListener('mousedown', async (event) => {
+    const item = sidebarHit(event.clientX, event.clientY);
+    if (!item) return;
+    event.preventDefault();
+    if (item.kind === 'session') {
+      switchTo(item.id);
+      return;
+    }
+    const response = await fetch('/sessions' + producerQs(), {
+      method: 'POST',
+      body: JSON.stringify({ target: item.name }),
+    }).catch(() => null);
+    if (response && response.ok) {
+      const opened = await response.json();
+      switchTo(opened.id);
+    }
+  });
+
+  // A tab is a session. The view published where each one landed.
+  function tabHit(x, y) {
+    for (const tab of Object.values(meta.tabs || {})) {
+      if (x >= tab.x && x < tab.x + tab.width && y >= tab.y && y < tab.y + tab.height) return tab;
+    }
+    return null;
+  }
+
+  // Hover is the page's job because it is a pointer fact, not a frame fact: the
+  // scene says where the rows are, the pointer says which one it is on, and
+  // nothing needs a round trip.
+  // A hover is the only warning a click gives. Asking the host to render the
+  // session under the pointer means the click finds a frame already in memory
+  // instead of starting a render — the difference between instant and a pause.
+  const warmed = new Set();
+  let warmTimer = 0;
+  function warmSession(id) {
+    if (!id || warmed.has(String(id))) return;
+    clearTimeout(warmTimer);
+    warmTimer = setTimeout(() => {
+      warmed.add(String(id));
+      const params = new URLSearchParams({ session: String(id), w: window.innerWidth, h: window.innerHeight });
+      if (sidebarOffset > 0) params.set('sidebar', String(sidebarOffset));
+      fetch('/warm?' + params.toString()).catch(() => {});
+    }, 80);
+  }
+
+  window.addEventListener('mousemove', (event) => {
+    const tab = tabHit(event.clientX, event.clientY);
+    const item = sidebarHit(event.clientX, event.clientY);
+    if (tab) warmSession(tab.id);
+    else if (item && item.kind === 'session') warmSession(item.id);
+    const hit = tab || item;
+    if (!hit) {
+      hover.style.display = 'none';
+      document.body.style.cursor = '';
+      return;
+    }
+    document.body.style.cursor = 'pointer';
+    hover.style.display = 'block';
+    hover.style.left = (tab ? tab.x : 6) + 'px';
+    hover.style.top = hit.y + 'px';
+    hover.style.width = (tab ? tab.width : (meta.sidebar.width - 12)) + 'px';
+    hover.style.height = hit.height + 'px';
+  });
+
+  window.addEventListener('mousedown', (event) => {
+    const tab = tabHit(event.clientX, event.clientY);
+    if (!tab) return;
+    event.preventDefault();
+    switchTo(tab.id);
+  });
+
+  window.addEventListener('resize', reflow);
+  window.addEventListener('click', () => document.body.focus());
+  (async () => {
+    // A URL that already names a session starts at once. Asking for the session
+    // list first put a round trip in front of the first frame, for a value the
+    // URL already had.
+    if (!session) await ensureSession();
+    if (!session) {
+      // Nothing to attach to: the picker is the only useful thing on screen.
+      empty.classList.remove('show');
+      openPicker();
+      return;
+    }
+    connect();
+  })();
+})();
+</script>
+</body>
+</html>

@@ -6,6 +6,15 @@ name = "dfm-report"
 version = "0.2.0"
 license = "Apache-2.0 OR MIT"
 summary = "DFM findings for a model, with the flagged geometry rendered in the Spore itself"
+description = "Design-for-manufacture findings beside the geometry they refer to: the Spore draws the flagged features itself, so a finding is never a row without a picture."
+
+[docs]
+usage = ["dfm-report", "dfm-report --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["science", "graphics"]
+keywords = ["dfm", "cad", "3d", "manufacturing"]
 
 [engine]
 soil = ">=0.1"
@@ -32,6 +41,9 @@ scene = { path = "model/data.json", media_type = "application/json" }
 "soil:canvas-gpu" = "hand that frame to Canvas, which owns the window"
 "soil:vfs" = "read the bundled DFM scene the renderer draws"
 
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
 [denied]
 "soil:http" = ["findings are host-supplied; the Spore has no network path"]
 "wasi:filesystem" = ["the host owns the workspace root"]

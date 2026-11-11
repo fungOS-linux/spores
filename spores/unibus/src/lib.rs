@@ -1,4 +1,4 @@
-//! soil:unibus Spore: a read-only AI inbox.
+//! The inbox Spore: a read-only projection of `soil:unibus` metadata.
 //!
 //! The host supplies `soil:unibus` frames and `soil:records` storage. This
 //! module owns the mapping from bus metadata to records, the triage state, and

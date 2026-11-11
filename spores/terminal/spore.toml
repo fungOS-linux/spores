@@ -7,7 +7,16 @@ name = "terminal"
 version = "0.1.0"
 license = "MIT"
 summary = "Browse Mycelium targets and open a terminal session"
+description = "A terminal that lists the Mycelium targets this machine may reach and opens a host-mediated session, without ever holding SSH credentials itself."
 homepage = "https://github.com/fungOS-linux/spores"
+
+[docs]
+usage = ["terminal", "terminal --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["developer-tools", "utilities"]
+keywords = ["terminal", "ssh", "mycelium", "shell"]
 
 [engine]
 soil = ">=0.1"
@@ -18,7 +27,9 @@ abi = { mycelium = "0.1.0", terminal = "0.1.0" }
 path = "module.wasm"
 
 [ui]
-entry = "ui/terminal.lua"
+# The terminal itself. `ui/terminal.lua` stays as the status/fallback projection
+# for a surface that cannot draw a grid.
+entry = "ui/grid.lua"
 jit = true
 hot_reload = true
 
@@ -27,11 +38,12 @@ default = "canvas"
 surfaces = ["web", "native", "canvas"]
 
 [grants]
-"soil:mycelium.directory" = "list Mycelium targets visible to this Spore"
-"soil:mycelium.shell" = "open a host-mediated SSH PTY to a listed target"
-"soil:mycelium.exec" = "run a non-interactive command on a listed target"
+"soil:mycelium" = "list Mycelium targets visible to this Spore; open a host-mediated SSH PTY to a listed target; run a non-interactive command on a listed target"
 "soil:terminal" = "present a bounded cell grid and receive normalized input"
 
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
 [denied]
 # SSH, credentials, routes and host keys stay in the Mycelium host capability.
 transport = ["socket", "quic", "iroh", "ssh"]

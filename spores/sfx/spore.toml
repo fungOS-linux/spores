@@ -1,0 +1,61 @@
+schema = 1
+
+[spore]
+id = "dev.fungos.sfx"
+name = "sfx"
+version = "0.1.0"
+license = "MIT"
+summary = "Event-driven soundboard: unibus events to the room you are listening in"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+# `audio` is the route-aware `soil:audio` package. The portable `wasi:audio`
+# sink is the layer beneath it, not what this Spore imports.
+abi = { canvas = "1.0.0", appdata = "1.0.0", vfs = "1.0.0", audio = "0.1.0" }
+
+# The view is composed against the SDK package, not a per-Spore copy of the UI
+# library. `tend` inlines this exact version; `spore.lock` pins it.
+[deps]
+"fungos.ui" = "0.1.0"
+
+[module]
+path = "module.wasm"
+
+[ui]
+entry = "ui/board.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+surfaces = ["canvas", "native"]
+
+[grants]
+# The mapping is this Spore's document, so it lives in this Spore's appdata.
+"soil:appdata" = "read and write the event→sound mapping"
+# Samples are workspace objects. The mapping stores the path and the blake3
+# content id; the Spore verifies the id before a sample can play.
+"soil:vfs" = "read sample objects by workspace path, verified by content id"
+# The host resolves a room name to a receiver. The Spore never sees an address.
+"soil:audio" = "open the room the principal is listening in and write PCM"
+"soil:canvas" = "present the soundboard surface"
+
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
+"wasi:random" = "a deterministic scheduler seed"
+[denied]
+# The host owns the bus session. It reads `rules[].kind` from the snapshot and
+# calls `act` with `sfx.event`; the Spore never polls or publishes.
+"soil:unibus" = ["a window is not a bus subscriber; the host delivers matched events"]
+"soil:records.write" = ["the mapping is private appdata, not a shared book"]
+"soil:vfs-mut" = ["a soundboard reads its samples; it does not edit the workspace"]
+"wasi:audio" = ["all playback goes through soil:audio so the room is resolved once"]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+
+[presentation]
+badge = "S"
+color = "#f0b35e"

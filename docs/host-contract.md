@@ -10,10 +10,22 @@ if it looks fine on one surface.
 | Canvas | rendering on web, native, and in-window; layout; input normalization; asset resolution | document semantics |
 | Soil | which host to launch, grant enforcement, module lifecycle | view content |
 
-**Rule:** one scene pipeline. The Spore does not ship an HTML renderer, a
-terminal renderer, or a Canvas renderer. Canvas renders all three surfaces from
-the same Lua-produced scene. A Spore that branches on host identity will
-eventually behave differently on one of them.
+The "never owns" column describes the Lua scene pipeline. A GPUI Spore owns
+layout, typography and pixels; it still never owns a window, a device handle,
+or an input device.
+
+**Rule (scene spores):** one scene pipeline. A scene Spore does not ship an
+HTML renderer, a terminal renderer, or a Canvas renderer. Canvas renders all
+three surfaces from the same Lua-produced scene. A Spore that branches on host
+identity will eventually behave differently on one of them.
+
+**GPUI spores are the second, deliberate model.** A new Spore that draws its
+own interface renders it with GPUI inside the Spore and hands the host a
+texture; the host still owns the WebGPU device and the compositor. The
+boundary is the same one — no window, swapchain, or native handle — but
+layout, typography and pixels belong to the Spore. See
+[`gpui-spores.md`](gpui-spores.md). The scene path above remains the contract
+for existing Lua spores and for views that should inherit Canvas chrome.
 
 ## Launch
 
@@ -79,7 +91,11 @@ return M
 
 - `role` is a Coherence role (`text`, `muted`, `primary`, `success`, `warning`,
   `danger`), never RGB.
-- The UI returns a content tree. Canvas assigns coordinates and renders.
+- The view presents its tree. With `fungos.ui` that is `ui.present(tree)`, which
+  lays the tree out — host Taffy when the host offers one, the kit's own pass when
+  it does not — and paints primitives into the scene. No host mounts a tree it is
+  handed: a view that returns one instead of presenting it paints nothing, and the
+  snapshot still looks correct, which is why that mistake survives review.
 - Determinism: same snapshot in, same scene out. No clock, no randomness, no
   I/O. Canvas runs Lua only when it supplies input or a new snapshot.
 - `kind` is a Canvas primitive hint (`text`, `code`, `image`, `diagram`, `rule`,

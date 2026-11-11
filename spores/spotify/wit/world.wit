@@ -1,0 +1,12 @@
+// Spotify Spore ABI.
+//
+// The Spore owns Connect semantics: device selection, URI normalization and
+// the command vocabulary. The host owns the OAuth bearer token and the
+// allowlisted origin; neither ever reaches the guest as bytes.
+package fungos:spotify@0.1.0;
+
+world spotify {
+  import soil:http/http@0.1.0;
+
+  export run: func(args: list<string>) -> result<string, string>;
+}

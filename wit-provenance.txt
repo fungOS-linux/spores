@@ -1,0 +1,86 @@
+# Vendored soil WIT, and where each copy came from.
+#
+# A Spore builds its guest against its own `wit/deps`, so soil's contracts are
+# copied into each package rather than linked. A symlink cannot be used from
+# here: this repository is checked out both on its own and as soil's
+# `spores-public` submodule, and no relative target resolves in both. A copy it
+# is, then -- but a recorded one, so drift is loud instead of silent.
+#
+# `tools/check-wit-provenance.sh` fails when a listed file hashes to something
+# other than the blob beside it (a hand edit, or a bump that changed the copy
+# without changing this record), and when a vendored copy exists that this file
+# does not name. It needs no network and no soil checkout.
+#
+# It cannot tell that soil has moved on: noticing that needs soil present, which
+# is a dependency decision rather than a check.
+#
+# Each row is <path> and the git blob SHA of the canonical file it was copied
+# from. Bumping a copy means copying soil's file over it and putting the new
+# blob here in the same commit.
+#
+# The check reads the covered packages out of the rows below rather than keeping
+# its own list of filenames. Adding a row for `soil:foo` therefore makes every
+# vendored `soil:foo` copy in the tree something that must be recorded -- which
+# is the half that failed before: the copies were found by a filename glob, so
+# a package nobody had thought of was never looked for.
+#
+# Coverage is not yet complete. This repository vendors roughly twenty soil
+# packages; the three below are the ones whose drift has actually bitten. A
+# package that is not covered here is neither checked nor claimed to be current.
+
+# --- soil-records.wit -------------------------------------------------------
+# source:      fungOS-linux/soil, wit/soil-records.wit
+# soil-commit: a7f23664f0912b31809cae50c97752a95df18ca7 (soil main)
+
+spores/contacts/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
+spores/crm/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
+spores/unibus/wit/deps/soil-records/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
+
+# --- soil-spore.wit ---------------------------------------------------------
+# source:      fungOS-linux/soil, wit/soil-spore.wit
+# soil-commit: 35d960cdcdbc0db61cef34734f53316dca44fe38 (soil main)
+#
+# `title` joined the catalog entry: a package names how it is shown (a window
+# title, a launcher row) without turning its slug into a label. Every copy moved
+# together, because a catalog entry that carries a field in one Spore and not
+# another is the drift this file exists to catch.
+#
+# `surface` and `surface-kind` landed here: a Spore declares the views it ships,
+# and a host can tell before opening anything whether it can present one.
+#
+# All four copies moved together. They could not have moved separately: the two
+# hosts were built on `soil-spore-host`, a crate that exists only at soil
+# `4d4271b` -- a commit that is not on soil's main and predates both this
+# contract and the `spores-public` submodule. Recording one copy and leaving
+# the rest behind is the lie this file exists to prevent, so this section stayed
+# empty until `spores/spore-catalog` put both hosts back on soil's main.
+
+spores/launcher/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
+spores/launcher-gpui/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
+spores/launcher-host/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
+spores/spore-browser/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
+spores/spore-browser-host/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
+spores/probe-gpui/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
+
+# --- soil-surface-import.wit ------------------------------------------------
+# source:      fungOS-linux/soil, wit/soil-surface-import.wit
+# soil-commit: 697be58c0ed9fc57d5cd9e642b89b3d88e129500 (soil main, PR #38)
+#
+# `browser` joined `surface-import.kind`: a host-provided browser view is a kind
+# of import, and the enum could not say so before.
+
+spores/surface-probe/wit/deps/soil-surface-import/package.wit 2e9482b034b952c44d02ec9ea17004ba372a4474
+
+# --- soil-surface.wit + soil-input -----------------------------------------
+# source:      fungOS-linux/soil, wit/soil-surface.wit and wit/soil-input
+# soil-commit: surface freeze 1.1.0
+#
+# The canvas package retired: chrome and dragshift import the frozen surface
+# world, whose theme interface sits behind the theme generation. Input types
+# are vendored as their own package rather than restated in the surface file.
+
+spores/dragshift/wit/deps/soil-surface.wit e58932babc960328edb94267bbb13f24000709d4
+spores/chrome/wit/deps/soil-surface.wit e58932babc960328edb94267bbb13f24000709d4
+spores/dragshift/wit/deps/soil-input/package.wit b2c3877cba008a5dde64c11de34e50e6fc0ac38b
+spores/chrome/wit/deps/soil-input/package.wit b2c3877cba008a5dde64c11de34e50e6fc0ac38b
+spores/surface-probe/wit/deps/soil-input/package.wit b2c3877cba008a5dde64c11de34e50e6fc0ac38b

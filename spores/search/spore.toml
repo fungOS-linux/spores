@@ -1,0 +1,49 @@
+# Spore manifest, schema 1.
+
+schema = 1
+
+[spore]
+id = "dev.fungos.search"
+name = "search"
+version = "0.1.0"
+license = "MIT"
+summary = "Fuzzy search, ranking, and action dispatch"
+description = "One query over documents, commands and actions: ranked results, with the action a result performs named in the result itself."
+homepage = "https://github.com/fungOS-linux/spores"
+
+[docs]
+usage = ["search QUERY", "search --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["utilities", "productivity"]
+keywords = ["search", "launcher", "fuzzy", "actions"]
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { canvas = "1.0.0" }
+
+[module]
+path = "module.wasm"
+
+[ui]
+entry = "ui/launcher.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+surfaces = ["canvas", "web", "native"]
+
+[grants]
+"soil:canvas" = "present the search results"
+"soil:search" = "resolve a query to locators"
+
+[denied]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+
+[presentation]
+badge = "S"
+color = "#ff8c00"

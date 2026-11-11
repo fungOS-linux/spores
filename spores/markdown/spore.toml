@@ -11,7 +11,16 @@ name = "markdown"
 version = "0.1.0"
 license = "MIT"
 summary = "Markdown reader/editor with a hot-reloadable Lua UI"
+description = "Read and edit Markdown as one document. Rust owns the model, Lua owns every pixel, so a running editor can be restyled without a rebuild."
 homepage = "https://github.com/fungOS-linux/spores"
+
+[docs]
+usage = ["markdown [FILE]", "markdown --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["productivity"]
+keywords = ["markdown", "editor", "notes", "documents"]
 
 [engine]
 soil = ">=0.1"

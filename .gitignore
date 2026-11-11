@@ -1,4 +1,5 @@
 /target
+**/target
 **/*.rs.bk
 
 # Generated live inbox snapshot (metadata from AgentMail)
@@ -7,3 +8,6 @@ spores/unibus/tools/__pycache__/
 
 # Generated live records snapshot
 spores/unibus/examples/contacts_live.lua
+
+# The wasm rasterizer and its glue are built, not checked in.
+spores/worklog/web/pkg/

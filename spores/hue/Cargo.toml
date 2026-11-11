@@ -1,0 +1,23 @@
+[package]
+name = "spore-hue"
+description = "Philips Hue CLI: groups, lights, scenes and colour over the local bridge API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+# rlib for the native tests, cdylib for the wasm32-wasip2 component.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cli-http = { path = "../cli-http" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wit-bindgen = "0.57"
+
+# wit-bindgen emits unsafe shims and export_name; isolate that to this Spore.
+[lints.rust]
+unsafe_code = "allow"

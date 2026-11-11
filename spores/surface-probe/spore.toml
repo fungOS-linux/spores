@@ -6,6 +6,15 @@ name = "surface-probe"
 version = "0.1.0"
 license = "MIT"
 summary = "Fixture Spore for soil:surface-import events and normalized input"
+description = "A fixture, not an app: it imports one host-reviewed surface, receives normalized input, and reports what arrived so the surface ABI can be tested."
+
+[docs]
+usage = ["surface-probe"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["developer-tools", "graphics"]
+keywords = ["fixture", "surface", "abi", "input"]
 
 [engine]
 soil = ">=0.1"
@@ -26,3 +35,7 @@ surfaces = ["native", "canvas"]
 
 [grants]
 "soil:surface-import" = "open the host-reviewed fixture surface and send normalized input"
+"soil:input" = "read normalized input events"
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"

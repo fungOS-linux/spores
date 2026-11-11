@@ -21,18 +21,45 @@ local function sw(px) return 8 * px / W end
 local function sh(px) return 8 * px / H end
 local function ts(px) return px / ((base() or 16) * 1.25) end
 
-local function rect(id, x, y, w, h, ink, opacity, radius)
+-- See docs/interaction-gap.md: `widget.hit` has no host, so calling it crashed
+-- the module in Canvas. Use it when present, otherwise keep the spec addressable.
+local pending_hits = {}
+local function hit(spec)
+  if type(widget) == "table" and type(widget.hit) == "function" then
+    widget.hit(spec)
+  else
+    pending_hits[#pending_hits + 1] = spec
+  end
+end
+M.pending_hits = pending_hits
+M.hit = hit
+
+-- Canvas has no layout service (see docs/interaction-gap.md). Prefer the host's
+-- `canvas.layout` when one provides it, otherwise lay the tree out in Lua.
+local function lay(tree, width, height)
+  if canvas and canvas.layout then return canvas.layout(tree, width, height) end
+  return ui.layout(tree, width, height)
+end
+
+-- Canvas rejects ink roles it does not know rather than falling back to body
+-- text. A surface the theme does not name has to be spelled with one it does.
+local INK = { surface = "muted", background = "muted" }
+local function ink(name)
+  return INK[name] or name
+end
+
+local function rect(id, x, y, w, h, role, opacity, radius)
   canvas.rect {
-    id = id, ink = ink or "surface", opacity = opacity or 1.0,
+    id = id, ink = ink(role or "surface"), opacity = opacity or 1.0,
     radius = radius or 12,
     translation = { nx(x), ny(y), Z },
     scale = { sw(math.max(1, w)), sh(math.max(1, h)), 1 },
   }
 end
 
-local function text(id, value, x, y, px, ink, z)
+local function text(id, value, x, y, px, role, z)
   canvas.text {
-    id = id, text = tostring(value or ""), ink = ink or "text",
+    id = id, text = tostring(value or ""), ink = ink(role or "text"),
     translation = { nx(x), ny(y), z or (Z + 0.1) },
     scale = { ts(px), ts(px), 1 },
   }
@@ -79,7 +106,7 @@ local function layout_tree(snapshot)
       layout = { height = row_h, padding = { top = 9, right = 10, bottom = 7, left = 10 } },
       children = {
         label("contact-" .. index .. "-name", contact.name, name),
-        label("contact-" .. index .. "-org", contact.org ~= "" and contact.org or (contact.title ~= "" and contact.title or "—"), small),
+        label("contact-" .. index .. "-org", (contact.org or "") ~= "" and contact.org or ((contact.title or "") ~= "" and contact.title or "—"), small),
       },
     }
   end
@@ -100,7 +127,7 @@ local function layout_tree(snapshot)
   if selected then
     detail_children[1] = label("contacts-detail-name", selected.name, math.max(24, b * 1.7), { height = 42 })
     local role = selected.org or ""
-    if selected.title ~= "" then role = role .. (role ~= "" and "  ·  " or "") .. selected.title end
+    if (selected.title or "") ~= "" then role = role .. (role ~= "" and "  ·  " or "") .. selected.title end
     detail_children[2] = label("contacts-detail-role", role ~= "" and role or "—", small, { height = 20 })
     detail_children[3] = { id = "contacts-detail-rule", kind = "rule", layout = { height = 1 } }
     detail_children[4] = label("contacts-detail-section", "CONTACT", small, { height = 22 })
@@ -112,8 +139,8 @@ local function layout_tree(snapshot)
     for _, value in ipairs(selected.emails or {}) do detail("EMAIL  ·  " .. value, "text") end
     for _, value in ipairs(selected.phones or {}) do detail("PHONE  ·  " .. value, "text") end
     for _, value in ipairs(selected.addresses or {}) do detail("ADDRESS  ·  " .. value, "text") end
-    if selected.birthday ~= "" then detail("BIRTHDAY  ·  " .. selected.birthday, "text") end
-    if selected.note ~= "" then
+    if (selected.birthday or "") ~= "" then detail("BIRTHDAY  ·  " .. selected.birthday, "text") end
+    if (selected.note or "") ~= "" then
       row = row + 1
       detail_children[row] = label("contacts-detail-note", selected.note, small, { height = 120 })
     end
@@ -142,7 +169,7 @@ end
 
 function M.render(snapshot)
   snapshot = apply_event(snapshot or {})
-  local laid = canvas.layout(layout_tree(snapshot), W, H)
+  local laid = lay(layout_tree(snapshot), W, H)
   local b = base()
 
   rect("contacts-bg", 0, 0, W, H, "background", 1.0, 0)
@@ -173,7 +200,7 @@ function M.render(snapshot)
   for index = 1, math.min(#(snapshot.contacts or {}), 18) do
     local row = find(laid, "contact-" .. index)
     if row then
-      widget.hit {
+      hit {
         id = "contact-" .. index,
         label = "hit",
         x = nx(row.rect.x),

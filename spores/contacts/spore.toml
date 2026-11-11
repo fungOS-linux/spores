@@ -6,6 +6,15 @@ name = "contacts"
 version = "0.1.0"
 license = "Apache-2.0 OR MIT"
 summary = "Personal contacts with explicit CRM projections"
+description = "Personal contacts first, with CRM entries as explicit projections. A contact is yours; a projection into a brand's CRM is a named act, not a side effect."
+
+[docs]
+usage = ["contacts", "contacts --version"]
+man = "docs/man.md"
+
+[catalog]
+categories = ["communication", "productivity"]
+keywords = ["contacts", "people", "crm"]
 
 [engine]
 soil = ">=0.1"
@@ -27,6 +36,9 @@ surfaces = ["canvas", "native", "web"]
 [grants]
 "soil:records" = "read/write personal contacts and write explicit CRM projections"
 
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
 [denied]
 "soil:http" = ["contact data has no network authority"]
 "wasi:filesystem" = ["the host maps namespaces to books"]

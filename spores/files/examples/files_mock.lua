@@ -1,0 +1,51 @@
+-- A snapshot with the shape `files-serve --once` prints, for previews and tests.
+-- The sizes and names are invented; the structure is not.
+return {
+  revision = 1,
+  title = "files",
+  workspace = "Studio",
+  root = "studio",
+  path = "Projects/orbit",
+  updated_ms = 1762560000000,
+  crumbs = {
+    { name = "Studio", path = "" },
+    { name = "Projects", path = "Projects" },
+    { name = "orbit", path = "Projects/orbit" },
+  },
+  roots = {
+    { id = "studio", name = "Studio", bytes = 73400320000, files = 18422, folders = 1904, current = true, available = true },
+    { id = "archive", name = "Archive", bytes = 214748364800, files = 4021, folders = 311, current = false, available = true },
+  },
+  totals = { bytes = 73400320000, files = 18422, folders = 1904, scanned = 20326, errors = 1, truncated = false },
+  kinds = {
+    { id = "images", label = "Images", bytes = 30064771072, files = 9210 },
+    { id = "video", label = "Video", bytes = 21474836480, files = 84 },
+    { id = "documents", label = "Documents", bytes = 8589934592, files = 611 },
+    { id = "archives", label = "Archives", bytes = 6442450944, files = 201 },
+    { id = "code", label = "Code", bytes = 4294967296, files = 7120 },
+    { id = "audio", label = "Audio", bytes = 2147483648, files = 982 },
+    { id = "text", label = "Text", bytes = 786432000, files = 210 },
+    { id = "other", label = "Other", bytes = 104857600, files = 4 },
+  },
+  listing = {
+    { name = "assets", path = "Projects/orbit/assets", kind = "directory", bytes = 0, items = 214 },
+    { name = "build", path = "Projects/orbit/build", kind = "directory", bytes = 0, items = 38 },
+    { name = "docs", path = "Projects/orbit/docs", kind = "directory", bytes = 0, items = 12 },
+    { name = "src", path = "Projects/orbit/src", kind = "directory", bytes = 0, items = 96 },
+    { name = "Cargo.toml", path = "Projects/orbit/Cargo.toml", kind = "file", bytes = 1842, media_type = "application/toml", modified = "2026-11-08" },
+    { name = "README.md", path = "Projects/orbit/README.md", kind = "file", bytes = 9412, media_type = "text/markdown", modified = "2026-11-07" },
+    { name = "orbit.key", path = "Projects/orbit/orbit.key", kind = "file", bytes = 52428800, media_type = "application/x-iwork-keynote", modified = "2026-11-02" },
+    { name = "orbit-preview.png", path = "Projects/orbit/orbit-preview.png", kind = "file", bytes = 24117248, media_type = "image/png", modified = "2026-11-06" },
+    { name = "orbit-session.mov", path = "Projects/orbit/orbit-session.mov", kind = "file", bytes = 1879048192, media_type = "video/quicktime", modified = "2026-11-01" },
+    { name = "release-notes.pdf", path = "Projects/orbit/release-notes.pdf", kind = "file", bytes = 2684354, media_type = "application/pdf", modified = "2026-10-30" },
+  },
+  listing_total = 10,
+  listing_truncated = false,
+  largest = {
+    { name = "orbit-session.mov", path = "Projects/orbit/orbit-session.mov", bytes = 1879048192 },
+    { name = "raw-footage.mov", path = "Projects/orbit/assets/raw-footage.mov", bytes = 1288490188 },
+    { name = "orbit.key", path = "Projects/orbit/orbit.key", bytes = 52428800 },
+    { name = "orbit-preview.png", path = "Projects/orbit/orbit-preview.png", bytes = 24117248 },
+    { name = "release-notes.pdf", path = "Projects/orbit/release-notes.pdf", bytes = 2684354 },
+  },
+}

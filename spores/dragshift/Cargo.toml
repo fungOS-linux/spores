@@ -1,0 +1,16 @@
+[package]
+name = "spore-dragshift"
+description = "Convert and edit a dropped file from a radial menu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+serde_json = "1"
+wit-bindgen = "0.41"
+
+[lints]
+workspace = true
