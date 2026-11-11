@@ -75,11 +75,10 @@ module's real imports.
 
 ## Host requirement
 
-The module imports `soil:ble`, `soil:records`, and `soil:time`. The current
-`soil-ble-host` binary links only `soil:ble` + WASI, so it can scan a simulated
-or real device but cannot yet instantiate this Spore. A device host must link
-the records and monotonic-clock capabilities too; that host wiring is the next
-integration step, not a change to this Spore.
+The module imports `soil:ble`, `soil:records`, and `soil:time`. On desktop,
+`soil-dev-host` composes those with `soil:unibus` and runs this Spore against
+the paced simulator (or `--real` for CoreBluetooth/BlueZ). `soil-ble-host`
+remains the single-protocol BLE CLI and links only `soil:ble` + WASI.
 
 ## Simulator
 
