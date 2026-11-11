@@ -33,12 +33,8 @@ keywords = ["store", "install", "updates", "packages", "reviews"]
 [engine]
 soil = ">=0.1"
 target = "wasm32-wasip2"
-abi = { canvas = "1.0.0", webgpu = "0.3.0-rc.2", canvas-gpu = "0.1.0", http = "0.1.0" }
+abi = { canvas = "1.0.0" }
 
-[module]
-# The GPUI shopfront: laid out in the guest, rendered through wasi:webgpu, and
-# presented to Canvas with soil:canvas-gpu. The guest never gets a window.
-path = "module.wasm"
 
 [ui]
 entry = "ui/store.lua"
@@ -71,16 +67,9 @@ role = "store"
 
 [grants]
 "soil:canvas" = "present the storefront"
-"wasi:webgpu" = "render the shopfront into one Canvas-owned texture"
-"soil:canvas-gpu" = "present that texture; the host owns the surface and window"
-"soil:http" = "read the catalog and reviews from the store the operator configured"
-"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
-"wasi:clocks" = "GPUI's scheduler needs monotonic timing"
-"wasi:filesystem" = "std and fontdb import the interface; the host grants no preopens"
-"wasi:io" = "component-model async transport"
-"wasi:random" = "GPUI's deterministic scheduler seed"
 
 [denied]
+"soil:http" = ["the signed index is fetched and verified by the host"]
 "soil:spore.catalog" = ["the view names an intent; the host reads the catalog"]
 "soil:spore.install" = ["installing is the host's authority, not the window's"]
 
