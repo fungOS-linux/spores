@@ -1,0 +1,18 @@
+// Vitals: cross-device health fusion, no UI and no radio.
+//
+// Device Spores own protocols and write signal.sample.v1 records. This Spore
+// owns the wearer-scoped health policy and writes vitals.summary.v1 plus a
+// latest-value bus frame for a native (GPUI) viewer host.
+package fungos:vitals@0.1.0;
+
+world vitals-spore {
+  import soil:records/records@0.1.0;
+  import soil:unibus/bus@0.1.0;
+  import soil:time/time@1.0.0;
+
+  /// `seed`, `once`, or `loop`; see README.md.
+  export run: func(args: list<string>) -> result<_, string>;
+
+  /// The last summary, as JSON, for a host that wants a snapshot.
+  export snapshot: func() -> result<list<u8>, string>;
+}

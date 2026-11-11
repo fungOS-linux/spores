@@ -102,6 +102,7 @@ spores/markdown            Markdown reader/editor
 spores/files               VFS browser + storage census (files.myc)
 spores/unibus              read-only inbox (dev.fungos.inbox)
 spores/worklog             cross-tool timeline (dev.fungos.worklog)
+spores/vitals              cross-device health fusion (dev.fungos.vitals)
 spores/terminal            terminal Spore
 spores/terminal-core       terminal semantics shared by the tmux and host front ends
 spores/terminal-host       native terminal host
