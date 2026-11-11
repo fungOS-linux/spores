@@ -173,7 +173,7 @@ fn find_target<'a>(
 ) -> Option<&'a soil::ble::types::Device> {
     devices.iter().find(|device| {
         if let Some(wanted) = &args.device {
-            device.ring_id.as_deref() == Some(wanted.as_str())
+            device.device_id.as_deref() == Some(wanted.as_str())
                 || device.handle.to_string() == *wanted
                 || device
                     .name
