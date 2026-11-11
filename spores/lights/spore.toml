@@ -1,0 +1,47 @@
+# Lights: a room-first control surface for the local Hue bridge.
+#
+# The view is Lua only. The host owns the bridge, the Geode lease, and every
+# action; this package owns the composition and the interaction vocabulary.
+
+schema = 1
+
+[spore]
+id = "dev.fungos.lights"
+name = "lights"
+version = "0.1.0"
+license = "MIT"
+summary = "Room-first Hue lighting control for the local bridge"
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+# No guest triple: Soil runs the Lua directly. A wasm module would name one here.
+target = "soil"
+abi = { canvas = "1.0.0" }
+
+# The composed artifact is built against this exact UI kit.
+[deps]
+"fungos.ui" = "0.5.0"
+
+[ui]
+entry = "ui/lights.lua"
+jit = true
+hot_reload = true
+
+[launch]
+default = "canvas"
+surfaces = ["canvas", "web", "native"]
+
+[presentation]
+badge = "L"
+color = "#ffb45c"
+
+[catalog]
+categories = ["system", "utilities"]
+keywords = ["hue", "lights", "rooms", "scenes"]
+
+# No grants: this is a pure projection. The host supplies the snapshot and
+# routes the `lights.*` intents through the Geode-backed Hue client.
+[denied]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
