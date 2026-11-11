@@ -29,8 +29,8 @@ use gpui::{
 };
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
 use serde_json::Value;
-use soil::canvas_gpu::surface;
-use soil::http::http;
+use soil::present::surface;
+use soil::spore::catalog;
 
 /// IBM Plex Sans, SIL Open Font License 1.1. A wasm component has no system
 /// fonts, so the Spore ships the one face its view names.
@@ -76,55 +76,27 @@ struct Row {
     publisher: String,
 }
 
-fn get(path: &str) -> Result<Vec<u8>, String> {
-    let request = http::Request {
-        url: format!("{ORIGIN}{path}"),
-        method: http::Method::Get,
-        headers: vec![http::Header {
-            name: "accept".to_string(),
-            value: "application/json".to_string(),
-        }],
-        body: None,
-        credential: None,
-        max_bytes: 1 << 20,
-        timeout_ms: 5_000,
-    };
-    let response = http::fetch(&request).map_err(|error| format!("fetch {path}: {error:?}"))?;
-    if response.status != 200 {
-        return Err(format!("fetch {path}: status {}", response.status));
-    }
-    Ok(response.body)
-}
-
-fn catalog() -> Result<(Vec<Row>, String), String> {
-    let body = get("/api/catalog")?;
-    let value: Value = serde_json::from_slice(&body).map_err(|error| format!("catalog: {error}"))?;
-    let source = value["source"]["name"].as_str().unwrap_or("store").to_string();
-    let mut rows = Vec::new();
-    for entry in value["entries"].as_array().cloned().unwrap_or_default() {
-        let document = &entry["document"];
-        rows.push(Row {
-            name: document["name"].as_str().or(entry["id"].as_str()).unwrap_or("?").to_string(),
-            summary: document["summary"].as_str().unwrap_or("").to_string(),
-            version: entry["version"].as_str().unwrap_or("").to_string(),
-            state: entry["state"].as_str().unwrap_or("available").to_string(),
-            rating: entry["ratings"]["current"]["weighted"]
-                .as_f64()
-                .filter(|value| *value > 0.0),
-            publisher: entry["publisher"].as_str().unwrap_or("unknown").to_string(),
-        });
-    }
+fn catalog_rows() -> Result<(Vec<Row>, String), String> {
+    let entries = catalog::entries().map_err(|error| format!("catalog: {error:?}"))?;
+    let mut rows: Vec<Row> = entries
+        .into_iter()
+        .map(|entry| Row {
+            name: if entry.title.is_empty() { entry.name.clone() } else { entry.title.clone() },
+            summary: entry.summary.clone(),
+            version: entry.version.clone(),
+            state: "installed".to_string(),
+            rating: None,
+            publisher: "installed".to_string(),
+        })
+        .collect();
     rows.sort_by_key(|row| row.name.to_lowercase());
-    Ok((rows, source))
+    Ok((rows, "installed".to_string()))
 }
 
-/// Who is asking, as far as the store can tell.
+/// Who is asking. Without a gateway on this path the honest answer is the
+/// machine, not an invented account.
 fn account() -> String {
-    let Ok(body) = get("/api/whoami") else {
-        return "local".to_string();
-    };
-    let value: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    value["principal"].as_str().unwrap_or("local").to_string()
+    "local".to_string()
 }
 
 fn render() -> Result<(), String> {
@@ -160,7 +132,7 @@ fn render() -> Result<(), String> {
         },
     );
 
-    let (rows, source) = catalog()?;
+    let (rows, source) = catalog_rows()?;
     let account = account();
     let viewport = (width as f32, height as f32);
     let window = app
