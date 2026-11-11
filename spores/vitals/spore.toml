@@ -10,7 +10,7 @@ name = "vitals"
 version = "0.1.0"
 license = "MIT"
 summary = "Wearer-scoped health fusion across ring and watch signals"
-description = "Reads signal.sample.v1 records, applies the ring-primary/watch-fallback policy, and writes vitals.summary.v1 plus a latest-value bus frame. The Spore owns the vitals.view.v1 card model; a GPUI renderer host draws it. Sleep stages are selected, not averaged; steps stay per device; stale values are unknown."
+description = "Reads signal.sample.v1 records, applies the ring-primary/watch-fallback policy, and writes vitals.summary.v1, a latest-value bus frame, and the vitals.view.v1 record for the renderer Spore. Sleep stages are selected, not averaged; steps stay per device; stale values are unknown."
 homepage = "https://github.com/fungOS-linux/spores"
 
 [engine]
@@ -26,7 +26,7 @@ default = "native"
 surfaces = ["native"]
 
 [grants]
-"soil:records" = "read signal/device records and write vitals.summary and vitals.latest"
+"soil:records" = "read signal/device records and write vitals.summary, vitals.latest, and vitals.view"
 "soil:unibus" = "publish the latest vitals.summary.v1 frame for a GPUI host"
 "soil:time" = "monotonic observation and loop ticks; no wall clock"
 "wasi:cli" = "Rust std stdio for the host's log stream"

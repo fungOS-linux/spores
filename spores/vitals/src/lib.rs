@@ -177,6 +177,7 @@ fn once(now: u64, args: &Args) -> Result<Value, String> {
     let summary_id = format!("{}:{now}", args.wearer);
     upsert("vitals.summary", &summary_id, core::SCHEMA, &summary)?;
     upsert("vitals.latest", &args.wearer, core::SCHEMA, &summary)?;
+    upsert("vitals.view", &args.wearer, "vitals.view.v1", &view)?;
     publish_summary(&summary)?;
 
     VIEW.with(|slot| *slot.borrow_mut() = view);

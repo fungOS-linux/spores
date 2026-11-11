@@ -19,7 +19,8 @@ vitals loop [--wearer W] [--iterations N] [--interval-ms N]
 - `seed` writes deterministic owner/watch/ring and guest/ring samples, plus
   device state. It is the hardware-free data set for the GPUI viewer.
 - `once` scans `signal`, fuses one wearer-scoped summary, writes
-  `vitals.summary` and `vitals.latest`, and publishes `vitals.summary.v1`.
+  `vitals.summary`, `vitals.latest`, and `vitals.view`, and publishes
+  `vitals.summary.v1`.
 - `loop` repeats the cycle on `soil:time` ticks. A real host would run this as a
   small supervisor; the dev host is one-shot.
 
@@ -58,7 +59,8 @@ freshness, and the no-sum rule.
 
 - Reads `signal` (`signal.sample.v1`) and ignores malformed bodies.
 - Writes `vitals.summary` keyed `<wearer>:<observed_at>` and `vitals.latest`
-  keyed `<wearer>`, both schema `vitals.summary.v1`.
+  keyed `<wearer>`, both schema `vitals.summary.v1`, plus `vitals.view` keyed
+  `<wearer>` with schema `vitals.view.v1` for a renderer Spore.
 - Publishes one `vitals.summary.v1` frame per cycle. The body is the same JSON;
   a GPUI host can poll records or observe the bus.
 
