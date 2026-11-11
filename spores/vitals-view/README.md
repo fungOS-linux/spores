@@ -12,6 +12,8 @@ Canvas owns the window, compositor, input, and capture. The Spore owns the UI
 structure, labels, values, units, sources, freshness, and the no-total rule. No
 window, swapchain, or native handle enters the guest.
 
+![vitals-view rendered through soil:canvas-gpu](assets/vitals-view.png)
+
 ## Run
 
 Seed the records first with the headless `vitals` Spore:
