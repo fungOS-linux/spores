@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 anyhow = "1"
+# Local wasip2 branch: released gpui has no from_offscreen / headless wasm path.
 gpui = { path = "/Users/ajmwagar/src/fungOS/gpui-fast/crates/gpui", default-features = false, features = ["headless"] }
 gpui_wgpu = { path = "/Users/ajmwagar/src/fungOS/gpui-fast/crates/gpui_wgpu", default-features = false, features = ["headless"] }
 serde_json = "1"
