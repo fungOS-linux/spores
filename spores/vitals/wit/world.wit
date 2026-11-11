@@ -1,8 +1,8 @@
-// Vitals: cross-device health fusion, no UI and no radio.
+// Vitals: cross-device health fusion and the Spore-owned view model.
 //
 // Device Spores own protocols and write signal.sample.v1 records. This Spore
-// owns the wearer-scoped health policy and writes vitals.summary.v1 plus a
-// latest-value bus frame for a native (GPUI) viewer host.
+// owns the wearer-scoped health policy and returns vitals.view.v1 for a GPUI
+// renderer host. It has no radio and no pixels.
 package fungos:vitals@0.1.0;
 
 world vitals-spore {

@@ -1,7 +1,8 @@
-//! Vitals Spore: health fusion over the records device Spores write.
+//! Vitals Spore: health fusion and the Spore-owned view model over the records
+//! device Spores write.
 //!
-//! No radio, no UI, no ambient clock. A native GPUI host can read the latest
-//! record or subscribe to the `vitals.summary.v1` bus frame and own the pixels.
+//! No radio, no ambient clock, no pixels. A GPUI renderer host calls `view()`
+//! and draws the cards; it does not recompute health policy.
 
 use std::cell::RefCell;
 
