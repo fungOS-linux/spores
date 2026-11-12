@@ -26,7 +26,7 @@ surfaces = ["native"]
 [grants]
 "soil:http" = "talk to the Hue bridge the host allowlists; the bridge key stays in Geode"
 "wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
-"wasi:clocks" = "std monotonic timing for local logging latencies"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
 "wasi:io" = "component-model async transport"
 
 [denied]

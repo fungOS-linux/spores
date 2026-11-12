@@ -46,8 +46,10 @@ const element = (extra = {}) => {
     getContext: () => ({
       setTransform() {},
       clearRect() {},
+      fillRect() {},
       drawImage() { blits += 1; },
       putImageData() { pasted += 1; },
+      fillStyle: '',
     }),
     addEventListener: (type, fn) => { handlers[type] = fn; },
     fire: (type, event) => { if (handlers[type]) handlers[type](event); },
@@ -99,9 +101,10 @@ class FakeRenderer {
   async render(document, width, height) {
     rendered.push({ document, width, height });
     // One lit pixel, so "the page blitted something" is not the same claim as
-    // "the page blitted an empty buffer".
+    // "the page blitted an empty buffer" — a frame with nothing lit in it is the
+    // empty-frame case the page now shouts about.
     const rgba = new Uint8ClampedArray(width * height * 4);
-    rgba[0] = 33;
+    rgba[0] = 200;
     return rgba;
   }
 }
@@ -200,8 +203,13 @@ if (createdWith === 0) problems.push('the page never created a renderer');
 if (fontFetches !== 1) problems.push(`the font was fetched ${fontFetches} time(s), not once`);
 if (fontCachePuts !== 1) problems.push('the font was not cached under its content id');
 if (rendered.length === 0) problems.push('the page never asked the rasterizer for a frame');
-if (rendered[0] && !rendered[0].document.includes('WORKLOG')) {
-  problems.push('the first frame was not the served scene');
+if (!rendered.some((entry) => entry.document.includes('WORKLOG'))) {
+  problems.push('the served scene was never rendered');
+}
+// The probe runs before the first scene, so an empty frame can be attributed to
+// the document or to the GPU path without a person guessing.
+if (!rendered.some((entry) => entry.document.includes('"probe"'))) {
+  problems.push('the page did not run its probe frame');
 }
 if (pasted === 0) problems.push('the page never painted the rendered pixels');
 if (blits === 0) problems.push('the page never blitted a frame');
@@ -265,7 +273,10 @@ if (scrollable) {
 
 // The renderer is asked for the surface it draws into, not for whatever the
 // window happened to be: a frame at the wrong extent is a frame that gets scaled.
+// The probe is the exception — it is 64x64 on purpose, because it asks whether the
+// GPU path works at all, not whether the layout does.
 for (const frame of rendered) {
+  if (frame.document.includes('"probe"')) continue;
   if (frame.width !== WIDTH || frame.height !== HEIGHT) {
     problems.push(`a frame was rendered at ${frame.width}x${frame.height}, not ${WIDTH}x${HEIGHT}`);
   }

@@ -15,23 +15,18 @@ mod guest;
 
 use std::fmt::Write as _;
 
+use hue_client::{Bridge, on_off, parse_hex, pretty, sorted};
 use serde_json::{Value, json};
 
 pub use cli_http::{Http, Method, Request, Response};
-
-/// Largest response the Spore will accept from a bridge.
-pub const MAX_BODY: u32 = 1024 * 1024;
-/// Longest a bridge request may take before the host gives up.
-pub const TIMEOUT_MS: u32 = 10_000;
+pub use hue_client::{MAX_BODY, TIMEOUT_MS, rgb_to_xy};
 
 pub fn run(args: &[String], http: &mut dyn Http) -> Result<String, String> {
     Command::parse(args)?.execute(http)
 }
 
 struct Command {
-    bridge: String,
-    key: String,
-    credential: Option<String>,
+    bridge: Bridge,
     device: String,
     json: bool,
     target: Target,
@@ -86,9 +81,7 @@ impl Command {
                 "--json" => json = true,
                 "--help" | "-h" => {
                     return Ok(Self {
-                        bridge: String::new(),
-                        key: String::new(),
-                        credential: None,
+                        bridge: Bridge::pairing("http://localhost").expect("help bridge"),
                         device: "spores#hue".into(),
                         json,
                         target: Target::Group("0".into()),
@@ -145,9 +138,7 @@ impl Command {
                 return Err("pair does not take --key or --credential".into());
             }
             return Ok(Self {
-                bridge,
-                key: String::new(),
-                credential: None,
+                bridge: Bridge::pairing(bridge)?,
                 device: device.or(operand).unwrap_or_else(|| "spores#hue".into()),
                 json,
                 target: Target::Group("0".into()),
@@ -155,9 +146,11 @@ impl Command {
             });
         }
 
-        let (key, credential) = match (key, credential) {
-            (Some(key), None) if !key.is_empty() => (key, None),
-            (None, Some(credential)) if !credential.is_empty() => (String::new(), Some(credential)),
+        let bridge = match (key, credential) {
+            (Some(key), None) if !key.is_empty() => Bridge::with_key(bridge, key)?,
+            (None, Some(credential)) if !credential.is_empty() => {
+                Bridge::with_credential(bridge, credential)?
+            }
             (Some(_), Some(_)) => {
                 return Err("--key and --credential are mutually exclusive".into());
             }
@@ -175,8 +168,6 @@ impl Command {
 
         Ok(Self {
             bridge,
-            key,
-            credential,
             device: device.unwrap_or_else(|| "spores#hue".into()),
             json,
             target,
@@ -202,51 +193,18 @@ impl Command {
         }
     }
 
-    fn url(&self, path: &str) -> String {
-        if self.credential.is_some() {
-            format!("{}/api/__CREDENTIAL__{path}", self.bridge)
-        } else {
-            format!("{}/api/{}{path}", self.bridge, self.key)
-        }
-    }
-
     fn get(&self, http: &mut dyn Http, path: &str) -> Result<Value, String> {
-        let response = http.fetch(Request {
-            url: self.url(path),
-            method: Method::Get,
-            headers: vec![("accept".into(), "application/json".into())],
-            body: None,
-            credential: self.credential.clone(),
-        })?;
-        decode(response)
+        self.bridge.get(http, path)
     }
 
     fn put(&self, http: &mut dyn Http, path: &str, body: Value) -> Result<Value, String> {
-        let bytes = serde_json::to_vec(&body).map_err(|error| error.to_string())?;
-        let response = http.fetch(Request {
-            url: self.url(path),
-            method: Method::Put,
-            headers: vec![
-                ("accept".into(), "application/json".into()),
-                ("content-type".into(), "application/json".into()),
-            ],
-            body: Some(bytes),
-            credential: self.credential.clone(),
-        })?;
-        decode(response)
+        self.bridge.put(http, path, body)
     }
 
     fn pair(&self, http: &mut dyn Http) -> Result<String, String> {
-        let body = serde_json::to_vec(&json!({ "devicetype": self.device }))
-            .map_err(|error| error.to_string())?;
-        let response = http.fetch(Request {
-            url: format!("{}/api", self.bridge),
-            method: Method::Post,
-            headers: vec![("content-type".into(), "application/json".into())],
-            body: Some(body),
-            credential: None,
-        })?;
-        let value = decode(response)?;
+        let value = self
+            .bridge
+            .post(http, "", json!({ "devicetype": self.device }))?;
         if self.json {
             return Ok(pretty(&value));
         }
@@ -467,93 +425,6 @@ examples:
   hue --bridge http://192.168.1.10 --credential geode://home/hue/bridge on
   hue --bridge http://192.168.1.10 --key $HUE_KEY --light 3 color #ff8800
   hue --bridge http://192.168.1.10 --key $HUE_KEY --group 1 scene Relax";
-
-fn parse_hex(value: &str) -> Result<(u8, u8, u8), String> {
-    let hex = value.strip_prefix('#').unwrap_or(value);
-    if hex.len() != 6 {
-        return Err(format!("color: {value:?} is not #RRGGBB"));
-    }
-    let channel = |range: std::ops::Range<usize>| {
-        u8::from_str_radix(&hex[range], 16).map_err(|_| format!("color: {value:?} is not #RRGGBB"))
-    };
-    Ok((channel(0..2)?, channel(2..4)?, channel(4..6)?))
-}
-
-/// Convert sRGB to the CIE xy pair the Hue bridge expects.
-///
-/// The matrix is the sRGB D65 one Hue's developer documentation publishes; the
-/// values are rounded to four decimals because the bridge rejects longer ones.
-pub fn rgb_to_xy(r: u8, g: u8, b: u8) -> (f64, f64) {
-    fn gamma(channel: u8) -> f64 {
-        let value = f64::from(channel) / 255.0;
-        if value > 0.040_45 {
-            ((value + 0.055) / 1.055).powf(2.4)
-        } else {
-            value / 12.92
-        }
-    }
-    let r = gamma(r);
-    let g = gamma(g);
-    let b = gamma(b);
-    let x = r * 0.664_511 + g * 0.154_324 + b * 0.162_028;
-    let y = r * 0.283_881 + g * 0.668_433 + b * 0.047_685;
-    let z = r * 0.000_088 + g * 0.072_310 + b * 0.986_039;
-    let sum = x + y + z;
-    if sum <= f64::EPSILON {
-        return (0.0, 0.0);
-    }
-    (round4(x / sum), round4(y / sum))
-}
-
-fn round4(value: f64) -> f64 {
-    (value * 10_000.0).round() / 10_000.0
-}
-
-fn decode(response: Response) -> Result<Value, String> {
-    if !(200..300).contains(&response.status) {
-        return Err(format!("bridge: HTTP {}", response.status));
-    }
-    let value: Value = serde_json::from_slice(&response.body)
-        .map_err(|error| format!("bridge: invalid JSON: {error}"))?;
-    // Hue reports application errors inside a 200 response.
-    if let Some(items) = value.as_array() {
-        for item in items {
-            if let Some(error) = item.get("error") {
-                let description = error
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown error");
-                return Err(format!("bridge: {description}"));
-            }
-        }
-    }
-    Ok(value)
-}
-
-fn sorted(value: &Value) -> Vec<(String, Value)> {
-    let mut entries: Vec<(String, Value)> = value
-        .as_object()
-        .map(|map| {
-            map.iter()
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
-    entries.sort_by_key(|(key, _)| key.parse::<u64>().unwrap_or(u64::MAX));
-    entries
-}
-
-fn on_off(state: &Value) -> &'static str {
-    match state.get("on").and_then(Value::as_bool) {
-        Some(true) => "on",
-        Some(false) => "off",
-        None => "?",
-    }
-}
-
-fn pretty(value: &Value) -> String {
-    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
-}
 
 #[cfg(test)]
 mod tests {

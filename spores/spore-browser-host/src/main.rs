@@ -4,7 +4,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
-use soil_spore_host::{Launcher, SporeCatalog, SporeEntry};
+use spore_catalog::{LaunchTarget, Launcher, SporeCatalog, SporeEntry, SurfaceKind};
 use wasmtime::component::HasSelf;
 use wasmtime::{Engine, Store};
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
@@ -39,8 +39,23 @@ impl soil::spore::catalog::Host for State {
                 version: entry.version.clone(),
                 summary: entry.summary.clone(),
                 workspace: entry.workspace.clone(),
-                default_surface: entry.default_surface.clone(),
-                surfaces: entry.surfaces.clone(),
+                default_surface: entry.manifest.launch.default.clone(),
+                // A declared surface is a record now: the page needs its name
+                // and artifact to open it, and its kind to say whether this
+                // host can.
+                surfaces: entry
+                    .surfaces()
+                    .into_iter()
+                    .map(|surface| soil::spore::catalog::Surface {
+                        name: surface.name,
+                        kind: match surface.kind {
+                            SurfaceKind::Canvas => soil::spore::catalog::SurfaceKind::Canvas,
+                            SurfaceKind::Web => soil::spore::catalog::SurfaceKind::Web,
+                        },
+                        entry: surface.entry,
+                        requires: surface.requires,
+                    })
+                    .collect(),
             })
             .collect())
     }
@@ -55,27 +70,39 @@ impl soil::spore::catalog::Host for State {
             .get(&id)
             .cloned()
             .ok_or(soil::spore::catalog::Error::NotFound)?;
-        if !entry.surfaces.iter().any(|candidate| candidate == &surface) {
-            return Err(soil::spore::catalog::Error::Invalid);
-        }
-        let target = self
+        // Which surfaces exist, and whether this host can present one, is the
+        // manifest's answer -- not a second one written here.
+        let target =
+            entry
+                .resolve(&surface, &SystemLauncher::KINDS)
+                .map_err(|error| match error.code() {
+                    "not-found" => soil::spore::catalog::Error::NotFound,
+                    _ => soil::spore::catalog::Error::Unsupported,
+                })?;
+        let opened = self
             .launcher
-            .launch(&entry, &surface)
+            .launch(&entry, &target)
             .map_err(|_| soil::spore::catalog::Error::Unsupported)?;
         Ok(soil::spore::catalog::Launched {
             id,
             surface,
-            target,
+            target: opened,
         })
     }
 }
 
 struct SystemLauncher;
 
+impl SystemLauncher {
+    /// The kinds this host can present. A host without a browser view would
+    /// leave `Web` out here and refuse those surfaces before opening anything.
+    const KINDS: [SurfaceKind; 2] = [SurfaceKind::Canvas, SurfaceKind::Web];
+}
+
 impl Launcher for SystemLauncher {
-    fn launch(&mut self, entry: &SporeEntry, surface: &str) -> Result<String, String> {
-        match surface {
-            "canvas" => {
+    fn launch(&mut self, entry: &SporeEntry, target: &LaunchTarget<'_>) -> Result<String, String> {
+        match target.kind {
+            Some(SurfaceKind::Canvas) => {
                 let workspace = entry
                     .workspace
                     .as_deref()
@@ -101,7 +128,7 @@ impl Launcher for SystemLauncher {
                 }
                 Ok(format!("workspace:{workspace}"))
             }
-            "web" => {
+            Some(SurfaceKind::Web) => {
                 let surface_id = entry
                     .workspace
                     .as_deref()
@@ -111,7 +138,7 @@ impl Launcher for SystemLauncher {
                 open_url(&url)?;
                 Ok(url)
             }
-            _ => Err(format!("unsupported launch surface {surface}")),
+            None => Err(format!("unsupported launch surface {}", target.surface)),
         }
     }
 }

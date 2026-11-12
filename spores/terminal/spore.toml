@@ -38,11 +38,12 @@ default = "canvas"
 surfaces = ["web", "native", "canvas"]
 
 [grants]
-"soil:mycelium.directory" = "list Mycelium targets visible to this Spore"
-"soil:mycelium.shell" = "open a host-mediated SSH PTY to a listed target"
-"soil:mycelium.exec" = "run a non-interactive command on a listed target"
+"soil:mycelium" = "list Mycelium targets visible to this Spore; open a host-mediated SSH PTY to a listed target; run a non-interactive command on a listed target"
 "soil:terminal" = "present a bounded cell grid and receive normalized input"
 
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
 [denied]
 # SSH, credentials, routes and host keys stay in the Mycelium host capability.
 transport = ["socket", "quic", "iroh", "ssh"]

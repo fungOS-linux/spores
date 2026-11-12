@@ -140,6 +140,7 @@ local function node(kind, props)
   if props.gap then props.gap = props.gap; space(props.gap, kind .. ".gap") end
   if props.pad then props.pad = space(props.pad, kind .. ".pad") end
   if props.h and type(props.h) == "number" then space(props.h, kind .. ".h") end
+  if props.w and type(props.w) == "number" then space(props.w, kind .. ".w") end
   if props.radius then props.radius = radius(props.radius, kind .. ".radius") end
   return props
 end
@@ -186,6 +187,7 @@ ui.glyph = {
   chevron = "▸", check = "✓", dot = "●", eye = "◉",
   -- Launcher surfaces. A Spore names a mark; the host draws it.
   home = "⌂", terminal = "❯", term = "❯", store = "◈", wiki = "▤", worklog = "▥",
+  markdown = "✎",
   sfx = "♪", ai = "✧", mcp = "⌁", webhook = "☁", confluence = "☁",
   manavault = "⚿", chrome = "◉", contacts = "☺", crm = "◫",
   dfm = "◔", gallery = "◨", git = "⑂", inbox = "✉", notify = "⚑",
@@ -1677,6 +1679,9 @@ lay_node = function(n, S, width)
     return { h = tallest, p = prims }
 
   elseif kind == "column" or kind == "card" or kind == "stack" then
+    -- A card may state its own outer width. That is what makes an app mark a
+    -- square instead of a full-width strip with a letter stranded in it.
+    if n.w then width = wx(S, n.w) end
     local spacing = hy(S, space(n.gap or "sm", kind .. ".gap"))
     local pad = n.pad or 0
     if kind == "card" then pad = pad > 0 and pad or ui.gap.sm end
@@ -1700,7 +1705,8 @@ lay_node = function(n, S, width)
     local height = math.max(n.h and hy(S, n.h) or 0, content + pady * 2)
     local prims = {}
     if kind == "card" then
-      prims[1] = rect_prim("surface", 0.9, radius("md", "card"), -wx(S, 4), 0, width + wx(S, 8), height)
+      prims[1] = rect_prim(n.ink or "surface", n.opacity or 0.9, radius("md", "card"),
+        -wx(S, 4), 0, width + wx(S, 8), height)
     end
     local y = -pady
     for index, child in ipairs(n.children) do
@@ -1726,20 +1732,22 @@ local BASE = 4
 
 local function snap(value) return math.max(BASE, math.floor(value / BASE) * BASE) end
 
--- The surface being drawn on, resolved and returned: the host's
--- `module.viewport` (a browser) or `module.inputs` (Canvas), else the fallback
--- the view passes, else the authoring size. A Spore handed a surface directly
--- (a document pane, a test) calls this instead of declaring host inputs it does
--- not own. Both values come back on the 4px base, so they are legal heights.
--- The box this render is fitted into: the host's window (`module.viewport`, or
--- `module.inputs` on an older host), else the fallback the view passes, else the
--- size it was authored at. A view that lays itself out in scene units alone
--- cannot know when a 25px label is too wide for a rail, so the reading lives
--- here and every view asks the same question.
+-- The box this render is fitted into: the host's window (`module.viewport` on a
+-- host that hands one over, else the declared `module.inputs`), else the
+-- fallback the view passes, else the size it was authored at. A view that lays
+-- itself out in scene units alone cannot know when a 25px label is too wide for
+-- a rail, so the reading lives here and every view asks the same question.
+-- Both values come back on the 4px base, so they are legal heights.
+--
+-- Only those two fields are read. A theme is token values, so asking it for a
+-- `viewport` gets a number back, not a box: that is how a stubbed theme turns
+-- into an index-a-number error far from the layout that asked.
 local function surface_size(width, height)
   local m = rawget(_G, "module")
-  local vp = m and (m.viewport or (m.theme and m.theme.viewport))
+  local vp = m and m.viewport
+  if type(vp) ~= "table" then vp = nil end
   local inputs = m and m.inputs
+  if type(inputs) ~= "table" then inputs = nil end
   local function positive(value)
     value = tonumber(value)
     return value and value > 0 and value or nil
@@ -1799,29 +1807,39 @@ end
 local function emit_controls(prims)
   for _, prim in ipairs(prims) do
     if prim.button then
-      if not (widget and widget.button) then
-        fail("a button needs widget.button from the host", 3)
+      -- The control space is 8 units square with its origin at the centre, and
+      -- the host refuses the whole module when a control falls outside it. A
+      -- control off the surface cannot be pressed anyway, so the honest thing
+      -- is to not offer it: a view longer than the window keeps its pixels and
+      -- loses only the presses nobody could have made.
+      local x, y = prim.translation[1], prim.translation[2]
+      local w, h = prim.scale[1], prim.scale[2]
+      local visible = x + w > -4 and x < 4 and y - h > -4 and y < 4
+      if visible then
+        if not (widget and widget.button) then
+          fail("a button needs widget.button from the host", 3)
+        end
+        local spec = prim.button
+        -- A local control is a view event, not an action route. Canvas rejects
+        -- an action that is not declared in the module manifest, so omitting it
+        -- here is what keeps a fixture view operable without a controller.
+        local route = spec.action
+        if spec["local"] then route = nil end
+        local button = {
+          id = spec.id,
+          label = spec.label,
+          action = route,
+          body = spec.body or {},
+          x = prim.translation[1], y = prim.translation[2],
+          width = prim.scale[1], height = prim.scale[2],
+          enabled = spec.enabled ~= false,
+          appearance = spec.appearance,
+        }
+        -- Older hosts reject an unknown `local` field on every button, so only
+        -- send it when this control actually is one.
+        if spec["local"] then button["local"] = true end
+        widget.button(button)
       end
-      local spec = prim.button
-      -- A local control is a view event, not an action route. Canvas rejects
-      -- an action that is not declared in the module manifest, so omitting it
-      -- here is what keeps a fixture view operable without a controller.
-      local route = spec.action
-      if spec["local"] then route = nil end
-      local button = {
-        id = spec.id,
-        label = spec.label,
-        action = route,
-        body = spec.body or {},
-        x = prim.translation[1], y = prim.translation[2],
-        width = prim.scale[1], height = prim.scale[2],
-        enabled = spec.enabled ~= false,
-        appearance = spec.appearance,
-      }
-      -- Older hosts reject an unknown `local` field on every button, so only
-      -- send it when this control actually is one.
-      if spec["local"] then button["local"] = true end
-      widget.button(button)
     elseif prim.host then
       if not (canvas and canvas.host_resource) then
         fail("host_surface needs canvas.host_resource; this host is too old", 3)

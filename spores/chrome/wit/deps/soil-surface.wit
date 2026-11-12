@@ -1,0 +1,112 @@
+// A surface is a rectangle the host has granted to a Spore: the Spore presents
+// a document into it and receives normalized input from it. The host owns the
+// window, the pixels and the input lifecycle; the Spore owns its layout, its
+// theme choice and its scene.
+//
+// One contract, many adapters: a winit window, a browser page and a bridge over
+// HTTP/SSE all implement this same interface. Nothing platform-specific belongs
+// in here.
+//
+// Limits (host-enforced):
+// - one granted surface per Spore; the host selects extent and display
+// - one present and one input per invocation; no per-frame callback
+// - input is normalized by soil:input; raw keycodes and scan codes never cross
+// - the Spore may hand in pixels it rendered (an RGBA document) but never
+//   receives a host-owned handle: no window, framebuffer or DRM handle, no
+//   path, no clock
+package soil:surface@1.1.0;
+
+interface surface {
+  use soil:input/types@1.0.0.{input};
+
+  enum failure {
+    /// The Spore has no grant for this surface.
+    denied,
+    /// The owner surface is not ready to present or accept input.
+    not-ready,
+    /// The supplied generation is older than the current owner state.
+    stale,
+    /// A present/input/frame budget was exceeded.
+    over-budget,
+    /// Malformed argument; no raw keycodes are accepted.
+    invalid,
+    /// The surface was closed by the host or the Spore.
+    closed,
+    /// The compositor or platform presenter failed.
+    backend,
+  }
+
+  record state {
+    /// Increases on target/navigation/focus/visibility changes.
+    generation: u64,
+    /// Bumped when the host theme changes. Refetch `theme.current` instead of
+    /// guessing, and do not ship tokens on every frame.
+    theme-generation: u64,
+    /// Host-selected logical extent; the Spore never chooses a display.
+    width: u32,
+    height: u32,
+    scale: f32,
+    focused: bool,
+    visible: bool,
+  }
+
+  /// Present into the space the host granted.
+  ///
+  /// `document` is a versioned `soil-scene` payload: a scene the host
+  /// rasterizes, an RGBA frame the Spore rendered, or a lease on a GPU texture.
+  /// It is bytes rather than a WIT type on purpose -- a new node kind must not
+  /// rebuild every Spore that draws. The host validates it and refuses anything
+  /// it cannot present, naming the reason.
+  present: func(document: list<u8>) -> result<state, failure>;
+
+  /// Read the current owner state without presenting.
+  observe: func() -> result<state, failure>;
+
+  /// Deliver one normalized event. `generation` must match the state the
+  /// caller last observed; a stale generation is refused, never reordered.
+  input: func(generation: u64, event: input) -> result<state, failure>;
+
+  /// Release the grant. Further calls return `closed`.
+  close: func() -> result<_, failure>;
+}
+
+interface theme {
+  record rgb {
+    r: u8,
+    g: u8,
+    b: u8,
+  }
+
+  enum mode {
+    light,
+    dark,
+  }
+
+  /// Theme tokens the host has already resolved. A Spore reads these instead of
+  /// hard-coding colours or guessing from a screenshot.
+  record tokens {
+    mode: mode,
+    background: rgb,
+    surface: rgb,
+    text: rgb,
+    muted: rgb,
+    primary: rgb,
+    success: rgb,
+    warning: rgb,
+    danger: rgb,
+    info: rgb,
+    /// Type scale in logical pixels.
+    micro: f32,
+    small: f32,
+    body: f32,
+    large: f32,
+    title: f32,
+    display: f32,
+    hero: f32,
+    space-two: f32,
+    radius: f32,
+  }
+
+  /// Current tokens. Refetch when `state.theme-generation` changes.
+  current: func() -> result<tokens, string>;
+}

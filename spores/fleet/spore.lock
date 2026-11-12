@@ -1,0 +1,6 @@
+spore-lock 1
+spore dev.fungos.fleet
+version 0.1.0
+file 59ee7dfefa8e1590394ea6a80170a35878f96362c21f8799b109800e334fe2ba 1553 spore.toml
+file 2962fd4cb82d126025f6324af9f7e0ef27916efa3c32015cb59e9b57a594b8a8 7872 ui/fleet.lua
+digest 8ee2b936c97a93faee2b82afe8fc2682e0721bb64cca310eeebc796c0a35741a

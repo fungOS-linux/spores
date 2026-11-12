@@ -1,0 +1,15 @@
+// The lights view as a Spore UI: GPUI renders into a host-owned GPU texture
+// and `soil:present` blits it. Pointer and key input arrive through
+// `soil:present/input`; Hue requests go through `soil:http` with a Geode
+// credential handle, never a bridge key in the guest.
+package fungos:lights-view@0.1.0;
+
+world runner {
+  include wasi:webgpu/imports@0.3.0-rc.2;
+  import soil:present/surface@0.1.0;
+  import soil:present/input@0.1.0;
+  import soil:present/cursor@0.1.0;
+  import soil:http/http@0.1.0;
+
+  export run: async func() -> u32;
+}

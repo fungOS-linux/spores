@@ -1,0 +1,85 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>scene rasterizer probe</title>
+<style>
+  body{background:#191919;color:#e9e9e7;font:13px ui-monospace,Menlo,monospace;padding:20px;margin:0}
+  pre{white-space:pre-wrap;margin:0 0 16px}
+  canvas{border:1px solid #2f2f2f}
+</style>
+<pre id="log">starting…</pre>
+<canvas id="out" width="360" height="240"></canvas>
+<script>
+// Does the wasm rasterizer draw anything in *this* browser?
+//
+// The worklog page paints the scene itself and is not the place to debug a GPU
+// path: a renderer that answers with an empty frame looks exactly like a dark
+// theme, and shipping that to the page shipped a grey screen twice. This page is
+// the bench. It runs two documents — one rect covering the surface, then the
+// real served scene — and prints what came back for each.
+const log = (line) => {
+  document.getElementById('log').textContent += `\n${line}`;
+  // And to the host that served this page: a browser's own numbers are the only
+  // evidence about a browser, and copying them out by hand is a round trip the
+  // host can take instead.
+  fetch(`probe-report/${encodeURIComponent(line)}`).catch(() => {});
+};
+const out = document.getElementById('out');
+const ctx = out.getContext('2d');
+
+// wgpu reports a validation failure through the console, not through an
+// exception, and a console nobody is reading is how a dropped render pass became
+// a grey page. These lines go to the host with the rest of the report.
+for (const level of ['error', 'warn']) {
+  const original = console[level].bind(console);
+  console[level] = (...args) => {
+    original(...args);
+    log(`console.${level}: ${args.map((value) => String(value)).join(' ').slice(0, 400)}`);
+  };
+}
+
+function census(rgba) {
+  let lit = 0, low = 255, high = 0;
+  for (let i = 0; i < rgba.length; i += 4) {
+    const value = rgba[i];
+    if (value < low) low = value;
+    if (value > high) high = value;
+    if (value > 70) lit += 1;
+  }
+  return { lit, range: `${low}..${high}`, first: Array.from(rgba.slice(0, 4)) };
+}
+
+(async () => {
+  try {
+    const fonts = await (await fetch('fonts.json', { cache: 'no-store' })).json();
+    const face = new Uint8Array(await (await fetch(fonts.url)).arrayBuffer());
+    log(`font ${fonts.id.slice(0, 12)} ${face.length} bytes`);
+
+    const module = await import('./pkg/scene.js');
+    await module.default();
+    const renderer = await module.SceneRenderer.create(face);
+    renderer.set_background(25, 25, 25);
+    renderer.set_body(24);
+    log('device: ok');
+
+    const probe = { kind: 'scene', schema: 1, nodes: [{
+      id: 'probe', type: 'rect', ink: 'primary', opacity: 1, radius: 0, rgb: [200, 40, 90],
+      transform: { translation: [-4, 4, 0], rotation: [0, 0, 0], scale: [8, 8, 1] },
+    }] };
+    const probeFrame = await renderer.render(JSON.stringify(probe), 64, 64);
+    const probeCensus = census(probeFrame);
+    log(`probe: ${probeCensus.lit} of 4096 lit · ${probeCensus.range} · first ${probeCensus.first}`);
+
+    const scene = await (await fetch('scene.json?w=360&h=240', { cache: 'no-store' })).text();
+    log(`scene: ${module.SceneRenderer.describe(scene)}`);
+    const frame = await renderer.render(scene, 360, 240);
+    const sceneCensus = census(frame);
+    log(`scene: ${sceneCensus.lit} lit · ${sceneCensus.range} · first ${sceneCensus.first}`);
+
+    const image = new ImageData(new Uint8ClampedArray(frame), 360, 240);
+    ctx.putImageData(image, 0, 0);
+    log(sceneCensus.lit === 0 ? 'RESULT: the rasterizer drew nothing' : 'RESULT: it draws');
+  } catch (error) {
+    log(`error: ${error.message || error}`);
+  }
+})();
+</script>

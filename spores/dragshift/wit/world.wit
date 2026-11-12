@@ -1,7 +1,8 @@
 package fungos:dragshift@0.1.0;
 
 world dragshift {
-  import soil:canvas@1.0.0;
+  import soil:surface/surface@1.1.0;
+  import soil:surface/theme@1.1.0;
 
   /// The state of the radial menu as JSON bytes. Canvas passes this to ui/radial.lua.
   export snapshot: func() -> result<list<u8>, string>;

@@ -20,6 +20,9 @@ from PIL import Image, ImageDraw, ImageFont
 # wrong-but-present face answers the geometry question the scene was drawn for.
 FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    # Arial Unicode carries the symbols the store draws (stars, arrows); plain
+    # Arial turns them into tofu in the preview even when the scene is right.
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/System/Library/Fonts/Supplemental/Arial.ttf",
     "/System/Library/Fonts/Helvetica.ttc",
 )

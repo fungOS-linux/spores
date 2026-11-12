@@ -42,6 +42,10 @@ surfaces = ["canvas", "native"]
 "soil:audio" = "open the room the principal is listening in and write PCM"
 "soil:canvas" = "present the soundboard surface"
 
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
+"wasi:random" = "a deterministic scheduler seed"
 [denied]
 # The host owns the bus session. It reads `rules[].kind` from the snapshot and
 # calls `act` with `sfx.event`; the Spore never polls or publishes.

@@ -46,12 +46,13 @@ canvas_module = "spore-dev-inbox"
 surfaces = ["web", "native", "canvas"]
 
 [grants]
-"soil:unibus.observe" = "poll email.* and chat.* metadata frames"
-"soil:records.read" = "read the local metadata cache"
-"soil:records.write" = "store/update metadata records"
-"soil:records.sync" = "export/apply record changes across devices"
+"soil:unibus" = "poll email.* and chat.* metadata frames"
+"soil:records" = "read the local metadata cache; store/update metadata records; export/apply record changes across devices"
 "soil:canvas" = "present the inbox surface"
 
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "monotonic timing for the guest's scheduler"
+"wasi:io" = "component-model async transport"
 [denied]
 # Sending is a separate future grant; this Spore is read-only.
 transport = ["socket", "quic", "iroh"]

@@ -6,7 +6,7 @@ A **Spore UI**, not a native companion app. The guest:
 2. builds the Apple Health-style activity rings, metric cards, and sleep hypnogram with **GPUI**;
 3. renders them through the Soil-provided `wasi:webgpu` device using GPUI Fast's
    offscreen `WgpuHeadlessRenderer`;
-4. presents the resulting texture through `soil:canvas-gpu`.
+4. presents the resulting texture through `soil:present`.
 
 Canvas owns the window, compositor, input, and capture. The Spore owns the UI
 structure, labels, values, units, sources, freshness, and the no-total rule. The
@@ -14,7 +14,7 @@ rings are display scales, not a second health policy: Move uses the fused
 per-bucket step estimate and never a sum. No window, swapchain, or native handle
 enters the guest.
 
-![vitals-view rendered through soil:canvas-gpu](assets/vitals-view.png)
+![vitals-view rendered through soil:present](assets/vitals-view.png)
 
 ## Run
 
@@ -26,7 +26,7 @@ soil-dev-host --records-dir .soil-dev/records spores/vitals/module.wasm once --w
 ```
 
 Then run the renderer through Soil's WebGPU host. It opens the records root
-read-only, links `wasi:webgpu` + `soil:canvas-gpu` + `soil:records`, and writes
+read-only, links `wasi:webgpu` + `soil:present` + `soil:records`, and writes
 the captured frame as the same BGR24 format `soil-webgpu` already uses:
 
 ```sh
@@ -44,7 +44,7 @@ inventing values or showing a guest's data.
 ## GPUI boundary
 
 This uses GPUI's `headless` feature: a real GPUI window renders against
-`WgpuContext::from_offscreen`, backed by `wasi:webgpu`. `soil:canvas-gpu` takes
+`WgpuContext::from_offscreen`, backed by `wasi:webgpu`. `soil:present` takes
 the texture by borrow; the host chooses the extent and composites it.
 
 The guest still has no authority over the window. A revoked surface closes the

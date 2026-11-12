@@ -1,0 +1,18 @@
+[package]
+name = "launcher-gpui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1"
+gpui = { git = "https://github.com/fungOS-linux/gpui-fast", rev = "60ebb175729ad2a17acf59d8e988e794ff4b7eb4", package = "gpui", default-features = false, features = ["headless"] }
+gpui_wgpu = { git = "https://github.com/fungOS-linux/gpui-fast", rev = "60ebb175729ad2a17acf59d8e988e794ff4b7eb4", package = "gpui_wgpu", features = ["headless"] }
+wgpu = { version = "30", default-features = false, features = ["wgsl"] }
+wgpu-wasi-webgpu = { git = "https://github.com/fungOS-linux/wgpu-wasi-webgpu", rev = "bec921356c366450408d5faee2d206b6a1b8061b" }
+wit-bindgen = "0.57"

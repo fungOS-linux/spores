@@ -19,6 +19,8 @@ use std::time::{Duration, UNIX_EPOCH};
 /// The page is part of the binary: a view host with an install-dependent file
 /// path would be a host that works only where it was built.
 const PAGE: &str = include_str!("../../web/index.html");
+/// The rasterizer's bench, not the worklog. See `web/probe.html`.
+const PROBE: &str = include_str!("../../web/probe.html");
 const MAX_LINE: u64 = 8 << 10;
 /// A browser asking for a scene is asking for a window, not for a poster.
 const MAX_SIDE: u32 = 4096;
@@ -240,6 +242,20 @@ fn handle(
             200,
             "text/html; charset=utf-8",
             PAGE,
+            &[("cache-control", "no-store")],
+        ),
+        // The bench reports to the host it came from, so the numbers a browser
+        // computes are readable without anyone copying them out of a page.
+        path if path.starts_with("/probe-report/") => {
+            let said = &path["/probe-report/".len()..];
+            eprintln!("probe-report: {said}");
+            respond(&mut stream, 204, "text/plain", "", &[])
+        }
+        "/probe" => respond(
+            &mut stream,
+            200,
+            "text/html; charset=utf-8",
+            PROBE,
             &[("cache-control", "no-store")],
         ),
         // The page renders with the same rasterizer the wall does: this host

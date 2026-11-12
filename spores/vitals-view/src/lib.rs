@@ -1,5 +1,5 @@
 //! Vitals view Spore: GPUI lays out the cards and activity rings,
-//! `wasi:webgpu` renders them, and `soil:canvas-gpu` presents the texture to
+//! `wasi:webgpu` renders them, and `soil:present` presents the texture to
 //! Canvas.
 //!
 //! The guest never gets a window or a swapchain. It reads the Spore-owned
@@ -29,7 +29,7 @@ use gpui::{
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
 use lyon::tessellation::{LineCap, LineJoin};
 use serde_json::{json, Value};
-use soil::canvas_gpu::surface;
+use soil::present::surface;
 use soil::records::records;
 
 /// IBM Plex Sans, SIL Open Font License 1.1. A wasm component has no system
@@ -197,7 +197,7 @@ fn render() -> Result<(), String> {
     );
 
     let texture = wgpu_wasi_webgpu::host_texture(texture);
-    surface::present(&texture).map_err(|error| format!("canvas present: {error}"))
+    surface::present(&texture).map_err(|error| format!("present: {error}"))
 }
 
 struct VitalsView {

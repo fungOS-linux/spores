@@ -1,21 +1,26 @@
 # The Spore Store front end. See fungOS-linux/soil docs/spore-store.md for the
 # service, the listing rules and the install pipeline.
 #
-# This slice is the composition: it draws a snapshot and emits intents. The
-# module that reads the signed index and calls `soil:spore.install` is the next
-# package revision, which is why the two grants it will need are denied below
-# rather than declared: a grant this package cannot call is a claim, not a
-# capability.
+# This slice is two views of one store. A GPUI component (`module.wasm`) draws
+# the shopfront, renders through `wasi:webgpu` and presents the texture with
+# `soil:canvas-gpu`; a browser draws `web/index.html`; and the Lua composition
+# stays as the fallback for a host that runs components but has no GPU surface.
+# All three read the same catalog from the store service.
+#
+# The module reads that catalog with `soil:http`, which is why the grant is
+# declared rather than denied: the guest calls it, and the host decides which
+# single origin it may reach. Installing stays the host's authority and stays
+# denied — the window names an intent, the host decides.
 
 schema = 1
 
 [spore]
 id = "dev.fungos.store"
 name = "store"
-version = "0.1.0"
+version = "0.2.0"
 license = "MIT"
 summary = "Browse, review and install Spore packages"
-description = "The storefront: categories, screenshots, ratings and a classified update queue, with install and update as named intents the host executes."
+description = "The storefront: categories, screenshots, ratings and a classified update queue, with install and update as named intents the host executes. The shell draws it as a GPUI component through wasi:webgpu; a browser draws the same store from web/index.html, with shareable links to each listing."
 homepage = "https://github.com/fungOS-linux/spores"
 
 [docs]
@@ -29,7 +34,13 @@ keywords = ["store", "install", "updates", "packages", "reviews"]
 [engine]
 soil = ">=0.1"
 target = "wasm32-wasip2"
-abi = { canvas = "1.0.0" }
+abi = { canvas = "1.0.0", webgpu = "0.3.0-rc.2", present = "0.1.0" }
+
+
+[module]
+# The GPUI shopfront: laid out in the guest, rendered through wasi:webgpu, and
+# presented with soil:present. The guest never gets a window or a socket.
+path = "module.wasm"
 
 [ui]
 entry = "ui/store.lua"
@@ -38,7 +49,21 @@ hot_reload = true
 
 [launch]
 default = "canvas"
+canvas_module = "spore-dev-store"
 surfaces = ["canvas", "web", "native"]
+
+# The shell draws the composition: a canvas surface whose artifact is this
+# package's `[ui] entry`.
+[[surfaces]]
+name = "canvas"
+kind = "canvas"
+
+# The same store as a page: what `store.myc` can serve to a browser and what a
+# host web view presents. `web/index.html` is the conventional artifact, so the
+# surface names its kind and nothing else.
+[[surfaces]]
+name = "store"
+kind = "web"
 
 # The host allowlists an exact id, role, digest and publisher before treating a
 # surface as the store. The role is what makes the storefront the trusted face;
@@ -48,11 +73,18 @@ role = "store"
 
 [grants]
 "soil:canvas" = "present the storefront"
+"wasi:webgpu" = "render the shopfront into one host-owned texture"
+"soil:present" = "hand the rendered frame to the presenter"
+"soil:spore" = "list the Spores this host has installed, through soil:spore.catalog"
+"soil:http" = "read the catalog from the one store origin the host allows"
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "GPUI's scheduler needs monotonic timing"
+"wasi:filesystem" = "std and fontdb import the interface; the host grants no preopens"
+"wasi:io" = "component-model async transport"
+"wasi:random" = "GPUI's deterministic scheduler seed"
 
 [denied]
-"soil:spore.catalog" = ["the view names an intent; the host reads the catalog"]
 "soil:spore.install" = ["installing is the host's authority, not the window's"]
-"soil:http" = ["the signed index is fetched and verified by the host"]
 
 [presentation]
 badge = "S"

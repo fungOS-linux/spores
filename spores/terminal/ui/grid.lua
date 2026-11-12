@@ -67,19 +67,23 @@ end
 
 local function paint_row(row, cols, y, cw, ch, size, ox)
   local x = 0
+  local runs = {}
   for index, run in ipairs(row.runs or {}) do
     local text = tostring(run[1] or "")
     local fg = run[2]
     local bg = run[3]
     local flags = tonumber(run[4]) or 0
 
-    -- A run of spaces is not a glyph: the cell is already the background. It
-    -- still advances the column, so the runs after it land where they belong.
-    local blank = text:match("^%s*$") ~= nil
+    -- A row is one line; a run is how part of it is painted. The line is
+    -- truncated at the column the grid ends on, because the runs are now
+    -- concatenated into one node and nothing else would stop them overflowing.
+    local span = math.min(#text, cols - x)
+    local piece = span > 0 and text:sub(1, span) or ""
+    local run_w = math.max(cw, span * cw)
 
-    if bg then
+    if bg and span > 0 then
       surface:rect("cell-bg-" .. tostring(row.y) .. "-" .. index,
-        ox + x * cw, y, math.max(cw, #text * cw), ch, ink(bg, "surface"), 1, 0)
+        ox + x * cw, y, run_w, ch, ink(bg, "surface"), 1, 0)
     end
 
     local fg_ink = ink(fg, "text")
@@ -89,9 +93,9 @@ local function paint_row(row, cols, y, cw, ch, size, ox)
       -- behind me, in front". Without a known background the theme's surface is
       -- the honest answer.
       fg_ink = bg_ink or ink(nil, "background")
-      if bg_ink == nil then
+      if bg_ink == nil and span > 0 then
         surface:rect("cell-inv-" .. tostring(row.y) .. "-" .. index,
-          ox + x * cw, y, math.max(cw, #text * cw), ch, ink(fg, "text"), 1, 0)
+          ox + x * cw, y, run_w, ch, ink(fg, "text"), 1, 0)
       end
     end
     if flags % (FAINT * 2) >= FAINT then
@@ -100,17 +104,25 @@ local function paint_row(row, cols, y, cw, ch, size, ox)
       fg_ink = ink(fg, "muted")
     end
 
-    if not blank then
-      surface:text("cell-" .. tostring(row.y) .. "-" .. index, text, ox + x * cw, y, size, fg_ink)
+    -- Spaces stay in the run list: the runs are concatenated into one node, so
+    -- a blank run is what keeps the run after it in its column.
+    if piece ~= "" then
+      runs[#runs + 1] = { text = piece, ink = fg_ink }
     end
 
-    if flags % (UNDERLINE * 2) >= UNDERLINE then
+    if flags % (UNDERLINE * 2) >= UNDERLINE and span > 0 then
       surface:rect("cell-ul-" .. tostring(row.y) .. "-" .. index,
-        ox + x * cw, y + ch - 1, math.max(cw, #text * cw), 1, fg_ink, 1, 0)
+        ox + x * cw, y + ch - 1, run_w, 1, fg_ink, 1, 0)
     end
 
     x = x + #text
     if x >= cols then break end
+  end
+
+  -- One node for the line. A row that changes colour ten times is still one
+  -- line, and painting it as ten nodes made a frame cost a node per run.
+  if #runs > 0 then
+    surface:text_runs("row-" .. tostring(row.y), runs, ox, y, size, nil)
   end
 end
 
@@ -124,11 +136,8 @@ local TAB = 34
 local ROW = 26
 local GROUP = { { "shell", "shells" }, { "ssh", "hosts" }, { "fleet", "fleet" }, { "mush", "desktops" } }
 
-local function paint_sidebar(frame, height, top)
-  local items = {}
-  surface:rect("nav-bg", 0, top, SIDEBAR, height - top, "surface", 0.22, 0, 0.05)
-
-  local y = top + 10
+local function sidebar_rows(frame)
+  local rows = {}
   for _, group in ipairs(GROUP) do
     local kind, heading = group[1], group[2]
     local targets = {}
@@ -136,10 +145,51 @@ local function paint_sidebar(frame, height, top)
       if target.kind == kind then targets[#targets + 1] = target end
     end
     if #targets > 0 then
-      text("nav-group-" .. kind, string.upper(heading), 12, y, 9, "muted")
-      y = y + 18
-      for index, target in ipairs(targets) do
-        text("nav-target-" .. kind .. "-" .. index, clip(target.label or target.name, 24), 12, y, 10, "text")
+      rows[#rows + 1] = { heading = heading, kind = kind }
+      for _, target in ipairs(targets) do
+        rows[#rows + 1] = { kind = kind, target = target }
+      end
+    end
+  end
+  return rows
+end
+
+local function paint_sidebar(frame, height, top, offset)
+  local rows = sidebar_rows(frame)
+  local total = 0
+  for _, row in ipairs(rows) do
+    if not row.heading then total = total + 1 end
+  end
+  -- The offset is a window over the device list, clamped to what can actually
+  -- scroll: an offset past the end would draw an empty panel and look like the
+  -- fleet went away.
+  local capacity = math.max(1, math.floor((height - top - 10) / ROW))
+  offset = math.min(math.max(0, offset), math.max(0, total - capacity))
+
+  local items, devices, shown = {}, 0, 0
+  local y = top + 10
+  local heading = nil
+  surface:rect("nav-bg", 0, top, SIDEBAR, height - top, "surface", 0.22, 0, 0.05)
+
+  for _, row in ipairs(rows) do
+    if row.heading then
+      -- A heading names the rows under it, so it scrolls with them rather than
+      -- pinning to the top: a label that stays while its list moves is a lie
+      -- about what is on screen.
+      heading = row
+    else
+      devices = devices + 1
+      if devices > offset then
+        if heading then
+          if shown > 0 then y = y + 8 end
+          if y + 18 + ROW > height then break end
+          text("nav-group-" .. heading.kind, string.upper(heading.heading), 12, y, 9, "muted")
+          y = y + 18
+          heading = nil
+        end
+        if y + ROW > height then break end
+        local target = row.target
+        text("nav-target-" .. row.kind .. "-" .. devices, clip(target.label or target.name, 24), 12, y, 10, "text")
         items[#items + 1] = {
           kind = "target",
           name = target.name,
@@ -147,15 +197,33 @@ local function paint_sidebar(frame, height, top)
           height = ROW - 4,
         }
         y = y + ROW
-        if y > height - ROW then break end
+        shown = shown + 1
       end
-      y = y + 8
     end
-    if y > height - ROW then break end
   end
 
   M.meta = M.meta or {}
-  M.meta.sidebar = { width = SIDEBAR, items = items }
+  M.meta.sidebar = {
+    width = SIDEBAR,
+    items = items,
+    -- The offset the view actually used, not the one it was asked for: the page
+    -- clamps its own wheel against this, so it has to see the clamp.
+    offset = offset,
+    total = total,
+    visible = shown,
+  }
+end
+
+--- How far the host has scrolled the device list.
+---
+--- The terminal's scrollback and its device list are two different lists, so
+--- they are two different offsets: `module.scroll` belongs to the producer's
+--- history, `module.sidebar` to the panel this view draws. Without a host the
+--- list starts at the top.
+local function sidebar_offset()
+  local host = rawget(_G, "module")
+  if type(host) ~= "table" or type(host.sidebar) ~= "table" then return 0 end
+  return math.max(0, math.floor(tonumber(host.sidebar.offset) or 0))
 end
 
 function M.render(frame)
@@ -189,7 +257,7 @@ function M.render(frame)
     M.meta.tabs = ui.paint_tabs(surface, 0, 0, width - ox, tab_height, strip, { size = 11, z = 0.07 })
     surface:rect("tab-strip-rule", 0, tab_height - 1, width, 1, "muted", 0.18, 0, 0.06)
   end
-  if sidebar > 0 then paint_sidebar(frame, height, tab_height) end
+  if sidebar > 0 then paint_sidebar(frame, height, tab_height, sidebar_offset()) end
 
   for _, row in ipairs(frame.lines or {}) do
     local y = tab_height + (tonumber(row.y) or 0) * ch

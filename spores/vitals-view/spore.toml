@@ -2,7 +2,7 @@
 #
 # The Spore reads the Spore-owned vitals.view record, lays out cards with GPUI,
 # renders into a host-provided GPU texture, and presents it through
-# soil:canvas-gpu. There is no second native window binary.
+# soil:present. There is no second native window binary.
 schema = 1
 
 [spore]
@@ -17,7 +17,7 @@ homepage = "https://github.com/fungOS-linux/spores"
 [engine]
 soil = ">=0.1"
 target = "wasm32-wasip2"
-abi = { webgpu = "0.3.0-rc.2", canvas-gpu = "0.1.0", records = "0.1.0" }
+abi = { spore = "0.1.0", canvas = "1.0.0", records = "0.1.0" }
 
 [module]
 path = "module.wasm"
@@ -28,7 +28,7 @@ surfaces = ["canvas", "native", "web"]
 
 [grants]
 "wasi:webgpu" = "render GPUI cards into one Canvas-owned texture"
-"soil:canvas-gpu" = "present that texture; the host owns the surface and window"
+"soil:present" = "present that texture; the host owns the surface and window"
 "soil:records" = "read the Spore-owned vitals.view record"
 "wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
 "wasi:clocks" = "GPUI's test dispatcher needs monotonic timing"
