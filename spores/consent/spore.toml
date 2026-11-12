@@ -34,3 +34,8 @@ surfaces = ["native"]
 role = "consent"
 
 [grants]
+
+[presentation]
+badge = "Co"
+color = "#58c39a"
+mark = "assets/icon.svg"

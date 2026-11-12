@@ -1,0 +1,385 @@
+//! elmers-ui — a read-only board of Elmers workflow runs.
+//!
+//! The Spore owns the view and nothing else. It asks the sidecar one question —
+//! `GET /runs` — and draws the answer. There is deliberately no way to start,
+//! stop, or edit a workflow from here: the run API is a list and a lookup, and
+//! this package imports exactly that. A UI that can run things is a different
+//! grant and a different review.
+//!
+//! The host owns the WebGPU device and the compositor surface; nothing in this
+//! file sees a window, a swapchain, or a display handle. `soil:http` is the
+//! bounded fetch the host mediates, so the URL is the only thing this Spore names.
+
+wit_bindgen::generate!({
+    path: "wit",
+    world: "runner",
+    with: {
+        "wasi:webgpu/webgpu@0.3.0-rc.2": wgpu_wasi_webgpu::wasi::webgpu::webgpu,
+    },
+    generate_all,
+});
+
+use gpui::{AnyWindowHandle, AppContext as _, HeadlessAppContext, PlatformTextSystem, px, size};
+use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
+use soil::present::{input, surface};
+use std::{borrow::Cow, sync::Arc};
+
+const LILEX: &[u8] = include_bytes!("../assets/Lilex-Regular.ttf");
+const LILEX_BOLD: &[u8] = include_bytes!("../assets/Lilex-Bold.ttf");
+
+/// The sidecar's read-only run list. One origin, named once.
+const RUNS_URL: &str = "http://127.0.0.1:8792/runs";
+/// The workflow graph the dashboard's "brain" view draws.
+const GRAPH_URL: &str = "http://127.0.0.1:8792/graph";
+const MAX_BODY: u32 = 512 * 1024;
+const TIMEOUT_MS: u32 = 5_000;
+
+pub mod brain;
+pub mod view;
+
+use view::{Board, HEADER_H, LIST_W, ROW_H, View, parse_graph, parse_runs};
+
+fn fetch_body(url: &str) -> Result<Vec<u8>, String> {
+    use soil::http::http as abi;
+    let response = abi::fetch(&abi::Request {
+        url: url.to_string(),
+        method: abi::Method::Get,
+        headers: vec![abi::Header {
+            name: "accept".to_string(),
+            value: "application/json".to_string(),
+        }],
+        body: None,
+        credential: None,
+        max_bytes: MAX_BODY,
+        timeout_ms: TIMEOUT_MS,
+    })
+    .map_err(|error| format!("http: {error:?}"))?;
+    if response.status != 200 {
+        return Err(format!("{url}: HTTP {}", response.status));
+    }
+    Ok(response.body)
+}
+
+fn fetch_runs(url: &str) -> Result<Vec<view::Run>, String> {
+    parse_runs(&fetch_body(url)?)
+}
+
+fn fetch_graph(url: &str) -> Result<Vec<view::Workflow>, String> {
+    parse_graph(&fetch_body(url)?)
+}
+
+fn present_frame(
+    context: &WgpuContext,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> anyhow::Result<()> {
+    let texture = context.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("elmers-ui frame"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    context.queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    let texture = wgpu_wasi_webgpu::host_texture(texture);
+    surface::present(&texture).map_err(|error| anyhow::anyhow!("present: {error}"))?;
+    Ok(())
+}
+
+fn render_frame() -> anyhow::Result<()> {
+    let (width, height) = surface::size();
+    let instance = wgpu_wasi_webgpu::instance();
+    let adapter = wit_bindgen::block_on(instance.request_adapter(&Default::default()))?;
+    let (device, queue) = wit_bindgen::block_on(adapter.request_device(&Default::default()))?;
+    let (context, format) = WgpuContext::from_offscreen(instance, adapter, device, queue)?;
+
+    let text = Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(LILEX_BOLD)])?;
+
+    let factory_context = context.clone();
+    let mut cx = HeadlessAppContext::with_platform(text, Arc::new(()), move || {
+        Ok(Some(Box::new(WgpuHeadlessRenderer::with_context(
+            factory_context.clone(),
+            format,
+        )?)))
+    });
+
+    // The kit's globals, then the view. Its context menus and popovers resolve
+    // their overlays through Root, so the window's root view is the kit's, with
+    // the board inside it.
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+    });
+
+    let board = cx.update(|cx| {
+        cx.new(|_| {
+            let mut board = Board::new();
+            board.apply_runs(fetch_runs(RUNS_URL));
+            board
+        })
+    });
+    let attached = board.clone();
+    board.update(&mut cx, |board, _| board.attach(&attached));
+
+    let scale = surface::scale() as f32;
+    let window = cx.open_window_scaled(size(px(width as f32), px(height as f32)), scale, {
+        let board = board.clone();
+        move |window, cx| cx.new(|cx| gpui_component::Root::new(board, window, cx))
+    })?;
+    let any: AnyWindowHandle = window.into();
+
+    let mut window_size = (width, height);
+    let mut dirty = true;
+    loop {
+        let size = surface::size();
+        if size != window_size {
+            window_size = size;
+            window.update(&mut cx, |_, window, _| {
+                window.resize(gpui::size(px(size.0 as f32), px(size.1 as f32)));
+            })?;
+            dirty = true;
+        }
+
+        // Anything that moves asks for the next frame until it stops: the graph
+        // settling, a camera flying to a node.
+        if board.update(&mut cx, |board, _| board.tick()) {
+            dirty = true;
+        }
+
+        // A board is a live thing: refresh on a slow tick so a run that finishes
+        // while someone is watching does not need a key press to appear.
+        let stale = board.update(&mut cx, |board, _| {
+            board
+                .fetched_at
+                .map(|at| at.elapsed().as_secs() >= 5)
+                .unwrap_or(true)
+        });
+        if stale {
+            let runs = board.update(&mut cx, |board, cx| {
+                board.apply_runs(fetch_runs(RUNS_URL));
+                cx.notify();
+                board.runs.len()
+            });
+            let _ = runs;
+            dirty = true;
+        }
+
+        if dirty {
+            cx.update_window(any, |_, window, app| {
+                let _ = window.draw(app);
+            })?;
+            let image = cx.capture_screenshot(any)?;
+            present_frame(&context, image.width(), image.height(), image.as_raw())?;
+            dirty = false;
+        }
+
+        if !input::interactive() {
+            break;
+        }
+        while let Some(event) = input::poll(0) {
+            match event {
+                input::Event::KeyInput(key) => {
+                    let name = key.key.to_ascii_lowercase();
+                    if board.update(&mut cx, |board, _| board.query_open()) {
+                        match name.as_str() {
+                            "escape" => {
+                                board.update(&mut cx, |board, cx| {
+                                    board.close_query();
+                                    cx.notify();
+                                });
+                            }
+                            "enter" => {
+                                board.update(&mut cx, |board, cx| {
+                                    board.commit_query();
+                                    cx.notify();
+                                });
+                            }
+                            "backspace" => {
+                                board.update(&mut cx, |board, cx| {
+                                    board.backspace();
+                                    cx.notify();
+                                });
+                            }
+                            "arrow-down" | "tab" => {
+                                board.update(&mut cx, |board, cx| {
+                                    board.move_query_cursor(1);
+                                    cx.notify();
+                                });
+                            }
+                            "arrow-up" => {
+                                board.update(&mut cx, |board, cx| {
+                                    board.move_query_cursor(-1);
+                                    cx.notify();
+                                });
+                            }
+                            _ => {
+                                if let Some(text) = key.text.clone()
+                                    && text.chars().count() == 1
+                                    && !key.control
+                                {
+                                    board.update(&mut cx, |board, cx| {
+                                        board.type_char(&text);
+                                        cx.notify();
+                                    });
+                                }
+                            }
+                        }
+                        dirty = true;
+                        continue;
+                    }
+                    match name.as_str() {
+                        "/" => {
+                            board.update(&mut cx, |board, cx| {
+                                board.open_query(view::Mode::Search);
+                                cx.notify();
+                            });
+                            dirty = true;
+                        }
+                        ":" => {
+                            board.update(&mut cx, |board, cx| {
+                                board.open_query(view::Mode::Command);
+                                cx.notify();
+                            });
+                            dirty = true;
+                        }
+                        "f" => {
+                            board.update(&mut cx, |board, cx| {
+                                let picked = board.picked_node();
+                                board.focus(picked);
+                                cx.notify();
+                            });
+                            dirty = true;
+                        }
+                        "q" => return Ok(()),
+                        "j" | "arrow-down" => {
+                            board.update(&mut cx, |board, cx| {
+                                match board.view {
+                                    View::Runs => board.move_selection(1),
+                                    View::Brain => board.move_picked(1),
+                                }
+                                cx.notify();
+                            });
+                            dirty = true;
+                        }
+                        "k" | "arrow-up" => {
+                            board.update(&mut cx, |board, cx| {
+                                match board.view {
+                                    View::Runs => board.move_selection(-1),
+                                    View::Brain => board.move_picked(-1),
+                                }
+                                cx.notify();
+                            });
+                            dirty = true;
+                        }
+                        "1" => {
+                            board.update(&mut cx, |board, cx| {
+                                board.view = View::Runs;
+                                cx.notify();
+                            });
+                            dirty = true;
+                        }
+                        "2" | "tab" => {
+                            board.update(&mut cx, |board, cx| {
+                                board.view = View::Brain;
+                                // The graph changes when a workflow is edited,
+                                // not on every tick; reload it when the view is
+                                // opened and it is already stale.
+                                let stale = board
+                                    .graph_at
+                                    .map(|at| at.elapsed().as_secs() >= 30)
+                                    .unwrap_or(true);
+                                if stale {
+                                    board.apply_graph(fetch_graph(GRAPH_URL));
+                                }
+                                cx.notify();
+                            });
+                            dirty = true;
+                        }
+                        "0" => {
+                            board.update(&mut cx, |board, cx| {
+                                board.fit_graph();
+                                cx.notify();
+                            });
+                            dirty = true;
+                        }
+                        "r" => {
+                            board.update(&mut cx, |board, cx| {
+                                match board.view {
+                                    View::Runs => board.apply_runs(fetch_runs(RUNS_URL)),
+                                    View::Brain => board.apply_graph(fetch_graph(GRAPH_URL)),
+                                }
+                                cx.notify();
+                            });
+                            dirty = true;
+                        }
+                        _ => {}
+                    }
+                }
+                // A click is a selection, not an action: the detail pane follows
+                // the pointer, and nothing here can start work.
+                input::Event::Button(button)
+                    if button.pressed && button.button == input::PointerButton::Left =>
+                {
+                    board.update(&mut cx, |board, cx| {
+                        if button.x < LIST_W {
+                            let index = ((button.y - HEADER_H) / ROW_H).max(0.0) as usize;
+                            if index < board.runs.len() {
+                                board.selected = index;
+                                cx.notify();
+                            }
+                        }
+                    });
+                    dirty = true;
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+struct Component;
+
+impl Guest for Component {
+    async fn run() -> u32 {
+        match render_frame() {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("elmers-ui: {error:#}");
+                1
+            }
+        }
+    }
+}
+
+export!(Component);
