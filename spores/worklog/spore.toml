@@ -38,7 +38,7 @@ surfaces = ["canvas", "native", "web"]
 # Read-only by grant set, not by intention. The receiver that ingests webhooks
 # is a host-side process; nothing in this Spore can write an event, reach a
 # network, or see a secret. That is what makes "who wrote this row?" answerable.
-"soil:records.read" = "read the worklog.event collection"
+"soil:records" = "read the worklog.event collection"
 "soil:canvas" = "present the worklog surface"
 
 [denied]
@@ -53,3 +53,4 @@ host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
 # character, not an asset: it cannot go missing on someone else's machine.
 badge = "W"
 color = "#8fbf7f"
+mark = "assets/icon.svg"

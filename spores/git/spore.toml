@@ -34,7 +34,7 @@ surfaces = ["canvas", "native", "web"]
 [grants]
 # Read-only presentation. The queue is a projection of tracker state, which
 # arrives as records; the view names intents and never performs one.
-"soil:records.read" = "read the review queue records"
+"soil:records" = "read the review queue records"
 "soil:canvas" = "present the landing queue surface"
 
 [denied]
@@ -49,3 +49,4 @@ host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
 [presentation]
 badge = "G"
 color = "#f0a35e"
+mark = "assets/icon.svg"

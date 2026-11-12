@@ -1,0 +1,6 @@
+spore-lock 1
+spore dev.fungos.spotify
+version 0.1.0
+file 22d06067ee2bbca6069e19ad356d5ab1fd1a2c1db1d21ebc31cc67ffa63f6a11 237805 module.wasm
+file 3a58fb97b5c487e0364174bd2ce326ee5181327229a5fdd6695c2b6e8fc783eb 901 spore.toml
+digest 6826be3d1b7dcd113515856eefa1d6852ae4fd4417a9fa3b9c606de452312e16

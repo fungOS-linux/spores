@@ -77,6 +77,11 @@ struct Row {
 
 struct LauncherView {
     rows: Vec<Row>,
+    /// Indices into `rows` that the current query matches, in order. With no
+    /// query this is every row, so the grid and the keyboard walk the same list.
+    visible: Vec<usize>,
+    /// The open search: `None` when the launcher is showing everything.
+    query: Option<String>,
     /// Keyboard selection, drawn as a ring.
     selected: usize,
     /// Pointer hover, drawn as a brighter tile. Held apart from `selected` so
@@ -91,7 +96,7 @@ impl LauncherView {
         match catalog::entries() {
             Ok(entries) => {
                 let count = entries.len();
-                let rows = entries
+                let rows: Vec<Row> = entries
                     .into_iter()
                     .map(|entry| Row {
                         id: SharedString::from(entry.id),
@@ -101,8 +106,11 @@ impl LauncherView {
                         default_surface: SharedString::from(entry.default_surface),
                     })
                     .collect();
+                let visible = (0..rows.len()).collect();
                 Self {
                     rows,
+                    visible,
+                    query: None,
                     selected: 0,
                     hovered: None,
                     status: SharedString::from(format!("{count} installed")),
@@ -110,11 +118,79 @@ impl LauncherView {
             }
             Err(error) => Self {
                 rows: Vec::new(),
+                visible: Vec::new(),
+                query: None,
                 selected: 0,
                 hovered: None,
                 status: SharedString::from(format!("catalog: {error:?}")),
             },
         }
+    }
+
+    /// Rows whose title or summary contains the query as a subsequence, the way
+    /// a fuzzy finder does: "trm" finds "Term", and a space starts a new term.
+    fn matches(&self, query: &str) -> Vec<usize> {
+        let needle: Vec<char> = query.to_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
+        self.rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| {
+                if needle.is_empty() {
+                    return true;
+                }
+                let haystack: Vec<char> = format!("{} {}", row.title, row.summary)
+                    .to_lowercase()
+                    .chars()
+                    .collect();
+                let mut at = 0;
+                needle.iter().all(|want| {
+                    haystack[at..]
+                        .iter()
+                        .position(|have| have == want)
+                        .map(|found| {
+                            at += found + 1;
+                            true
+                        })
+                        .unwrap_or(false)
+                })
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// Type into the search. Returns whether the visible list changed.
+    fn search_char(&mut self, character: char) -> bool {
+        let mut query = self.query.take().unwrap_or_default();
+        query.push(character);
+        self.visible = self.matches(&query);
+        self.selected = 0;
+        self.query = Some(query);
+        true
+    }
+
+    fn search_backspace(&mut self) -> bool {
+        let Some(mut query) = self.query.take() else {
+            return false;
+        };
+        query.pop();
+        self.visible = self.matches(&query);
+        self.selected = 0;
+        self.query = Some(query);
+        true
+    }
+
+    fn close_search(&mut self) -> bool {
+        if self.query.take().is_some() {
+            self.visible = (0..self.rows.len()).collect();
+            self.selected = 0;
+            return true;
+        }
+        false
+    }
+
+    /// The row the selection points at, through the visible list.
+    fn selected_row(&self) -> Option<usize> {
+        self.visible.get(self.selected).copied()
     }
 
     /// How many tiles fit across the window. The grid reflows with the window
@@ -148,7 +224,7 @@ impl LauncherView {
             return None;
         }
         let index = row as usize * columns + column;
-        (index < self.rows.len()).then_some(index)
+        (index < self.visible.len()).then_some(index)
     }
 
     /// Follow the pointer. The hover ring is its own state: with one app
@@ -162,7 +238,10 @@ impl LauncherView {
     }
 
     fn open(&mut self, index: usize) -> bool {
-        let Some(row) = self.rows.get(index) else {
+        let Some(row) = self.selected_row().filter(|_| index == self.selected) else {
+            return false;
+        };
+        let Some(row) = self.rows.get(row) else {
             return false;
         };
         self.status = match catalog::launch(&row.id, &row.default_surface) {
@@ -181,11 +260,11 @@ impl LauncherView {
     }
 
     fn move_by(&mut self, dx: i32, dy: i32, width: f32) -> bool {
-        if self.rows.is_empty() {
+        if self.visible.is_empty() {
             return false;
         }
         let columns = Self::columns(width) as i32;
-        let count = self.rows.len() as i32;
+        let count = self.visible.len() as i32;
         let column = self.selected as i32 % columns;
         let row = self.selected as i32 / columns;
         let (column, row) = if dx != 0 {
@@ -256,11 +335,11 @@ impl LauncherView {
         // Rows are chunked here rather than wrapped by the layout, so the
         // pointer hit test and the drawn grid share one idea of where a tile is.
         let columns = Self::columns(width).max(1);
-        let mut grid = Vec::with_capacity(self.rows.len().div_ceil(columns));
-        for start in (0..self.rows.len()).step_by(columns) {
+        let mut grid = Vec::with_capacity(self.visible.len().div_ceil(columns));
+        for start in (0..self.visible.len()).step_by(columns) {
             let mut cells = Vec::with_capacity(columns);
-            for index in start..(start + columns).min(self.rows.len()) {
-                let row = &self.rows[index];
+            for index in start..(start + columns).min(self.visible.len()) {
+                let row = &self.rows[self.visible[index]];
                 let hovered = self.hovered == Some(index);
                 let selected = self.selected == index;
                 let background = tile_color(&row.id, if hovered { 0.14 } else { 0.0 });
@@ -329,12 +408,20 @@ impl LauncherView {
             .bg(rgb(0x0f141b))
             .text_size(px(10.0))
             .text_color(rgb(0x76828f))
-            .child("←↑↓→ select · enter open · esc quit")
+            .child(match &self.query {
+                Some(query) => SharedString::from(format!(
+                    "search: {query}▏ · {} match{}",
+                    self.visible.len(),
+                    if self.visible.len() == 1 { "" } else { "es" }
+                )),
+                None => SharedString::from("hjkl or arrows · enter open · ^P search · esc quit"),
+            })
             .child(
                 // What the pointer (or the keyboard) is on, so a tile can stay
                 // a name and a colour without hiding what the app is.
                 self.hovered
                     .or(Some(self.selected))
+                    .and_then(|index| self.visible.get(index).copied())
                     .and_then(|index| self.rows.get(index))
                     .map(|row| {
                         SharedString::from(format!(
@@ -490,13 +577,50 @@ fn run_launcher() -> anyhow::Result<()> {
                     break;
                 }
                 let width = surface::size().0 as f32;
+                let searching = window.update(&mut cx, |view, _, _| view.query.is_some())?;
                 let changed = match key.key.as_str() {
-                    "arrow-right" => step(&window, &mut cx, |view| view.move_by(1, 0, width))?,
-                    "arrow-left" => step(&window, &mut cx, |view| view.move_by(-1, 0, width))?,
-                    "arrow-down" => step(&window, &mut cx, |view| view.move_by(0, 1, width))?,
-                    "arrow-up" => step(&window, &mut cx, |view| view.move_by(0, -1, width))?,
+                    // hjkl as well as arrows: this is a grid, and the hands are
+                    // already there.
+                    "arrow-right" | "l" if !searching || key.control => {
+                        step(&window, &mut cx, |view| view.move_by(1, 0, width))?
+                    }
+                    "arrow-left" | "h" if !searching || key.control => {
+                        step(&window, &mut cx, |view| view.move_by(-1, 0, width))?
+                    }
+                    "arrow-down" | "j" if !searching || key.control => {
+                        step(&window, &mut cx, |view| view.move_by(0, 1, width))?
+                    }
+                    "arrow-up" | "k" if !searching || key.control => {
+                        step(&window, &mut cx, |view| view.move_by(0, -1, width))?
+                    }
                     "enter" => step(&window, &mut cx, |view| view.open(view.selected))?,
-                    _ => false,
+                    "escape" if searching => {
+                        step(&window, &mut cx, |view| view.close_search())?
+                    }
+                    "backspace" if searching => {
+                        step(&window, &mut cx, |view| view.search_backspace())?
+                    }
+                    _ => {
+                        // Ctrl-P opens the finder; every other printable key
+                        // types into it once it is open.
+                        if key.control && key.key.eq_ignore_ascii_case("p") && !searching {
+                            step(&window, &mut cx, |view| {
+                                view.query = Some(String::new());
+                                view.visible = (0..view.rows.len()).collect();
+                                view.selected = 0;
+                                true
+                            })?
+                        } else if searching {
+                            match key.text.as_ref().and_then(|text| text.chars().next()) {
+                                Some(character) if !character.is_control() => {
+                                    step(&window, &mut cx, |view| view.search_char(character))?
+                                }
+                                _ => false,
+                            }
+                        } else {
+                            false
+                        }
+                    }
                 };
                 if changed {
                     dirty = true;

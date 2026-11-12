@@ -1,0 +1,29 @@
+[package]
+name = "spore-pulse"
+description = "Pulse cron console and Confluence webhook ingress health"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+default-run = "pulse"
+
+[lib]
+name = "pulse"
+
+# The console's stand-in records host. The Spore itself is read-only; applying
+# an intent is a host-side write, the same split as worklog's receiver.
+[[bin]]
+name = "pulse"
+path = "src/main.rs"
+
+# The view host: the same Lua view, in a browser, with the presses the scene
+# carries routed back through the same reducer.
+[[bin]]
+name = "pulse-serve"
+path = "src/bin/serve.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -49,3 +49,4 @@ host = ["process", "secrets", "environment", "raw-filesystem"]
 [presentation]
 badge = "▓"
 color = "#7aa2ff"
+mark = "assets/icon.svg"

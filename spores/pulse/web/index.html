@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Pulse</title>
+  <style>
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#191919;color:#e9e9e7;font:13px ui-sans-serif,-apple-system,Helvetica,Arial,sans-serif}
+    canvas{display:block;width:100%;height:100%}
+    /* A control is a host-owned hit region, not a scene node. The ring names
+       what the pointer is over without repainting the document. */
+    #hover{position:fixed;pointer-events:none;border:1px solid #529cca;border-radius:6px;display:none;z-index:2}
+    #status{position:fixed;left:18px;bottom:10px;color:#8b8b8b;font-size:11px;pointer-events:none;z-index:1}
+    #notice{position:fixed;right:18px;bottom:10px;color:#d9a55a;font-size:11px;pointer-events:none;z-index:1;max-width:60%;text-align:right}
+  </style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="hover"></div>
+<div id="status">loading</div>
+<div id="notice"></div>
+<script>
+// The page draws the scene the Pulse view produced; it does not know what a
+// cron is. Nodes carry `transform.translation` / `transform.scale` in the -4..4
+// space and the preview resolves `rgb` and text `px`. Presses are host-owned
+// controls: the scene carries their geometry and the intent they emit, and this
+// page posts that intent back. One view, two hosts.
+const canvas = document.getElementById('scene');
+const ctx = canvas.getContext('2d');
+const frame = document.createElement('canvas');
+const paint = frame.getContext('2d');
+const status = document.getElementById('status');
+const notice = document.getElementById('notice');
+const ring = document.getElementById('hover');
+
+let dpr = 1, size = { w: 0, h: 0 };
+let lastBody = null, inFlight = false, current = null, hovered = null;
+// Host-owned view state: which pane, which row, which webhook. The records say
+// what exists; the page says what the reader is looking at.
+let state = { tab: 'crons', select: '', hook: '' };
+const params = new URLSearchParams(location.search);
+for (const key of ['tab', 'select', 'hook']) {
+  if (params.get(key)) state[key] = params.get(key);
+}
+
+const INKS = {
+  background: '#191919', surface: '#202020', text: '#e9e9e7', muted: '#9b9b9b',
+  primary: '#ffffff', success: '#5fb27a', warning: '#d9a55a', info: '#7ab0d8',
+  danger: '#e0706b',
+};
+
+function fillOf(node) {
+  const alpha = node.opacity ?? 1;
+  if (node.rgb) {
+    const [r, g, b] = node.rgb;
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  const hex = INKS[node.ink] || INKS.text;
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
+
+function fit() {
+  const next = { w: innerWidth, h: innerHeight };
+  if (next.w === size.w && next.h === size.h && canvas.width > 0) return false;
+  dpr = window.devicePixelRatio || 1;
+  size = next;
+  canvas.width = Math.floor(size.w * dpr);
+  canvas.height = Math.floor(size.h * dpr);
+  frame.width = canvas.width;
+  frame.height = canvas.height;
+  return true;
+}
+
+function draw(scene, w, h) {
+  paint.setTransform(dpr, 0, 0, dpr, 0, 0);
+  paint.clearRect(0, 0, w, h);
+  const xOf = (u) => (u + 4) / 8 * w;
+  const yOf = (u) => (4 - u) / 8 * h;
+  const nodes = [...(scene.nodes || [])].sort(
+    (a, b) => ((a.transform?.translation?.[2] ?? 0) - (b.transform?.translation?.[2] ?? 0)));
+  for (const node of nodes) {
+    const t = node.transform || {};
+    const [x, y] = t.translation || [0, 0, 0];
+    const [sx, sy] = t.scale || [1, 1, 1];
+    paint.fillStyle = fillOf(node);
+    if (node.type === 'rect') {
+      const px = xOf(x), py = yOf(y);
+      const rw = sx / 8 * w, rh = sy / 8 * h;
+      const radius = Math.min(node.radius || 0, rw / 2, rh / 2);
+      paint.beginPath();
+      if (paint.roundRect) paint.roundRect(px, py, rw, rh, radius);
+      else paint.rect(px, py, rw, rh);
+      paint.fill();
+    } else if (node.type === 'text') {
+      paint.font = `${node.px}px ui-sans-serif, -apple-system, Helvetica, Arial, sans-serif`;
+      paint.textBaseline = 'top';
+      paint.fillText(node.text || '', xOf(x), yOf(y));
+    }
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(frame, 0, 0);
+}
+
+// Presses arrive in the same -4..4 space the nodes do.
+function rectOf(press) {
+  return {
+    x: (press.x + 4) / 8 * size.w,
+    y: (4 - press.y) / 8 * size.h,
+    w: press.width / 8 * size.w,
+    h: press.height / 8 * size.h,
+  };
+}
+
+function pressAt(x, y) {
+  if (!current) return null;
+  for (const press of current.presses || []) {
+    const box = rectOf(press);
+    if (x >= box.x && x <= box.x + box.w && y >= box.y && y <= box.y + box.h) return press;
+  }
+  return null;
+}
+
+function showHover(press) {
+  if (!press) {
+    ring.style.display = 'none';
+    canvas.style.cursor = 'default';
+    return;
+  }
+  const box = rectOf(press);
+  ring.style.display = 'block';
+  ring.style.left = `${box.x}px`;
+  ring.style.top = `${box.y}px`;
+  ring.style.width = `${box.w}px`;
+  ring.style.height = `${box.h}px`;
+  canvas.style.cursor = 'pointer';
+}
+
+let timer = 0, queued = false;
+function schedule(delay = 120) {
+  clearTimeout(timer);
+  timer = setTimeout(refresh, delay);
+}
+
+async function refresh() {
+  if (inFlight) {
+    queued = true;
+    return;
+  }
+  inFlight = true;
+  fit();
+  const w = Math.round(size.w), h = Math.round(size.h);
+  try {
+    const query = new URLSearchParams({ w, h, tab: state.tab, select: state.select, hook: state.hook });
+    const response = await fetch(`scene.json?${query}`, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`scene ${response.status}: ${await response.text()}`);
+    const body = await response.text();
+    if (body === lastBody) return;
+    lastBody = body;
+    const scene = JSON.parse(body);
+    current = scene;
+    draw(scene, w, h);
+    status.textContent = `${scene.nodes.length} nodes · ${state.tab} · ${new Date().toLocaleTimeString()}`;
+  } catch (error) {
+    status.textContent = String(error.message || error);
+  } finally {
+    inFlight = false;
+    if (queued) {
+      queued = false;
+      schedule(0);
+    }
+  }
+}
+
+async function apply(press) {
+  const intent = press.action;
+  if (!intent) return;
+  if (intent.kind === 'tab') {
+    state.tab = intent.tab;
+    return schedule(0);
+  }
+  if (intent.kind === 'select') {
+    state.tab = 'crons';
+    state.select = intent.id;
+    return schedule(0);
+  }
+  if (intent.kind === 'select-hook') {
+    state.tab = 'ingress';
+    state.hook = intent.slug;
+    return schedule(0);
+  }
+  notice.textContent = `applying ${intent.kind}…`;
+  try {
+    const response = await fetch('apply', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ intent }),
+    });
+    const result = await response.json();
+    if (!result.ok) {
+      notice.textContent = (result.problems || [])
+        .map((problem) => `${problem.field}: ${problem.text}`).join(' · ');
+      return;
+    }
+    notice.textContent = result.message || '';
+    if (intent.kind === 'delete') {
+      state.select = '';
+    }
+    schedule(0);
+  } catch (error) {
+    notice.textContent = String(error.message || error);
+  }
+}
+
+canvas.addEventListener('click', (event) => {
+  const press = pressAt(event.clientX, event.clientY);
+  if (press) apply(press);
+});
+canvas.addEventListener('mousemove', (event) => {
+  const press = pressAt(event.clientX, event.clientY);
+  if (press === hovered) return;
+  hovered = press;
+  showHover(press);
+});
+canvas.addEventListener('mouseleave', () => {
+  hovered = null;
+  showHover(null);
+});
+addEventListener('resize', () => schedule(120));
+
+refresh();
+// Records can change from the CLI and from another window. Polling is what
+// keeps the page equal to the store rather than equal to the moment it opened.
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

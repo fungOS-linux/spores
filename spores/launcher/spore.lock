@@ -1,0 +1,7 @@
+spore-lock 1
+spore dev.fungos.launcher
+version 0.1.0
+file d6527d07b54fb925c33261f0e2700712bdc29c5fe7653b86c1ef9136db68245a 144306 module.wasm
+file 8ae1b64d90355fc68beedbcfc0b3e29abcd9ff38b0370869dd07f82c403c51dd 1226 spore.toml
+file 65b669e7eeaaaadc894724d2ec019030cf0087154a5d4920626fc6c35192e00e 1589 ui/launcher.lua
+digest 73a1b90c1dc0c02b7d0760ed66cb002a00c126b37a15fab8b799e9579f68fd4e

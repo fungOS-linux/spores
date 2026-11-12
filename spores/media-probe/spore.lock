@@ -1,0 +1,9 @@
+spore-lock 1
+spore dev.fungos.media-probe
+version 0.1.0
+file 97a8a57e52f190cda9a01d37e84d05b6a175732f449f29805885fd81878573a3 713 assets/icon.svg
+file e9b5bcccafe877561593c4ff1597cafd067db99acbf7d5c6fdb5a552623a00a6 587 docs/man.md
+file 67a0b3a5d70b71e3da13c209bec78ea6def933521759d4fa8433d35ebee98f86 105985 module.wasm
+file ef68398262e5f924d8ca67de6fab839bce39b7e68ac7513a4f2fdc0113b9ef76 1170 spore.toml
+file 01432fb070e60b41bff692b825faf445b4cc9b3b93469e5536299247a872190f 64 ui/probe.lua
+digest be3874671f4f9d58b2cddd49f74dca5437b76b0cc5edc09b314cf5a1a6a66d34
