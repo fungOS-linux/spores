@@ -1604,7 +1604,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.9.1"
-source = "git+https://github.com/fungOS-linux/gpui-kit?branch=fungos%2Fgpui-fast#8feed9ee6526d0ee8e7b3e11349290b3d38319ed"
+source = "git+https://github.com/fungOS-linux/gpui-kit?tag=0.9.1-fungos.1#8feed9ee6526d0ee8e7b3e11349290b3d38319ed"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -1645,7 +1645,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.9.1"
-source = "git+https://github.com/fungOS-linux/gpui-kit?branch=fungos%2Fgpui-fast#8feed9ee6526d0ee8e7b3e11349290b3d38319ed"
+source = "git+https://github.com/fungOS-linux/gpui-kit?tag=0.9.1-fungos.1#8feed9ee6526d0ee8e7b3e11349290b3d38319ed"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1691,7 +1691,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.9.1"
-source = "git+https://github.com/fungOS-linux/gpui-kit?branch=fungos%2Fgpui-fast#8feed9ee6526d0ee8e7b3e11349290b3d38319ed"
+source = "git+https://github.com/fungOS-linux/gpui-kit?tag=0.9.1-fungos.1#8feed9ee6526d0ee8e7b3e11349290b3d38319ed"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -1702,7 +1702,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.9.1"
-source = "git+https://github.com/fungOS-linux/gpui-kit?branch=fungos%2Fgpui-fast#8feed9ee6526d0ee8e7b3e11349290b3d38319ed"
+source = "git+https://github.com/fungOS-linux/gpui-kit?tag=0.9.1-fungos.1#8feed9ee6526d0ee8e7b3e11349290b3d38319ed"
 dependencies = [
  "anyhow",
  "gpui",
@@ -4911,7 +4911,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
