@@ -86,8 +86,15 @@ The sidecar URL is a constant in [`src/lib.rs`](../../spores/elmers-ui/src/lib.r
 ```sh
 cd spores/elmers-ui
 cargo build --release --target wasm32-wasip2
-cp target/wasm32-wasip2/release/spore_elmers_ui.wasm module.wasm
+wasm-tools strip target/wasm32-wasip2/release/spore_elmers_ui.wasm -o module.wasm
+wasm-tools validate module.wasm
 ```
+
+The release profile is tuned for bytes, not throughput — a component travels
+over the wire and lives in a CAS. `opt-level = "z"`, fat LTO and one codegen
+unit took this component from 18.44 MB to 13.11 MB once gpui-kit's menus were
+linked; stripping the name section takes it to 13.08 MB. `wasm-opt` cannot help
+here: binaryen still refuses to parse a component, only a core module.
 
 ## Host requirement
 

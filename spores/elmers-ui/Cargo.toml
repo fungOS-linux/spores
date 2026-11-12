@@ -25,3 +25,13 @@ wit-bindgen = "0.57"
 
 [lints.rust]
 unsafe_code = "allow"
+
+# A Spore's component travels over the wire and lives in a CAS, so the release
+# profile optimizes for bytes, not throughput. `lto` and one codegen unit let
+# the kit's unused machinery collapse; abort-on-panic drops the unwinder.
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
