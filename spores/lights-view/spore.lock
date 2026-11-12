@@ -1,6 +1,6 @@
 spore-lock 1
 spore dev.fungos.lights-view
 version 0.1.0
-file 53a3655afd5cb1f7331899fd1e5a68ffdfd27b74e8eb1eb2a85f32cfac1c7d20 9507551 module.wasm
+file 8a4f1dc8f58fa25a0864ce0e78dcdd886498cff4837ca881bb42d3ca55b74ec2 9527836 module.wasm
 file 7baf99ea13cd9bbb1bab26bf1c59800585838d8697153dc12e74b873d57a93ac 1957 spore.toml
-digest 0003e7663de523336426dfc1252e9610b72c98d6be80f467171457c8f4fb2cb5
+digest be9b2974f531203b706de366ec3a569b05ea4e2145d95ffceecd3550a477fd07

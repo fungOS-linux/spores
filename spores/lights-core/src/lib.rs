@@ -158,17 +158,20 @@ impl Snapshot {
     }
 
     pub fn lights_in(&self, group_id: &str) -> Vec<&Light> {
-        if group_id == "0" {
-            return self.lights.values().collect();
-        }
-        let Some(group) = self.group(group_id) else {
-            return Vec::new();
+        let mut lights: Vec<&Light> = if group_id == "0" {
+            self.lights.values().collect()
+        } else {
+            let Some(group) = self.group(group_id) else {
+                return Vec::new();
+            };
+            group
+                .light_ids
+                .iter()
+                .filter_map(|id| self.lights.get(id))
+                .collect()
         };
-        group
-            .light_ids
-            .iter()
-            .filter_map(|id| self.lights.get(id))
-            .collect()
+        lights.sort_by_key(|light| numeric_key(&light.id));
+        lights
     }
 
     pub fn scenes_for(&self, group_id: &str) -> Vec<&Scene> {
