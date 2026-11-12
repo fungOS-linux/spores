@@ -14,7 +14,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 anyhow = "1"
-gpui-component = { git = "https://github.com/fungOS-linux/gpui-kit", branch = "fungos/gpui-fast", package = "gpui-component", features = ["gpui-fast"] }
+gpui-component = { git = "https://github.com/fungOS-linux/gpui-kit", tag = "0.9.1-fungos.1", package = "gpui-component", features = ["gpui-fast"] }
 gpui = { git = "https://github.com/fungOS-linux/gpui-fast", rev = "60ebb175729ad2a17acf59d8e988e794ff4b7eb4", package = "gpui", default-features = false, features = ["headless"] }
 gpui_wgpu = { git = "https://github.com/fungOS-linux/gpui-fast", rev = "60ebb175729ad2a17acf59d8e988e794ff4b7eb4", package = "gpui_wgpu", features = ["headless"] }
 serde = { version = "1", features = ["derive"] }
