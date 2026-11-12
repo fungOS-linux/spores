@@ -20,10 +20,13 @@ use std::borrow::Cow;
 use anyhow::Result;
 use cli_http::{Http, Method, Request, Response};
 use gpui::{
-    AnyElement, AnyWindowHandle, Context, FontWeight, HeadlessAppContext, IntoElement,
+    AnyElement, AnyWindowHandle, AssetSource, Context, FontWeight, HeadlessAppContext, IntoElement,
     ParentElement, PlatformTextSystem as _, Render, SharedString, Styled, Window, div, prelude::*,
     px, relative, rgb, size,
 };
+use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::switch::Switch;
+use gpui_component::{Icon, IconName, Selectable as _, Sizable as _, Size, Theme, ThemeMode};
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
 use hue_client::{Bridge, brightness, group_power, light_power};
 use lights_core::{Action, Group, Hit, Layout, Light, Rect, Snapshot, layout};
@@ -32,6 +35,34 @@ use soil::present::{cursor, input, surface};
 
 const FONT: &[u8] = include_bytes!("../assets/IBMPlexSans-Regular.ttf");
 const FONT_FAMILY: &str = "IBM Plex Sans";
+
+/// The few Lucide marks the view asks for, embedded so a wasip2 Spore never
+/// reaches for a browser CDN. `gpui-component` resolves `IconName` to these
+/// paths through the app's `AssetSource`.
+struct LightsAssets;
+
+impl AssetSource for LightsAssets {
+    fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        let bytes: Option<&'static [u8]> = match path {
+            "icons/sun.svg" => Some(include_bytes!("../assets/icons/sun.svg")),
+            "icons/moon.svg" => Some(include_bytes!("../assets/icons/moon.svg")),
+            "icons/refresh-cw.svg" => Some(include_bytes!("../assets/icons/refresh-cw.svg")),
+            "icons/palette.svg" => Some(include_bytes!("../assets/icons/palette.svg")),
+            "icons/chevron-right.svg" => Some(include_bytes!("../assets/icons/chevron-right.svg")),
+            "icons/chevron-down.svg" => Some(include_bytes!("../assets/icons/chevron-down.svg")),
+            "icons/circle-check.svg" => Some(include_bytes!("../assets/icons/circle-check.svg")),
+            "icons/triangle-alert.svg" => {
+                Some(include_bytes!("../assets/icons/triangle-alert.svg"))
+            }
+            _ => None,
+        };
+        Ok(bytes.map(Cow::Borrowed))
+    }
+
+    fn list(&self, _path: &str) -> Result<Vec<SharedString>> {
+        Ok(Vec::new())
+    }
+}
 
 /// The capability name the host binds to a bridge. This is deliberately not an
 /// IP address: moving the bridge must not require rebuilding the Spore.
@@ -227,6 +258,17 @@ impl LightsView {
         self.snapshot.group(&self.selected)
     }
 
+    fn summary(&self) -> String {
+        let total = self.snapshot.lights.len();
+        let on = self
+            .snapshot
+            .lights
+            .values()
+            .filter(|light| light.on)
+            .count();
+        format!("{on} of {total} on")
+    }
+
     fn hovered(&self, action: &Action) -> bool {
         self.hovered.as_ref() == Some(action)
     }
@@ -246,11 +288,25 @@ fn run_lights() -> Result<()> {
     let text = std::sync::Arc::new(CosmicTextSystem::new_without_system_fonts(FONT_FAMILY));
     text.add_fonts(vec![Cow::Borrowed(FONT)])?;
     let factory_context = context.clone();
-    let mut cx = HeadlessAppContext::with_platform(text, std::sync::Arc::new(()), move || {
-        Ok(Some(Box::new(WgpuHeadlessRenderer::with_context(
-            factory_context.clone(),
-            format,
-        )?)))
+    let mut cx =
+        HeadlessAppContext::with_platform(text, std::sync::Arc::new(LightsAssets), move || {
+            Ok(Some(Box::new(WgpuHeadlessRenderer::with_context(
+                factory_context.clone(),
+                format,
+            )?)))
+        });
+    cx.update(|app| {
+        gpui_component::init(app);
+        Theme::change(ThemeMode::Dark, None, app);
+        let theme = Theme::global_mut(app);
+        theme.font_family = FONT_FAMILY.into();
+        theme.mono_font_family = FONT_FAMILY.into();
+        theme.warning = rgb(AMBER).into();
+        theme.button_warning = rgb(AMBER).into();
+        theme.button_warning_hover = rgb(0xffc978).into();
+        theme.button_warning_active = rgb(0xd89a3f).into();
+        theme.button_warning_foreground = rgb(0x1b1205).into();
+        theme.ring = rgb(AMBER).into();
     });
 
     let mut http = HostHttp;
@@ -458,7 +514,8 @@ impl Render for LightsView {
             stack.push(self.power_button(power));
         }
         stack.push(self.refresh_button(&layout.refresh));
-        if !self.status.is_empty() {
+        let success_fits = layout.mode != lights_core::Mode::Compact || layout.content.h >= 520.0;
+        if !self.status.is_empty() && (self.error || success_fits) {
             stack.push(self.status_line(&layout));
         }
 
@@ -484,9 +541,20 @@ impl LightsView {
                     .absolute()
                     .left(px(22.0))
                     .top(px(20.0))
-                    .text_size(px(22.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Lights"),
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        Icon::new(IconName::Palette)
+                            .with_size(Size::Small)
+                            .text_color(rgb(AMBER)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(22.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Lights"),
+                    ),
             )
             .child(
                 div()
@@ -499,19 +567,46 @@ impl LightsView {
                     .truncate()
                     .child(SharedString::from(self.snapshot.bridge_name.clone())),
             )
+            .child(
+                div()
+                    .absolute()
+                    .left(px(22.0))
+                    .top(px(70.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(div().w(px(5.0)).h(px(5.0)).rounded_lg().bg(rgb(AMBER)))
+                    .child(
+                        div()
+                            .text_size(px(9.0))
+                            .text_color(rgb(MUTED))
+                            .child(SharedString::from(self.summary())),
+                    ),
+            )
             .into_any_element()
     }
 
-    fn top_header(&self, _layout: &Layout) -> AnyElement {
+    fn top_header(&self, layout: &Layout) -> AnyElement {
         div()
             .absolute()
             .left(px(16.0))
             .top(px(12.0))
             .child(
                 div()
-                    .text_size(px(20.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Lights"),
+                    .flex()
+                    .items_center()
+                    .gap(px(7.0))
+                    .child(
+                        Icon::new(IconName::Palette)
+                            .with_size(Size::XSmall)
+                            .text_color(rgb(AMBER)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(20.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Lights"),
+                    ),
             )
             .child(
                 div()
@@ -521,6 +616,15 @@ impl LightsView {
                     .truncate()
                     .child(SharedString::from(self.snapshot.bridge_name.clone())),
             )
+            .when(layout.mode != lights_core::Mode::Watch, |this| {
+                this.child(
+                    div()
+                        .mt(px(2.0))
+                        .text_size(px(9.0))
+                        .text_color(rgb(DIM))
+                        .child(SharedString::from(self.summary())),
+                )
+            })
             .into_any_element()
     }
 
@@ -602,6 +706,18 @@ impl LightsView {
                     .h(px(rect.h))
                     .rounded_lg()
                     .bg(rgb(bg))
+                    .when(selected, |this| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .left(px(0.0))
+                                .top(px(0.0))
+                                .h_full()
+                                .w(px(3.0))
+                                .rounded_lg()
+                                .bg(rgb(AMBER)),
+                        )
+                    })
                     .px(px(12.0))
                     .flex()
                     .items_center()
@@ -623,12 +739,12 @@ impl LightsView {
                                     .truncate()
                                     .child(SharedString::from(group.name.clone())),
                             )
-                            .child(
-                                div()
-                                    .text_size(px(9.0))
-                                    .text_color(rgb(DIM))
-                                    .child(SharedString::from(format!("{count} lights"))),
-                            )
+                            .child(div().text_size(px(9.0)).text_color(rgb(DIM)).child(
+                                SharedString::from(format!(
+                                    "{count} {}",
+                                    if count == 1 { "light" } else { "lights" }
+                                )),
+                            ))
                             .into_any_element()
                     } else {
                         div()
@@ -666,35 +782,23 @@ impl LightsView {
                 continue;
             };
             let selected = self.active_scene.as_ref() == Some(&scene.id);
-            elements.push(
-                div()
-                    .absolute()
-                    .left(px(hit.rect.x))
-                    .top(px(hit.rect.y))
-                    .w(px(hit.rect.w))
-                    .h(px(hit.rect.h))
-                    .rounded_lg()
-                    .bg(rgb(if selected {
-                        0x2a2414
-                    } else if self.hovered(&hit.action) {
-                        PANEL_RAISED
-                    } else {
-                        PANEL
-                    }))
-                    .border_1()
-                    .border_color(rgb(if selected { AMBER } else { 0x1e2a38 }))
-                    .px(px(10.0))
-                    .flex()
-                    .items_center()
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(rgb(if selected { AMBER } else { TEXT }))
-                            .truncate()
-                            .child(SharedString::from(scene.name.clone())),
-                    )
-                    .into_any_element(),
-            );
+            let button = Button::new(format!("scene-{}", scene.id))
+                .label(scene.name.clone())
+                .xsmall()
+                .rounded(px(16.0))
+                .selected(selected)
+                .tooltip(format!("Recall {}", scene.name))
+                .absolute()
+                .left(px(hit.rect.x))
+                .top(px(hit.rect.y))
+                .w(px(hit.rect.w))
+                .h(px(hit.rect.h));
+            let button = if selected {
+                button.warning()
+            } else {
+                button.secondary()
+            };
+            elements.push(button.into_any_element());
         }
         elements
     }
@@ -733,43 +837,24 @@ impl LightsView {
                     preset_w,
                     26.0,
                 );
-                let action = Action::Brightness {
-                    light: id.clone(),
-                    value,
+                let active = light
+                    .brightness
+                    .is_some_and(|bri| (bri as i32 - value as i32).abs() < 10);
+                let button = Button::new(format!("preset-{id}-{value}"))
+                    .label(label)
+                    .xsmall()
+                    .rounded(px(6.0))
+                    .absolute()
+                    .left(px(preset.x))
+                    .top(px(preset.y))
+                    .w(px(preset.w))
+                    .h(px(preset.h));
+                let button = if active {
+                    button.warning()
+                } else {
+                    button.ghost()
                 };
-                elements.push(
-                    div()
-                        .absolute()
-                        .left(px(preset.x))
-                        .top(px(preset.y))
-                        .w(px(preset.w))
-                        .h(px(preset.h))
-                        .rounded_lg()
-                        .bg(rgb(if self.hovered(&action) {
-                            PANEL_RAISED
-                        } else {
-                            0x0b1119
-                        }))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            div()
-                                .text_size(px(10.0))
-                                .text_color(rgb(
-                                    if light
-                                        .brightness
-                                        .is_some_and(|bri| (bri as i32 - value as i32).abs() < 10)
-                                    {
-                                        AMBER
-                                    } else {
-                                        MUTED
-                                    },
-                                ))
-                                .child(SharedString::from(label)),
-                        )
-                        .into_any_element(),
-                );
+                elements.push(button.into_any_element());
             }
         }
         elements
@@ -803,7 +888,7 @@ impl LightsView {
             .py(px(13.0))
             .child(
                 div()
-                    .w(px(rect.w - 94.0))
+                    .w(px(rect.w - 76.0))
                     .text_size(px(14.0))
                     .font_weight(FontWeight::SEMIBOLD)
                     .truncate()
@@ -848,16 +933,19 @@ impl LightsView {
                 .top(px(12.0))
                 .w(px(60.0))
                 .h(px(26.0))
-                .rounded_lg()
-                .bg(rgb(if light.on { 0x2a2414 } else { 0x17212d }))
                 .flex()
                 .items_center()
                 .justify_center()
                 .child(
-                    div()
-                        .text_size(px(10.0))
-                        .text_color(rgb(if light.on { AMBER } else { MUTED }))
-                        .child(if light.on { "On" } else { "Off" }),
+                    Switch::new(format!("light-switch-{}", light.id))
+                        .checked(light.on)
+                        .with_size(Size::Small)
+                        .color(rgb(AMBER))
+                        .accessibility_label(format!(
+                            "Turn {} {}",
+                            light.name,
+                            if light.on { "off" } else { "on" }
+                        )),
                 ),
         );
         card.into_any_element()
@@ -884,24 +972,30 @@ impl LightsView {
                     .truncate()
                     .child(SharedString::from(light.name.clone())),
             )
-            .child(
+            .child(if light.reachable {
                 div()
-                    .text_size(px(9.0))
-                    .text_color(rgb(if !light.reachable {
-                        ROSE
-                    } else if light.on {
-                        AMBER
-                    } else {
-                        DIM
-                    }))
-                    .child(if !light.reachable {
-                        "!"
-                    } else if light.on {
-                        "On"
-                    } else {
-                        "Off"
-                    }),
-            )
+                    .relative()
+                    .w(px(28.0))
+                    .h(px(16.0))
+                    .rounded_lg()
+                    .bg(rgb(if light.on { AMBER } else { TRACK }))
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(if light.on { 13.0 } else { 2.0 }))
+                            .top(px(2.0))
+                            .w(px(12.0))
+                            .h(px(12.0))
+                            .rounded_lg()
+                            .bg(rgb(if light.on { 0x1b1205 } else { MUTED })),
+                    )
+                    .into_any_element()
+            } else {
+                Icon::new(IconName::TriangleAlert)
+                    .with_size(Size::XSmall)
+                    .text_color(rgb(ROSE))
+                    .into_any_element()
+            })
             .into_any_element()
     }
 
@@ -916,46 +1010,50 @@ impl LightsView {
             .top(px(hit.rect.y))
             .w(px(hit.rect.w))
             .h(px(hit.rect.h))
-            .rounded_lg()
-            .bg(rgb(if self.hovered(&hit.action) {
-                0x243344
-            } else {
-                PANEL_RAISED
-            }))
             .flex()
             .items_center()
-            .justify_center()
+            .justify_between()
+            .gap(px(8.0))
             .child(
                 div()
                     .text_size(px(10.0))
                     .text_color(rgb(if on { AMBER } else { MUTED }))
-                    .child(if on { "Turn off" } else { "Turn on" }),
+                    .child("Power"),
+            )
+            .child(
+                Switch::new(format!("group-switch-{id}"))
+                    .checked(on)
+                    .with_size(Size::Small)
+                    .color(rgb(AMBER))
+                    .accessibility_label(if on {
+                        "Turn this room off"
+                    } else {
+                        "Turn this room on"
+                    }),
             )
             .into_any_element()
     }
 
     fn refresh_button(&self, hit: &Hit) -> AnyElement {
+        let button = Button::new("refresh-bridge")
+            .icon(IconName::RefreshCw)
+            .xsmall()
+            .ghost()
+            .tooltip("Read the bridge again")
+            .w_full()
+            .h_full();
+        let button = if hit.rect.w >= 64.0 {
+            button.label("Refresh")
+        } else {
+            button
+        };
         div()
             .absolute()
             .left(px(hit.rect.x))
             .top(px(hit.rect.y))
             .w(px(hit.rect.w))
             .h(px(hit.rect.h))
-            .rounded_lg()
-            .bg(rgb(if self.hovered(&hit.action) {
-                0x243344
-            } else {
-                PANEL
-            }))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(rgb(MUTED))
-                    .child("Refresh"),
-            )
+            .child(button)
             .into_any_element()
     }
 
@@ -975,9 +1073,25 @@ impl LightsView {
             .top(px(y))
             .w(px(w))
             .px(px(2.0))
+            .flex()
+            .items_center()
+            .gap(px(4.0))
             .text_size(px(9.0))
             .text_color(rgb(if self.error { ROSE } else { GREEN }))
-            .child(SharedString::from(self.status.clone()))
+            .child(
+                Icon::new(if self.error {
+                    IconName::TriangleAlert
+                } else {
+                    IconName::CircleCheck
+                })
+                .with_size(Size::XSmall),
+            )
+            .child(
+                div()
+                    .min_w(px(0.0))
+                    .truncate()
+                    .child(SharedString::from(self.status.clone())),
+            )
             .into_any_element()
     }
 }
