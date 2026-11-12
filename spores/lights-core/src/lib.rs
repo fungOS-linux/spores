@@ -293,7 +293,7 @@ const CARD_H: f32 = 126.0;
 pub fn layout(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layout {
     if width >= WIDE {
         wide(snapshot, selected, width, height)
-    } else if height < WATCH {
+    } else if height < WATCH || width < 400.0 {
         watch(snapshot, selected, width, height)
     } else {
         compact(snapshot, selected, width, height)
@@ -305,7 +305,7 @@ fn wide(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layout 
     let header = Rect::new(RAIL, 0.0, width - RAIL, 96.0);
     let content = Rect::new(RAIL + PAD, 96.0, width - RAIL - PAD * 2.0, height - 96.0);
     let mut rooms = Vec::new();
-    let mut y = 78.0;
+    let mut y = 100.0;
     for group in &snapshot.groups {
         if y + ROOM_H > height - 48.0 {
             break;
@@ -325,7 +325,7 @@ fn wide(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layout 
         action: Action::ToggleGroup(group.id.clone()),
     });
     let columns = if content.w >= 520.0 { 3 } else { 2 };
-    let (scenes, cards, hits) = body(snapshot, selected, content, columns);
+    let (scenes, cards, hits) = body(snapshot, selected, content, columns, CARD_H, 8.0);
     let mut all = Vec::new();
     all.extend(cards.clone());
     if let Some(power) = &group_power {
@@ -360,7 +360,7 @@ fn compact(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layo
             x = 16.0;
             y += 38.0;
         }
-        if y + CHIP_H > 150.0 {
+        if y + CHIP_H > 180.0 {
             break;
         }
         rooms.push(Hit {
@@ -379,7 +379,9 @@ fn compact(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layo
         rect: Rect::new(width - 86.0, 18.0, 70.0, 28.0),
         action: Action::Refresh,
     };
-    let (scenes, cards, hits) = body(snapshot, selected, content, 2);
+    let columns = if content.h < 600.0 { 3 } else { 2 };
+    let card_h = if content.h < 500.0 { 100.0 } else { CARD_H };
+    let (scenes, cards, hits) = body(snapshot, selected, content, columns, card_h, 48.0);
     let mut all = Vec::new();
     all.extend(cards.clone());
     if let Some(power) = &group_power {
@@ -473,15 +475,22 @@ fn watch(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layout
     }
 }
 
+/// Scene chips, then light cards, inside `content`.
+///
+/// `head` is the vertical space the caller already reserved at the top of
+/// `content` for its own controls: the compact layout puts the group power
+/// switch there, while the wide layout keeps that switch in the header.
 fn body(
     snapshot: &Snapshot,
     selected: &str,
     content: Rect,
     columns: usize,
+    card_h: f32,
+    head: f32,
 ) -> (Vec<Hit>, Vec<Hit>, Vec<Hit>) {
     let mut scenes = Vec::new();
     let scene_list = snapshot.scenes_for(selected);
-    let (mut x, mut y) = (content.x, content.y + 48.0);
+    let (mut x, mut y) = (content.x, content.y + head);
     for scene in scene_list {
         let w = (scene.name.chars().count() as f32 * 7.4 + 26.0).clamp(84.0, 158.0);
         if x + w > content.x + content.w {
@@ -501,7 +510,7 @@ fn body(
         x += w + 7.0;
     }
     let cards_y = if scenes.is_empty() {
-        content.y + 48.0
+        content.y + head
     } else {
         y + CHIP_H + 16.0
     };
@@ -515,9 +524,9 @@ fn body(
         let row = index / columns.max(1);
         let rect = Rect::new(
             content.x + column as f32 * (card_w + gap),
-            cards_y + row as f32 * (CARD_H + gap),
+            cards_y + row as f32 * (card_h + gap),
             card_w,
-            CARD_H,
+            card_h,
         );
         if rect.y + rect.h > content.y + content.h {
             break;
@@ -605,6 +614,42 @@ mod tests {
     }
 
     #[test]
+    fn wide_layout_starts_content_at_the_header() {
+        // The wide layout keeps the group power switch in the header, so it
+        // must not reserve the compact layout's leading band above the scenes.
+        let snapshot = bridge();
+        let layout = layout(&snapshot, "1", 1280.0, 900.0);
+        let top = layout
+            .scenes
+            .iter()
+            .chain(layout.cards.iter())
+            .map(|hit| hit.rect.y)
+            .fold(f32::MAX, f32::min);
+        assert!(
+            top - layout.content.y <= 8.0,
+            "content starts {top} against a content box at {}",
+            layout.content.y
+        );
+    }
+
+    #[test]
+    fn compact_layout_keeps_room_for_the_group_power_switch() {
+        let snapshot = bridge();
+        let layout = layout(&snapshot, "1", 480.0, 800.0);
+        assert_eq!(layout.mode, Mode::Compact);
+        let power = layout.group_power.as_ref().expect("group power switch");
+        let overlaps = |a: Rect, b: Rect| {
+            a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+        };
+        for hit in layout.scenes.iter().chain(layout.cards.iter()) {
+            assert!(
+                !overlaps(hit.rect, power.rect),
+                "content at y={} overlaps the group power switch",
+                hit.rect.y
+            );
+        }
+    }
+    #[test]
     fn wide_layout_puts_rooms_cards_and_presets_in_reach() {
         let snapshot = bridge();
         let layout = layout(&snapshot, "1", 1280.0, 900.0);
@@ -643,12 +688,13 @@ mod tests {
     #[test]
     fn watch_layout_keeps_a_toggle_row_per_visible_light() {
         let snapshot = bridge();
-        let layout = layout(&snapshot, "1", 320.0, 480.0);
-        assert_eq!(layout.mode, Mode::Watch);
-        assert!(!layout.cards.is_empty());
+        let watch = layout(&snapshot, "1", 320.0, 480.0);
+        assert_eq!(watch.mode, Mode::Watch);
+        assert_eq!(layout(&snapshot, "1", 360.0, 640.0).mode, Mode::Watch);
+        assert!(!watch.cards.is_empty());
         assert!(
-            layout
-                .hit(layout.cards[0].rect.x + 10.0, layout.cards[0].rect.y + 10.0)
+            watch
+                .hit(watch.cards[0].rect.x + 10.0, watch.cards[0].rect.y + 10.0)
                 .is_some_and(|action| matches!(action, Action::ToggleLight(_)))
         );
     }
