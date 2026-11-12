@@ -1,0 +1,37 @@
+[package]
+name = "spore-elmers-ui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Its own workspace root, like every GPUI Spore: the fork pin is part of the
+# package contract, and a shared Cargo.lock would let another Spore's resolver
+# move it.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1"
+gpui-component = { git = "https://github.com/fungOS-linux/gpui-kit", branch = "fungos/gpui-fast", package = "gpui-component", features = ["gpui-fast"] }
+gpui = { git = "https://github.com/fungOS-linux/gpui-fast", rev = "60ebb175729ad2a17acf59d8e988e794ff4b7eb4", package = "gpui", default-features = false, features = ["headless"] }
+gpui_wgpu = { git = "https://github.com/fungOS-linux/gpui-fast", rev = "60ebb175729ad2a17acf59d8e988e794ff4b7eb4", package = "gpui_wgpu", features = ["headless"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wgpu = { version = "30", default-features = false, features = ["wgsl"] }
+wgpu-wasi-webgpu = { git = "https://github.com/fungOS-linux/wgpu-wasi-webgpu", rev = "bec921356c366450408d5faee2d206b6a1b8061b" }
+wit-bindgen = "0.57"
+
+[lints.rust]
+unsafe_code = "allow"
+
+# A Spore's component travels over the wire and lives in a CAS, so the release
+# profile optimizes for bytes, not throughput. `lto` and one codegen unit let
+# the kit's unused machinery collapse; abort-on-panic drops the unwinder.
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"

@@ -1,0 +1,132 @@
+# elmers-ui
+
+Two read-only views of Elmers, drawn by GPUI inside a Spore: **runs** and
+**brain**.
+
+```
+┌ Elmers  [runs 1] [brain 2]            12 ok  1 error  0 other ┐
+│ ● notifications/pr            19:42  │  notifications/pr     ok  19:42
+│ ● notifications/marbles       19:41  │  {"message_id": 7605}
+│ ● dev/pr-close-marble         19:40  │
+│                                      │
+└ j/k move   r refresh   q quit     12 runs · refreshed 2s ago ┘
+```
+
+## The brain view
+
+`GET /graph` is the same document the dashboard's d3-force brain draws, and this
+view is a port of that layout rather than a second design. In
+[`src/brain.rs`](src/brain.rs):
+
+- one **station per domain** on an ellipse, ordered by owning department so the
+  departments read as arcs, with alternating bands so neighbouring clusters
+  overlap into the gap rather than into each other;
+- every workflow pulled to its station, every **capability** clustered in the
+  core, and a link from a workflow to each capability its steps call;
+- d3's forces — link, local many-body charge, collide, and a pull to the
+  station — integrated 300 times **once**, on load, from a deterministic seed.
+  d3 animates because it has a timer; a picture people learn should not
+  reshuffle on a refresh.
+
+The layout is settled in its own 1280×900 space and fitted to the window, so
+resizing magnifies the picture instead of rearranging it.
+
+| Gesture | Effect |
+|---|---|
+| hover | that node's name, and its links lit |
+| click | opens the panel: owner, steps, spend, gate, calls, and its recent runs |
+| click a run in the panel | jumps to the runs view, on that run |
+| drag | pan |
+| scroll / pinch | zoom about the pointer |
+| `0` | fit the whole graph again |
+| `j`/`k` | next/previous node |
+
+**Edges are drawn as lines.** The earlier note here said the fork could not do
+this; that was wrong. GPUI's `div` has no position or rotation primitives, but
+`canvas` is not a `div`: it hands paint a `Bounds` and a `Window`, and
+`Window::paint_path` strokes a real path — `gpui_apple` (Metal) and `gpui_wgpu`
+(the headless renderer the Spore presents through) both have path pipelines.
+Labels are glyphs shaped with `WindowTextSystem` and painted at a point. The
+graph is therefore painted, not laid out: nodes, bowed edges, halos and station
+names in one canvas pass.
+
+One thing the picture does show: an owner column is whatever `/graph` calls an
+owner, verbatim. A workflow whose frontmatter annotation was parsed with the
+surrounding prose shows up as its own station of one, which is how
+`lib/exec/serves` (owners `['`', 'is', 'deliberately', …]`) was found.
+
+## Scope
+
+Read-only, deliberately. The Spore asks the sidecar one question — `GET /runs`
+— and draws the answer. It does not start, stop, edit, or inspect a workflow's
+source, and it holds no Lua: a UI that can run things is a different grant and a
+different review.
+
+| It can | It cannot |
+|---|---|
+| list runs, status, time, result/error | start or stop a run |
+| show one run's payload | edit or read workflow files |
+| draw the workflow graph | mutate it |
+| refresh every 5 s, or on `r` | reach any origin but the sidecar |
+
+## Contract
+
+The GPUI path from [`docs/gpui-spores.md`](../../docs/gpui-spores.md): the host
+owns the WebGPU device and the compositor surface; the guest renders offscreen
+and hands over a texture. Two imports beyond the presenter:
+
+- `soil:present` — `surface`, `input`, `cursor`
+- `soil:http` — one bounded, allowlisted `GET`
+
+The sidecar URL is a constant in [`src/lib.rs`](../../spores/elmers-ui/src/lib.rs)
+(`RUNS_URL`), because a Spore names its origin rather than accepting one.
+
+## Build
+
+```sh
+cd spores/elmers-ui
+cargo build --release --target wasm32-wasip2
+wasm-tools strip target/wasm32-wasip2/release/spore_elmers_ui.wasm -o module.wasm
+wasm-tools validate module.wasm
+```
+
+The release profile is tuned for bytes, not throughput — a component travels
+over the wire and lives in a CAS. `opt-level = "z"`, fat LTO and one codegen
+unit took this component from 18.44 MB to 13.11 MB once gpui-kit's menus were
+linked; stripping the name section takes it to 13.08 MB. `wasm-opt` cannot help
+here: binaryen still refuses to parse a component, only a core module.
+
+## Host requirement
+
+`soil:http` is not linked by the Canvas GPUI presenter yet — the World asks for
+it, so a host that cannot provide it refuses this package by name instead of
+instantiating it half-blind. That is the one piece between this Spore and a
+live board; `spores/spotify` is the reference for the fetch shim.
+
+## Look at it in a window
+
+A wasm component cannot open a window by itself, so `native/` is a small
+desktop binary that compiles [`src/view.rs`](src/view.rs) directly: the same
+layout and render code the Spore runs, with `soil:http` swapped for two files on
+disk. Nothing in `view.rs` knows which of the two is driving it.
+
+```sh
+curl -s 127.0.0.1:8792/runs  > /tmp/elmers-runs.json
+curl -s 127.0.0.1:8792/graph > /tmp/elmers-graph.json
+
+cd spores/elmers-ui/native
+cargo run -- --runs /tmp/elmers-runs.json --graph /tmp/elmers-graph.json
+cargo run -- … --brain          # open on the graph
+```
+
+The preview polls the two files every 2 s, so re-running the `curl`s updates an
+open window; `--runs`/`--graph` pick other paths.
+
+On macOS, GPUI needs Apple's Metal compiler, which Command Line Tools do not
+ship — if `xcode-select -p` prints the CLT path, prefix the build with
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`, or the fork's
+`gpui_apple` build script fails with `unable to find utility "metal"`.
+
+`cargo test` here also runs the view's parser tests. Their fixtures are copied
+from live responses, which is how the `started_at`-arrives-as-a-string bug was
+found and why the clock column is not silently blank.
