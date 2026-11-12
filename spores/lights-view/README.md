@@ -39,6 +39,8 @@ canvas-winit module.wasm \
 bridge does not require rebuilding the Spore. The guest names
 `geode://home/hue/bridge`; the host leases that entry and substitutes it into
 the Hue v1 path. The key never enters Wasm, `spore.toml`, a record, or argv.
+When this Spore is opened from the Spore launcher, start the launcher with the
+same `--hue-bridge` and Geode flags so the child inherits the grant.
 
 ## Input
 
