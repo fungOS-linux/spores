@@ -1,6 +1,7 @@
 spore-lock 1
 spore dev.fungos.hue
 version 0.1.0
+file bf6d426e02b563b5178f4e4034830bb030eaf0cf4448b0235cbb6c258ec07a13 917 assets/icon.svg
 file e0e4cb2b69b27234ede1564d3a49d5c9a7c9b38aaf504fe0978b6e649abe8dbb 293031 module.wasm
-file 757d8c17a579da20d8b914d4e745dbd4fbd7f03beeaa013cd849a9c970b321b5 1099 spore.toml
-digest 562e2babe9dddf963af8cb5cc22e060c005807a3f852e17480043ef4ba7b8147
+file 80489ddb77a7ae91e68e2b15c60157fee8e0f615c85c5c335931ab29f3d15161 1283 spore.toml
+digest e31194552e1f41fc4969d4f7081cdc5b5f8ea9acebe0380072a4aa3c5f968baa
