@@ -157,7 +157,7 @@ impl Store {
             CommentFile::open(&vfs, id, &self.actor)?
         };
         let mut vfs = self.vfs.borrow_mut();
-        comments.open_thread(&mut vfs, anchor, body)?;
+        comments.open_thread(&mut vfs, anchor, body, now_ms())?;
         Ok(())
     }
 
@@ -178,6 +178,18 @@ impl Store {
         vfs.put(path, bytes, media_type, Expect::Any)?;
         Ok(())
     }
+}
+
+/// Milliseconds since the epoch, as this process reads the clock.
+///
+/// A comment carries when it was said, because a counter cannot order two
+/// writers: the layer takes the reading rather than reaching for a clock of its
+/// own, so a caller (and a test) can supply one.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or_default()
 }
 
 fn is_missing(error: &anyhow::Error) -> bool {

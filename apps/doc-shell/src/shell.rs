@@ -10,6 +10,8 @@ use std::{
 };
 
 use anyhow::Result;
+use gpui_kit::assets::IconName;
+use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
@@ -28,6 +30,7 @@ use crate::{
     layout::{Layout, Pane},
     open_doc::{OpenDocument, View},
     persist,
+    theme::{Appearance, Tokens},
     transcript::{SessionChoice, TranscriptSource, TranscriptView, VfsTranscripts},
     vault::{self, Document, Group},
 };
@@ -41,7 +44,8 @@ actions!(
         SaveDocument,
         NextSession,
         PrevSession,
-        Reload
+        Reload,
+        CycleAppearance
     ]
 );
 
@@ -76,6 +80,9 @@ pub struct Shell {
     expanded_tools: BTreeSet<(u32, usize)>,
     /// The last thing an action did, shown in the status bar.
     status: String,
+    /// Light, dark, or whatever the desktop is doing. The palette itself comes
+    /// from the kit's theme; this is only which side of it to draw on.
+    appearance: Appearance,
 }
 
 /// How the window should come up, from the command line.
@@ -87,6 +94,8 @@ pub struct Start<'a> {
     pub flipped: bool,
     /// Which view a markdown document opens in.
     pub view: View,
+    /// Which side of the light to draw on.
+    pub appearance: Appearance,
 }
 
 impl Shell {
@@ -126,6 +135,7 @@ impl Shell {
             expanded: BTreeSet::new(),
             expanded_tools: BTreeSet::new(),
             status: String::new(),
+            appearance: start.appearance,
         };
         shell.status = match shell.layouts.note() {
             Some(note) => note.to_owned(),
@@ -345,6 +355,14 @@ impl Shell {
 
     // -- rendering -------------------------------------------------------
 
+    /// Walk light → dark → system, repainting from the kit's palette each time.
+    fn cycle_appearance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.appearance = self.appearance.toggled();
+        Theme::change(self.appearance.mode(), Some(window), cx);
+        self.note(format!("appearance: {}", self.appearance.label()));
+        cx.notify();
+    }
+
     fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let flipped = self.layout.panes().first() == Some(&Pane::Transcript);
         let sidebar_right = self.layout.sidebar_at_end();
@@ -361,7 +379,7 @@ impl Shell {
             .justify_between()
             .gap_3()
             .px_3()
-            .py_1p5()
+            .py_1()
             .border_b_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
@@ -369,59 +387,97 @@ impl Shell {
                 h_flex()
                     .items_center()
                     .gap_2()
+                    .min_w_0()
                     .child(div().text_sm().font_semibold().child("doc-shell"))
                     .child(
                         div()
                             .text_xs()
+                            .min_w_0()
+                            .truncate()
                             .text_color(cx.theme().muted_foreground)
                             .child(self.title.clone()),
                     ),
             )
             .child(
+                // Symbols, and the word goes in the tooltip: a toolbar that spells
+                // out every action is a toolbar that pushes the document off the
+                // right-hand edge.
                 h_flex()
                     .items_center()
                     .gap_1()
                     .child(
                         Button::new("flip")
-                            .label(if flipped {
-                                "⇄ panes: agent | document"
+                            .icon(IconName::ArrowLeftRight)
+                            .ghost()
+                            .tooltip(if flipped {
+                                "Document on the left, agent on the right (cmd-shift-p)"
                             } else {
-                                "⇄ panes: document | agent"
+                                "Agent on the left, document on the right (cmd-shift-p)"
                             })
-                            .small()
-                            .tooltip("Swap the document and the transcript (cmd-shift-p)")
                             .on_click(cx.listener(|this, _, _, cx| this.flip(cx))),
                     )
                     .child(
                         Button::new("sidebar-side")
-                            .label(if sidebar_right {
-                                "sidebar ⇠"
+                            .icon(if sidebar_right {
+                                IconName::PanelLeft
                             } else {
-                                "sidebar ⇢"
+                                IconName::PanelRight
                             })
-                            .small()
-                            .tooltip("Move the vault to the other end (cmd-shift-b)")
+                            .ghost()
+                            .tooltip(if sidebar_right {
+                                "Vault back to the left (cmd-shift-b)"
+                            } else {
+                                "Vault to the right (cmd-shift-b)"
+                            })
                             .on_click(cx.listener(|this, _, _, cx| this.move_sidebar(cx))),
                     )
                     .when(view.is_some(), |this| {
                         this.child(
                             Button::new("view")
-                                .label(format!("view: {}", view.map_or("", View::label)))
-                                .small()
-                                .tooltip("Markdown source or rendered preview (cmd-shift-e)")
+                                .icon(match view {
+                                    Some(View::Preview) => IconName::SquarePen,
+                                    _ => IconName::Eye,
+                                })
+                                .ghost()
+                                .tooltip(match view {
+                                    Some(View::Preview) => {
+                                        "Edit the markdown source (cmd-shift-e)"
+                                    }
+                                    _ => "Render the document instead (cmd-shift-e)",
+                                })
                                 .on_click(cx.listener(|this, _, _, cx| this.toggle_view(cx))),
                         )
                         .child(
                             Button::new("save")
-                                .label(if dirty { "save ●" } else { "save" })
-                                .small()
+                                .icon(IconName::Save)
+                                .ghost()
                                 .disabled(!dirty)
-                                .tooltip("Write the buffer and reconcile it (cmd-s)")
+                                .tooltip(if dirty {
+                                    "Write the buffer and reconcile it (cmd-s)"
+                                } else {
+                                    "Nothing to save"
+                                })
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.save(window, cx);
                                 })),
                         )
-                    }),
+                    })
+                    .child(
+                        Button::new("appearance")
+                            .icon(match self.appearance {
+                                Appearance::Light => IconName::Sun,
+                                Appearance::Dark => IconName::Moon,
+                            })
+                            .ghost()
+                            .tooltip(format!(
+                                "Appearance: {} — light, dark, or follow the desktop \
+                                 (cmd-shift-t)",
+                                self.appearance.label()
+                            ))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.cycle_appearance(window, cx);
+                            })),
+                    ),
             )
     }
 
@@ -861,56 +917,82 @@ impl Shell {
         };
         v_flex()
             .flex_shrink_0()
-            .gap_1()
+            .gap_0p5()
             .px_3()
             .py_2()
             .border_b_1()
             .border_color(cx.theme().border)
+            // Header rows share one left edge, and every one of them truncates:
+            // a long session title must never push the pager out of the pane.
             .child(
                 h_flex()
                     .items_center()
                     .justify_between()
                     .gap_2()
-                    .child(div().text_sm().font_semibold().child("agent"))
                     .child(
                         h_flex()
+                            .items_center()
+                            .gap_1p5()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_semibold()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("AGENT"),
+                            )
+                            .when(!position.is_empty(), |this| {
+                                this.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(position),
+                                )
+                            }),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_shrink_0()
                             .items_center()
                             .gap_1()
                             .child(
                                 Button::new("prev-session")
-                                    .label("‹")
-                                    .small()
+                                    .icon(IconName::ChevronLeft)
+                                    .ghost()
                                     .disabled(self.choices.is_empty() || self.session == 0)
-                                    .tooltip("Previous session")
+                                    .tooltip("Previous session (cmd-alt-left)")
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.step_session(-1, cx);
                                     })),
                             )
                             .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(position),
-                            )
-                            .child(
                                 Button::new("next-session")
-                                    .label("›")
-                                    .small()
+                                    .icon(IconName::ChevronRight)
+                                    .ghost()
                                     .disabled(
                                         self.choices.is_empty()
                                             || self.session + 1 >= self.choices.len(),
                                     )
-                                    .tooltip("Next session")
+                                    .tooltip("Next session (cmd-alt-right)")
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.step_session(1, cx);
                                     })),
                             ),
                     ),
             )
-            .child(div().text_xs().font_semibold().child(title))
             .child(
                 div()
                     .text_xs()
+                    .font_semibold()
+                    .min_w_0()
+                    .truncate()
+                    .child(title),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .min_w_0()
+                    .truncate()
                     .text_color(cx.theme().muted_foreground)
                     .child(subtitle),
             )
@@ -1152,6 +1234,9 @@ impl Render for Shell {
                 this.rescan();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &CycleAppearance, window, cx| {
+                this.cycle_appearance(window, cx);
+            }))
     }
 }
 
@@ -1188,12 +1273,7 @@ fn empty_state(title: &str, detail: &str, cx: &mut Context<Shell>) -> AnyElement
 }
 
 fn thread_card(thread: ThreadView, cx: &mut Context<Shell>) -> impl IntoElement + use<> {
-    let state_color = match thread.state {
-        "exact" => cx.theme().success,
-        "clamped" => cx.theme().warning,
-        "neighbour" => cx.theme().warning,
-        _ => cx.theme().danger,
-    };
+    let state_color = Tokens::of(cx.theme()).resolution(thread.state);
     let resolution_note = match thread.state {
         "exact" => "the block is here, unchanged",
         "clamped" => "the words moved inside the block: this range no longer matches",

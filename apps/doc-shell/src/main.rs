@@ -13,9 +13,10 @@ use gpui_kit::{
 
 use doc_shell::open_doc::View;
 use doc_shell::shell::{
-    FlipPanes, MoveSidebar, NextSession, PrevSession, Reload, SaveDocument, Shell, Start,
-    ToggleView,
+    CycleAppearance, FlipPanes, MoveSidebar, NextSession, PrevSession, Reload, SaveDocument, Shell,
+    Start, ToggleView,
 };
+use doc_shell::theme::Appearance;
 
 const USAGE: &str = "\
 doc-shell — a native window onto the fungos-vfs document layer
@@ -28,6 +29,7 @@ doc-shell — a native window onto the fungos-vfs document layer
     --open PATH     a file inside the vault to open at start
     --view VIEW     markdown opens as `preview` (rendered) or `source`
     --flipped       start with the document and the transcript swapped
+    --appearance    light or dark (default: dark)
     --actor NAME    who edits and comments are attributed to (default: this
                     machine's user)
     --title NAME    what the vault is called in the tree and the toolbar
@@ -85,6 +87,7 @@ fn main() -> ExitCode {
             open: options.open.as_deref(),
             flipped: options.flipped,
             view: options.view,
+            appearance: options.appearance,
         };
         let actor = options.actor.clone();
         let root = root.clone();
@@ -115,6 +118,7 @@ fn bind_keys(cx: &mut App) {
     bind!(Reload, "cmd-shift-r", "ctrl-shift-r");
     bind!(NextSession, "cmd-alt-right", "ctrl-alt-right");
     bind!(PrevSession, "cmd-alt-left", "ctrl-alt-left");
+    bind!(CycleAppearance, "cmd-shift-t", "ctrl-shift-t");
 }
 
 #[derive(Clone, Debug)]
@@ -125,6 +129,7 @@ struct Options {
     flipped: bool,
     actor: String,
     title: Option<String>,
+    appearance: Appearance,
 }
 
 impl Default for Options {
@@ -136,6 +141,7 @@ impl Default for Options {
             flipped: false,
             actor: whoami(),
             title: None,
+            appearance: Appearance::default(),
         }
     }
 }
@@ -164,6 +170,12 @@ impl Options {
                         "preview" => View::Preview,
                         other => return Err(format!("--view is source or preview, not {other}")),
                     }
+                }
+                "--appearance" => {
+                    let text = value("--appearance")?;
+                    options.appearance = Appearance::parse(&text).ok_or_else(|| {
+                        format!("--appearance is light, dark or system, not {text}")
+                    })?;
                 }
                 other => return Err(format!("unknown argument {other}")),
             }

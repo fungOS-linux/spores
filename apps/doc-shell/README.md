@@ -9,6 +9,32 @@ cargo run --example demo_vault -- /tmp/doc-shell-demo   # build a vault to look 
 cargo run -- --root /tmp/doc-shell-demo/vault
 ```
 
+## Building
+
+The Mac is the darwin lane: a native window has to be built here to be looked
+at. Everything else — checks, clippy, tests — goes to the fleet, because a GPUI
+debug tree is about 5 GB and this disk has filled twice.
+
+```sh
+# from the spores root, not from this crate: bob ships the tree it is given, and
+# `vendor/` is ignored by this crate's .gitignore but not by the repository's
+fpl bob remote --host agora-one --full --back apps/doc-shell/Cargo.toml -- \
+  cargo clippy --manifest-path apps/doc-shell/Cargo.toml --all-targets -- -D warnings
+
+# the binary itself, on the Mac
+cargo build --manifest-path apps/doc-shell/Cargo.toml
+```
+
+Two things about that, both learned the hard way:
+
+- **`--full` is not optional while iterating.** The incremental sync missed a
+modified file and the remote happily rebuilt the previous version, which reports
+an error you have already fixed. A full upload costs seconds; trusting a stale
+build costs a debugging session.
+- **Run it from the spores root.** `bob` reads the *project root's* `.gitignore`,
+and this crate ignores `vendor/`, so a build started inside `apps/doc-shell`
+ships everything except the doc layer and fails to resolve `fungos-vfs`.
+
 ## Why it is its own workspace
 
 The Spore guests in this repository build against the headless `gpui` 0.2.2 fork

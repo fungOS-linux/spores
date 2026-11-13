@@ -11,5 +11,6 @@ pub mod layout;
 pub mod open_doc;
 pub mod persist;
 pub mod shell;
+pub mod theme;
 pub mod transcript;
 pub mod vault;
