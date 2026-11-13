@@ -42,11 +42,22 @@ A Spore is a `wasm32-wasip2` component built against the headless `gpui` in
 different `gpui`. Different crates, so this crate has its own `[workspace]`,
 lockfile and target directory.
 
-## What it still needs before it can be seen
+## What it looks like
 
-The Spore compiles and is a well-formed component; nothing hosts it yet. A host
-must link `soil:present` (surface, input, cursor) **and `soil:vfs`** and then call
-`run`.
+![the window](frame.png)
+
+That frame is real: `soil-webgpu` compiled the component, instantiated it against
+`soil:present`, and captured the surface it presented. It is the **`demo`** build
+against a fixed listing (see `src/data.rs`), because the host's Spore world does
+not import `soil:vfs` yet — the shipped build imports it and needs the grant.
+
+## What it still needs before the shipped build can be seen
+
+A host must link `soil:present` (surface, input, cursor) **and `soil:vfs`** and
+then call `run`. `crates/soil-webgpu/wit/runner.wit` is where that import is
+missing; its state type then has to implement `soil:vfs/vfs::Host` — which
+`crates/soil-vfs-host`'s `VfsHost` already does — and the runner needs a
+`--root <workspace>` to open.
 
 `crates/soil-vfs-host` in soil already implements `soil:vfs` and `soil:index`
 over `fungos-vfs`, and `crates/soil-webgpu` already presents a component's

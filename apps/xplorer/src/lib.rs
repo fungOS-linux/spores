@@ -10,8 +10,24 @@
 //! A pointer lands later; the hит-testing is the part that needs care and the
 //! arrangement does not.
 
+#[cfg(not(feature = "demo"))]
 wit_bindgen::generate!({
     path: "wit",
+    world: "runner",
+    with: {
+        "wasi:webgpu/webgpu@0.3.0-rc.2": wgpu_wasi_webgpu::wasi::webgpu::webgpu,
+    },
+    generate_all,
+});
+
+/// The same window without the namespace.
+///
+/// A host that has not linked `soil:vfs` cannot instantiate a component that
+/// imports it, so this build exists to render the arrangement against a fixed
+/// listing. It is a harness for looking at the UI, never the shipped Spore.
+#[cfg(feature = "demo")]
+wit_bindgen::generate!({
+    path: "wit-demo",
     world: "runner",
     with: {
         "wasi:webgpu/webgpu@0.3.0-rc.2": wgpu_wasi_webgpu::wasi::webgpu::webgpu,
@@ -29,7 +45,8 @@ use gpui::prelude::FluentBuilder as _;
 use gpui_component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
 use soil::present::{cursor, input, surface};
-use soil::vfs::vfs;
+
+mod data;
 
 const LILEX: &[u8] = include_bytes!("../assets/Lilex-Regular.ttf");
 const LILEX_BOLD: &[u8] = include_bytes!("../assets/Lilex-Bold.ttf");
@@ -48,7 +65,7 @@ struct Row {
     path: String,
     directory: bool,
     size: u64,
-    hydration: vfs::Hydration,
+    hydrated: bool,
 }
 
 /// What the pane on the right is showing.
@@ -90,28 +107,20 @@ impl Finder {
             note: None,
         };
         finder.reload();
+        // The harness build opens on a file, so a captured frame shows the
+        // preview pane doing its job as well as the list.
+        #[cfg(feature = "demo")]
+        if let Some(index) = finder.entries.iter().position(|row| !row.directory) {
+            finder.select(index);
+        }
         finder
     }
 
     /// Ask the host for this directory again.
     fn reload(&mut self) {
-        match vfs::ls(&self.path, 0, PAGE) {
-            Ok(page) => {
-                self.entries = page
-                    .entries
-                    .into_iter()
-                    .map(|entry| Row {
-                        name: if entry.name.is_empty() {
-                            entry.path.clone()
-                        } else {
-                            entry.name.clone()
-                        },
-                        path: entry.path,
-                        directory: matches!(entry.kind, vfs::Kind::Directory),
-                        size: entry.size,
-                        hydration: entry.hydration,
-                    })
-                    .collect();
+        match data::ls(&self.path) {
+            Ok(rows) => {
+                self.entries = rows;
                 self.entries.sort_by(|a, b| {
                     b.directory.cmp(&a.directory).then_with(|| a.name.cmp(&b.name))
                 });
@@ -123,7 +132,7 @@ impl Finder {
                 self.entries.clear();
                 self.selected = 0;
                 self.preview = Preview::empty("the host did not list this directory");
-                self.note = Some(format!("{}: {error:?}", describe(&self.path)));
+                self.note = Some(format!("{}: {error}", describe(&self.path)));
             }
         }
     }
@@ -150,29 +159,25 @@ impl Finder {
 
     /// Read the selected file through the same capability the list came from.
     fn preview_of(&self, row: &Row) -> Preview {
-        let footer = match row.hydration {
-            vfs::Hydration::Present => String::new(),
-            vfs::Hydration::Placeholder => {
-                "not on this machine yet: the namespace knows it, the bytes are elsewhere".to_owned()
-            }
+        let footer = if row.hydrated {
+            String::new()
+        } else {
+            "not on this machine yet: the namespace knows it, the bytes are elsewhere".to_owned()
         };
-        match vfs::read(&row.path, 0, PREVIEW_BYTES) {
-            Ok(chunk) => {
-                let shown = chunk.data.len();
-                let text = String::from_utf8_lossy(&chunk.data);
+        match data::read(&row.path, PREVIEW_BYTES) {
+            Ok((bytes, content_id, eof)) => {
+                let shown = bytes.len();
+                let text = String::from_utf8_lossy(&bytes);
                 if text.contains('\u{0}') {
                     return Preview {
                         title: row.name.clone(),
-                        body: format!(
-                            "binary · {} bytes · {} shown\n{}",
-                            row.size, shown, chunk.content_id
-                        ),
-                        footer: if chunk.eof { footer } else { String::new() },
+                        body: format!("binary · {} bytes · {} shown\n{}", row.size, shown, content_id),
+                        footer: if eof { footer } else { String::new() },
                         error: false,
                     };
                 }
                 let mut body: String = text.lines().take(400).collect::<Vec<_>>().join("\n");
-                if !chunk.eof {
+                if !eof {
                     body.push_str("\n\n… more than this preview shows");
                 }
                 Preview {
@@ -184,7 +189,7 @@ impl Finder {
             }
             Err(error) => Preview {
                 title: row.name.clone(),
-                body: format!("could not read this file\n{error:?}"),
+                body: format!("could not read this file\n{error}"),
                 footer,
                 error: true,
             },
@@ -302,16 +307,14 @@ impl Render for Finder {
                             .child(
                                 gpui::div()
                                     .text_sm()
-                                    .text_color(if row.directory { theme.primary } else { theme.foreground })
-                                    .child(if row.directory { "▸" } else { "·" }),
-                            )
-                            .child(
-                                gpui::div()
-                                    .text_sm()
                                     .text_color(theme.foreground)
-                                    .child(row.name.clone()),
+                                    .child(if row.directory {
+                                        format!("{}/", row.name)
+                                    } else {
+                                        row.name.clone()
+                                    }),
                             )
-                            .when(matches!(row.hydration, vfs::Hydration::Placeholder), |this| {
+                            .when(!row.hydrated, |this| {
                                 this.child(
                                     gpui::div()
                                         .text_xs()
