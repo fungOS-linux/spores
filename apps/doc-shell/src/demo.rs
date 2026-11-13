@@ -102,6 +102,10 @@ pub fn build(out: &Path) -> Result<Summary> {
     write(&vault, "notes/scratch.md", SCRATCH)?;
     write(&vault, "notes/retired.md", RETIRED)?;
     write(&vault, "projects/fungos-vfs.md", FUNGOS_VFS)?;
+    // A Word file, so the pane has a document the layer imports rather than owns.
+    // Written as a real container: the reader is the one in the document layer, and
+    // a fixture that faked the blocks would prove nothing about it.
+    write_docx(&vault, "projects/scope.docx")?;
     // A file the document layer does not model, so the pane can be honest about
     // it instead of drawing a stub.
     write(&vault, "projects/q3-review.pptx", "not really a deck\n")?;
@@ -230,4 +234,61 @@ fn import_session(out: &std::path::Path, store: &Store) -> Result<usize> {
 fn write(vault: &std::path::Path, rel: &str, text: &str) -> Result<()> {
     let path = vault.join(rel);
     fs::write(&path, text).with_context(|| format!("writing {}", path.display()))
+}
+
+/// A small but real `.docx`: the parts Word writes, paragraphs with `w14:paraId`,
+/// a heading style, and a table the reader will count rather than model.
+fn write_docx(vault: &std::path::Path, rel: &str) -> Result<()> {
+    use std::io::Write as _;
+
+    const HEAD: &str = concat!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#,
+        r#" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:body>"#
+    );
+    let paragraph = |id: &str, style: Option<&str>, text: &str| {
+        let style = style.map_or_else(String::new, |style| {
+            format!(r#"<w:pPr><w:pStyle w:val="{style}"/></w:pPr>"#)
+        });
+        format!(
+            r#"<w:p w14:paraId="{id}">{style}<w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>"#
+        )
+    };
+    let body = format!(
+        "{}{}{}{}{}",
+        paragraph("0A1B2C3D", Some("Heading1"), "Scope"),
+        paragraph(
+            "1A2B3C4E",
+            None,
+            "What this vault is for, and what it is not."
+        ),
+        paragraph(
+            "2A2B3C4F",
+            None,
+            "A paragraph Word numbered, so a thread on it survives an edit."
+        ),
+        r#"<w:tbl><w:tr><w:tc><w:p w14:paraId="3A2B3C40"><w:r><w:t>a table the reader counts</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+        paragraph("4A2B3C41", None, "Closing paragraph."),
+    );
+    let document = format!("{HEAD}{body}</w:body></w:document>");
+
+    let path = vault.join(rel);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = fs::File::create(&path).with_context(|| format!("writing {}", path.display()))?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for (name, content) in [
+        ("[Content_Types].xml", "<Types/>"),
+        ("word/document.xml", document.as_str()),
+        ("word/styles.xml", "<styles/>"),
+    ] {
+        zip.start_file(name, options)
+            .with_context(|| format!("adding {name}"))?;
+        zip.write_all(content.as_bytes())?;
+    }
+    zip.finish().with_context(|| "finishing the docx")?;
+    Ok(())
 }

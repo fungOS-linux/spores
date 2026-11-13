@@ -130,3 +130,62 @@ fn the_fixture_refuses_to_reset_records_it_did_not_write() {
     let error = demo::build(temp.path()).unwrap_err().to_string();
     assert!(error.contains("refusing to reset"), "{error}");
 }
+
+#[test]
+fn a_word_file_opens_as_an_imported_view_and_refuses_to_be_saved() {
+    // The claim the Word pane makes: the paragraph identities are Word's own, the
+    // view is real blocks the layer holds, and the container stays the authority —
+    // so a save is refused rather than faked.
+    use doc_shell::open_doc::OpenDocument;
+
+    let (_temp, summary, store) = fixture();
+    let rel = "projects/scope.docx";
+    let path = summary.vault.join(rel);
+    let id = document_id(rel);
+
+    let open = OpenDocument::open_word(&store, &id, rel, &path).unwrap();
+    assert!(open.read_only, "a Word file is imported, not edited here");
+    assert!(
+        open.imported
+            .as_deref()
+            .unwrap_or_default()
+            .contains("paragraphs"),
+        "the footer should say what the read saw: {:?}",
+        open.imported
+    );
+
+    // Blocks came from the file's paragraphs, by Word's ids.
+    let live = open.file.doc().live();
+    assert!(
+        live.len() >= 4,
+        "blocks: {:?}",
+        live.iter().map(|b| &b.text).collect::<Vec<_>>()
+    );
+    // The heading's level rides in the block's text until a block can carry a
+    // style; that wart is the layer's, and the test names it rather than hiding it.
+    assert!(
+        live.iter().any(|block| block.text == "# Scope"),
+        "the heading paragraph is a block: {:?}",
+        live.iter().map(|b| &b.text).collect::<Vec<_>>()
+    );
+    assert!(
+        live.iter().any(|block| block.id.actor.starts_with("docx:")),
+        "identities belong to the file, not to this machine"
+    );
+
+    // Saving is refused loudly rather than writing markdown into a .docx.
+    let mut open = open;
+    let error = open.save(&store).unwrap_err();
+    assert!(
+        error.to_string().contains("imported, not edited"),
+        "{error}"
+    );
+
+    // Opening the same file again is not a change: identity matches, text matches.
+    let again = OpenDocument::open_word(&store, &id, rel, &path).unwrap();
+    let footer = again.imported.unwrap_or_default();
+    assert!(
+        footer.contains("0 new blocks, 0 rewritten"),
+        "a second import should write nothing: {footer}"
+    );
+}

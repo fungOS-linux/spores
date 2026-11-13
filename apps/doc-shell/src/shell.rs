@@ -201,7 +201,29 @@ impl Shell {
     }
 
     fn open_document(&mut self, document: &Document, window: &mut Window, cx: &mut Context<Self>) {
-        if !document.modelled {
+        if document.kind == crate::vault::Kind::Word {
+            match OpenDocument::open_word(&self.store, &document.id, &document.rel, &document.path)
+            {
+                Ok(open) => {
+                    self.note(
+                        open.imported
+                            .clone()
+                            .unwrap_or_else(|| format!("{}: imported", document.rel)),
+                    );
+                    self.editor = None;
+                    self.open = Some(Open::Modelled(Box::new(open)));
+                    self.layout = self.layouts.layout(Some(&document.id));
+                    cx.notify();
+                }
+                Err(error) => {
+                    self.note(format!("{}: {error:#}", document.rel));
+                    cx.notify();
+                }
+            }
+            return;
+        }
+
+        if !document.modelled() {
             let ext = document
                 .path
                 .extension()
@@ -440,9 +462,7 @@ impl Shell {
                                 })
                                 .ghost()
                                 .tooltip(match view {
-                                    Some(View::Preview) => {
-                                        "Edit the markdown source (cmd-shift-e)"
-                                    }
+                                    Some(View::Preview) => "Edit the markdown source (cmd-shift-e)",
                                     _ => "Render the document instead (cmd-shift-e)",
                                 })
                                 .on_click(cx.listener(|this, _, _, cx| this.toggle_view(cx))),
@@ -679,12 +699,16 @@ impl Shell {
                                             div()
                                                 .text_xs()
                                                 .text_color(cx.theme().muted_foreground)
-                                                .child(if document.modelled { "¶" } else { "·" }),
+                                                .child(if document.modelled() {
+                                                    "¶"
+                                                } else {
+                                                    "·"
+                                                }),
                                         )
                                         .child(
                                             div()
                                                 .text_xs()
-                                                .when(!document.modelled, |this| {
+                                                .when(!document.modelled(), |this| {
                                                     this.text_color(cx.theme().muted_foreground)
                                                 })
                                                 .child(document.name().to_owned()),
@@ -703,7 +727,14 @@ impl Shell {
         let threads = self.threads_section(cx);
         let footer = self.document_footer(cx);
         let (view, opened) = match self.open.as_ref() {
-            Some(Open::Modelled(open)) => (Some(open.view), Some(open)),
+            Some(Open::Modelled(open)) => (
+                Some(if open.read_only {
+                    View::Preview
+                } else {
+                    open.view
+                }),
+                Some(open),
+            ),
             _ => (None, None),
         };
         let body: AnyElement = match self.open.as_ref() {
@@ -741,7 +772,11 @@ impl Shell {
         let (title, detail) = match self.open.as_ref() {
             Some(Open::Modelled(open)) => (
                 open.rel.clone(),
-                format!("markdown · id {} · {}", open.id, open.view.label()),
+                if open.read_only {
+                    format!("word · imported · id {}", open.id)
+                } else {
+                    format!("markdown · id {} · {}", open.id, open.view.label())
+                },
             ),
             Some(Open::Unmodelled { rel, ext }) => {
                 (rel.clone(), format!(".{ext} · not modelled yet"))
@@ -849,11 +884,13 @@ impl Shell {
 
     fn document_footer(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let line = match self.open.as_ref() {
-            Some(Open::Modelled(open)) => open
-                .last
-                .as_ref()
-                .map(|report| report.line())
-                .unwrap_or_else(|| "no reconcile yet".to_owned()),
+            Some(Open::Modelled(open)) => match (&open.imported, &open.last) {
+                // A Word file says what the read saw, because what it could not
+                // model is the part a reader has to know about.
+                (Some(imported), _) => imported.clone(),
+                (None, Some(report)) => report.line(),
+                (None, None) => "no reconcile yet".to_owned(),
+            },
             Some(Open::Unmodelled { .. }) => "nothing was reconciled".to_owned(),
             None => "block-level merge · last writer wins per block".to_owned(),
         };
@@ -870,7 +907,12 @@ impl Shell {
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(
-                        "block-level merge · last writer wins per block · no character CRDT yet",
+                        if matches!(self.open.as_ref(), Some(Open::Modelled(open)) if open.read_only)
+                        {
+                            "read-only: the container is the authority · no character CRDT yet"
+                        } else {
+                            "block-level merge · last writer wins per block · no character CRDT yet"
+                        },
                     ),
             )
             .child(
@@ -1009,8 +1051,9 @@ impl Shell {
             .id("transcript")
             .size_full()
             .overflow_y_scroll()
-            .gap_1()
-            .p_2()
+            .gap_2()
+            .px_3()
+            .py_2()
             .children(cards)
             .when(!unnormalized.is_empty(), |this| {
                 this.child(
@@ -1051,10 +1094,12 @@ fn turn_card(
     v_flex()
         .id(SharedString::from(format!("turn:{index}")))
         .gap_1()
-        .rounded(cx.theme().radius)
-        .border_1()
+        // Flat, not boxed: in a slim pane a border around every turn eats the
+        // width the text needs and turns the transcript into a stack of frames.
+        // A hairline under each turn does the separating instead.
+        .pb_2()
+        .border_b_1()
         .border_color(cx.theme().border)
-        .p_2()
         .child(
             h_flex()
                 .items_center()
@@ -1081,6 +1126,8 @@ fn turn_card(
                             this.child(
                                 div()
                                     .text_xs()
+                                    .min_w_0()
+                                    .truncate()
                                     .text_color(cx.theme().muted_foreground)
                                     .child(model),
                             )
@@ -1093,8 +1140,17 @@ fn turn_card(
                         .when(quiet || turn.text.chars().count() > 400, |this| {
                             this.child(
                                 Button::new(SharedString::from(format!("expand:{index}")))
-                                    .label(if open { "collapse" } else { "expand" })
-                                    .small()
+                                    .icon(if open {
+                                        IconName::ChevronUp
+                                    } else {
+                                        IconName::ChevronDown
+                                    })
+                                    .ghost()
+                                    .tooltip(if open {
+                                        "Collapse this turn"
+                                    } else {
+                                        "Show all of this turn"
+                                    })
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         if !this.expanded.remove(&index) {
                                             this.expanded.insert(index);
@@ -1131,9 +1187,18 @@ fn turn_card(
                     .gap_1()
                     .child(
                         Button::new(SharedString::from(format!("thinking:{index}")))
-                            .label(if open { "▾ thinking" } else { "▸ thinking" })
-                            .small()
+                            .icon(if open {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .label("thinking")
                             .ghost()
+                            .tooltip(if open {
+                                "Hide what it was thinking"
+                            } else {
+                                "Show what it was thinking"
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if !this.expanded.remove(&index) {
                                     this.expanded.insert(index);

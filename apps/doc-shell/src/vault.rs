@@ -10,6 +10,34 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// What the document layer can do with a file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// A markdown file: the layer's own text view, editable.
+    Markdown,
+    /// A Word file: imported into a view, read-only, because the container is the
+    /// authority for everything the reader does not model.
+    Word,
+    /// Something this build has no reader for.
+    Other,
+}
+
+impl Kind {
+    fn of(path: &Path) -> Self {
+        match path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "md" | "markdown" => Self::Markdown,
+            "docx" => Self::Word,
+            _ => Self::Other,
+        }
+    }
+}
+
 /// One file a person can click.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Document {
@@ -18,15 +46,20 @@ pub struct Document {
     pub path: PathBuf,
     /// The document layer's identity for this file. Stable across runs.
     pub id: String,
-    /// A markdown file is a document the doc layer models. Anything else is a
-    /// file and the pane says so instead of pretending.
-    pub modelled: bool,
+    /// What the layer can do with it. A file it has no reader for is still a
+    /// file, and the pane says so instead of pretending.
+    pub kind: Kind,
 }
 
 impl Document {
     /// The name a row shows.
     pub fn name(&self) -> &str {
         self.rel.rsplit('/').next().unwrap_or(&self.rel)
+    }
+
+    /// Whether the layer knows what this file is.
+    pub fn modelled(&self) -> bool {
+        !matches!(self.kind, Kind::Other)
     }
 }
 
@@ -102,7 +135,7 @@ fn walk(root: &Path, dir: &Path, depth: usize, groups: &mut Vec<Group>) {
                     let rel = rel.to_string_lossy().replace('\\', "/");
                     found.push(Document {
                         id: document_id(&rel),
-                        modelled: is_markdown(&path),
+                        kind: Kind::of(&path),
                         rel,
                         path: path.clone(),
                     });
@@ -192,8 +225,11 @@ mod tests {
         let notes = &groups[1];
         let names: Vec<&str> = notes.documents.iter().map(|doc| doc.name()).collect();
         assert_eq!(names, vec!["data.json", "today.md"]);
-        assert!(!notes.documents[0].modelled, "a json file is not modelled");
-        assert!(notes.documents[1].modelled);
+        assert!(
+            !notes.documents[0].modelled(),
+            "a json file is not modelled"
+        );
+        assert!(notes.documents[1].modelled());
     }
 
     #[test]

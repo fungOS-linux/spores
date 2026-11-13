@@ -15,7 +15,7 @@ fn main() -> Result<()> {
     let summary = doc_shell::demo::build(&out)?;
     println!("vault:     {}", summary.vault.display());
     println!("records:   {}", summary.records.display());
-    println!("documents: 5 markdown files, 1 the layer does not model");
+    println!("documents: 5 markdown files, 1 Word file, 1 the layer does not model");
     println!("sessions:  {}", summary.sessions);
     println!();
     println!("  cargo run -- --root {}", summary.vault.display());

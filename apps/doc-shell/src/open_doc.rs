@@ -89,6 +89,13 @@ pub struct OpenDocument {
     /// Why the threads could not be read, when they could not. An empty thread
     /// list and an unreadable one are different facts.
     pub threads_error: Option<String>,
+    /// A file whose container is the authority: read-only here, because writing
+    /// the merged markdown back into a `.docx` is a converter this window does not
+    /// have and should not pretend to be.
+    pub read_only: bool,
+    /// What the import saw, for the footer: paragraphs, ids, what was not
+    /// modelled. `None` for a document that was already text.
+    pub imported: Option<String>,
 }
 
 impl OpenDocument {
@@ -111,6 +118,44 @@ impl OpenDocument {
             last: Some(Report::from(report)),
             threads,
             threads_error,
+            read_only: false,
+            imported: None,
+        })
+    }
+
+    /// Import a Word file and open the view of it.
+    ///
+    /// The paragraph identities are Word's own, so opening the file again after
+    /// somebody edited it in Word matches paragraphs instead of rewriting them —
+    /// which is what keeps a thread on a clause attached to that clause.
+    pub fn open_word(store: &Store, id: &str, rel: &str, path: &Path) -> Result<Self> {
+        let (file, read, imported) = store.import_word(id, path)?;
+        let buffer = file.render();
+        let (threads, threads_error) = threads_of(store, id, file.doc());
+        let mut imported_line = format!(
+            "imported · {} paragraphs ({} by id, {} by position) · {} new blocks, {} rewritten",
+            read.paragraphs, read.identified, read.synthetic, imported.inserted, imported.updated
+        );
+        if !read.unmodeled.is_empty() {
+            let named: Vec<String> = read
+                .unmodeled
+                .iter()
+                .map(|(name, count)| format!("{name} ×{count}"))
+                .collect();
+            imported_line.push_str(&format!(" · not modelled: {}", named.join(", ")));
+        }
+        Ok(Self {
+            id: id.to_owned(),
+            rel: rel.to_owned(),
+            path: path.to_path_buf(),
+            file,
+            view: View::Preview,
+            buffer,
+            last: None,
+            threads,
+            threads_error,
+            read_only: true,
+            imported: Some(imported_line),
         })
     }
 
@@ -122,6 +167,12 @@ impl OpenDocument {
 
     /// Write the edited text to the file and let the layer turn it into ops.
     pub fn save(&mut self, store: &Store) -> Result<Report> {
+        if self.read_only {
+            anyhow::bail!(
+                "{} is imported, not edited here: the container stays the authority",
+                self.rel
+            );
+        }
         fs::write(&self.path, &self.buffer)
             .with_context(|| format!("writing {}", self.path.display()))?;
         let report = store.reconcile(&mut self.file)?;

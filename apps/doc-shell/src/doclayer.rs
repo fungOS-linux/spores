@@ -18,8 +18,8 @@ use std::{
 
 use anyhow::{Context, Result};
 use fungos_vfs::{
-    Anchor, CommentFile, ContentId, Doc, DocFile, Expect, NodeRole, Reconciled, Resolution,
-    Session, SessionSummary, Thread, Turn, Vfs,
+    Anchor, CommentFile, ContentId, Doc, DocFile, Docx, DocxImportReport, DocxReadReport, Expect,
+    NodeRole, Op, Reconciled, Resolution, Session, SessionSummary, Thread, Turn, Vfs,
 };
 
 /// A vault and the document layer's records about it.
@@ -68,6 +68,59 @@ impl Store {
     pub fn reconcile(&self, file: &mut DocFile) -> Result<Reconciled> {
         let mut vfs = self.vfs.borrow_mut();
         file.reconcile(&mut vfs)
+    }
+
+    /// Publish ops this replica authored, and write the merged text.
+    pub fn extend(&self, file: &mut DocFile, ops: Vec<Op>) -> Result<Reconciled> {
+        let mut vfs = self.vfs.borrow_mut();
+        file.extend(&mut vfs, ops)
+    }
+
+    /// Where an imported file's markdown view lives.
+    ///
+    /// A Word file is not written back: the container stays the authority, and the
+    /// thing this window can edit, snapshot and comment on is the view it was
+    /// imported into. Keeping it under `.doc-shell/` means the vault never gains
+    /// files the person did not put there.
+    #[must_use]
+    pub fn view_path(&self, id: &str) -> PathBuf {
+        let safe: String = id
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        self.state_dir.join("views").join(format!("{safe}.md"))
+    }
+
+    /// Import a Word file as `id`, and hand back the document bound to its view.
+    ///
+    /// The read is the layer's (`Docx::read`), the identity is Word's own
+    /// paragraph ids, so importing an edited file matches paragraphs rather than
+    /// diffing text. Returns the document plus what the read and the import saw.
+    pub fn import_word(
+        &self,
+        id: &str,
+        source: &Path,
+    ) -> Result<(DocFile, DocxReadReport, DocxImportReport)> {
+        let bytes =
+            std::fs::read(source).with_context(|| format!("reading {}", source.display()))?;
+        let docx = Docx::read(&bytes, id)?;
+        let document = self.doc(id).unwrap_or_else(|_| Doc::new(&self.actor));
+        let (ops, imported) = docx.ops(&document, &self.actor);
+        let view = self.view_path(id);
+        if let Some(parent) = view.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        let mut file = self.open_document(id, &view)?;
+        self.reconcile(&mut file)?;
+        self.extend(&mut file, ops)?;
+        Ok((file, docx.report, imported))
     }
 
     /// A document as the root holds it, without binding it to a file.

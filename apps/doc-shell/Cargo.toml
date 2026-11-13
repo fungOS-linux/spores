@@ -33,3 +33,11 @@ fungos-vfs = { path = "vendor/fungos-vfs" }
 
 [dev-dependencies]
 tempfile = "3"
+
+# The demo fixture writes a real `.docx` (zip of XML parts) so the Word pane is
+# exercised against the document layer's own reader rather than a stub. It is a
+# dependency of the vendored layer already, so this adds no new crate to the graph.
+[dependencies.zip]
+version = "2.4"
+default-features = false
+features = ["deflate"]
