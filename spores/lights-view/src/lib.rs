@@ -16,6 +16,8 @@ wit_bindgen::generate!({
 });
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use cli_http::{Http, Method, Request, Response};
@@ -28,8 +30,8 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::switch::Switch;
 use gpui_component::{Icon, IconName, Selectable as _, Sizable as _, Size, Theme, ThemeMode};
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
-use hue_client::{Bridge, brightness, group_power, light_power};
-use lights_core::{Action, Group, Hit, Layout, Light, Rect, Snapshot, layout};
+use hue_client::{Bridge, brightness, color, color_temp, group_power, light_power};
+use lights_core::{Action, ColorSwatch, Group, Hit, Layout, Light, Rect, Snapshot, layout};
 use soil::http::http as http_abi;
 use soil::present::{cursor, input, surface};
 
@@ -126,15 +128,42 @@ impl Http for HostHttp {
     }
 }
 
+/// How often a drag sends a value to the bridge. Hue's documentation asks for
+/// at most ten commands a second per light, and the local snapshot already
+/// moves at pointer speed, so the network only has to keep up with the eye.
+const DRAG_INTERVAL: Duration = Duration::from_millis(90);
+
+struct Drag {
+    action: Action,
+    rect: Rect,
+    last_sent: Option<Instant>,
+}
+
+/// Whether the first snapshot has landed. The surface comes up before the
+/// bridge answers, so the first frame is a skeleton rather than a blank card.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Loading,
+    Ready,
+}
+
 struct LightsView {
     snapshot: Snapshot,
     selected: String,
     active_scene: Option<String>,
+    /// The swatch the wearer last picked per light. The bridge reports xy, not
+    /// which swatch it came from, so this is UI memory and never claims to be
+    /// bridge state.
+    active_color: BTreeMap<String, ColorSwatch>,
     status: String,
     error: bool,
+    phase: Phase,
+    updated_at: Option<Instant>,
+    stale: bool,
     width: f32,
     height: f32,
     hovered: Option<Action>,
+    dragging: Option<Drag>,
 }
 
 impl LightsView {
@@ -147,11 +176,12 @@ impl LightsView {
     }
 
     fn refresh(&mut self, http: &mut dyn Http) {
+        let started = Instant::now();
+        self.phase = Phase::Ready;
         let bridge = match Bridge::with_credential(HUE_ORIGIN, HUE_CREDENTIAL) {
             Ok(bridge) => bridge,
             Err(error) => {
-                self.status = error;
-                self.error = true;
+                self.fail(error);
                 return;
             }
         };
@@ -165,22 +195,29 @@ impl LightsView {
                     self.selected = self.snapshot.initial_group();
                     self.active_scene = None;
                 }
-                self.status = "Updated from the bridge".to_string();
+                self.status.clear();
                 self.error = false;
+                self.stale = false;
+                self.updated_at = Some(started);
             }
-            Err(error) => {
-                self.status = error;
-                self.error = true;
-            }
+            Err(error) => self.fail(error),
         }
+    }
+
+    /// Keep whatever the last good snapshot said and mark it stale: an
+    /// unreachable bridge is not evidence that every light turned off.
+    fn fail(&mut self, error: String) {
+        self.status = error;
+        self.error = true;
+        self.stale = !self.snapshot.lights.is_empty();
+        self.phase = Phase::Ready;
     }
 
     fn perform(&mut self, action: Action, http: &mut dyn Http) {
         let bridge = match Bridge::with_credential(HUE_ORIGIN, HUE_CREDENTIAL) {
             Ok(bridge) => bridge,
             Err(error) => {
-                self.status = error;
-                self.error = true;
+                self.fail(error);
                 return;
             }
         };
@@ -214,13 +251,86 @@ impl LightsView {
                 self.active_scene = None;
                 self.finish(result, http);
             }
-            Action::Brightness { light, value } => {
-                let result = bridge.put(http, &format!("/lights/{light}/state"), brightness(value));
-                self.active_scene = None;
+            Action::Color { light, swatch } => {
+                let (r, g, b) = swatch.rgb();
+                let result = bridge.put(http, &format!("/lights/{light}/state"), color(r, g, b));
+                if result.is_ok() {
+                    self.active_color.insert(light, swatch);
+                    self.active_scene = None;
+                }
                 self.finish(result, http);
             }
+            // The track and the ramp are drag targets: pressing one starts a
+            // drag, which sends its own values.
+            Action::Brightness { .. } | Action::ColorTemp { .. } => {}
             Action::Refresh => self.refresh(http),
         }
+    }
+
+    fn put_state(&mut self, http: &mut dyn Http, light: &str, body: serde_json::Value) {
+        let bridge = match Bridge::with_credential(HUE_ORIGIN, HUE_CREDENTIAL) {
+            Ok(bridge) => bridge,
+            Err(error) => {
+                self.fail(error);
+                return;
+            }
+        };
+        if let Err(error) = bridge.put(http, &format!("/lights/{light}/state"), body) {
+            self.fail(error);
+        }
+    }
+
+    /// Move the drag's target to `x`, keeping the local snapshot in step so the
+    /// control tracks the pointer even between bridge commands.
+    fn drag_to(&mut self, x: f32, http: &mut dyn Http, force: bool) {
+        let Some(drag) = &self.dragging else {
+            return;
+        };
+        let fraction = ((x - drag.rect.x) / drag.rect.w.max(1.0)).clamp(0.0, 1.0);
+        let action = drag.action.clone();
+        let due = force
+            || drag
+                .last_sent
+                .is_none_or(|sent| sent.elapsed() >= DRAG_INTERVAL);
+        match action {
+            Action::Brightness { light } => {
+                let level = (fraction * 254.0).round().clamp(1.0, 254.0) as u8;
+                if let Some(target) = self.snapshot.lights.get_mut(&light) {
+                    target.on = true;
+                    target.brightness = Some(level);
+                }
+                if due {
+                    self.put_state(http, &light, brightness(level));
+                }
+            }
+            Action::ColorTemp { light } => {
+                // Left is warm (500 mired), right is daylight (153).
+                let mired = (500.0 - fraction * (500.0 - 153.0)).round() as u16;
+                if let Some(target) = self.snapshot.lights.get_mut(&light) {
+                    target.on = true;
+                    target.ct = Some(mired);
+                    target.colormode = Some("ct".to_string());
+                }
+                if due {
+                    self.put_state(http, &light, color_temp(mired));
+                }
+            }
+            _ => return,
+        }
+        if due && let Some(drag) = self.dragging.as_mut() {
+            drag.last_sent = Some(Instant::now());
+        }
+    }
+
+    /// Land the value the pointer let go on, then read the bridge once so the
+    /// screen settles on what the bulbs actually did.
+    fn end_drag(&mut self, x: f32, http: &mut dyn Http) {
+        if self.dragging.is_none() {
+            return;
+        }
+        self.drag_to(x, http, true);
+        self.dragging = None;
+        self.refresh(http);
     }
 
     fn finish(
@@ -230,10 +340,7 @@ impl LightsView {
     ) {
         match result {
             Ok(_) => self.refresh(http),
-            Err(error) => {
-                self.status = error;
-                self.error = true;
-            }
+            Err(error) => self.fail(error),
         }
     }
 
@@ -259,6 +366,12 @@ impl LightsView {
     }
 
     fn summary(&self) -> String {
+        if self.phase == Phase::Loading {
+            return "Reading the bridge".to_string();
+        }
+        if self.error && self.snapshot.lights.is_empty() {
+            return "No snapshot".to_string();
+        }
         let total = self.snapshot.lights.len();
         let on = self
             .snapshot
@@ -267,6 +380,18 @@ impl LightsView {
             .filter(|light| light.on)
             .count();
         format!("{on} of {total} on")
+    }
+
+    /// The one line at the bottom of the surface: a short status, with the
+    /// bridge's raw message kept for the notice where there is room for it.
+    fn status_text(&self) -> String {
+        if self.error {
+            return "Bridge unreachable · click to retry".to_string();
+        }
+        match self.updated_at {
+            Some(at) => format!("Updated {}", ago(at.elapsed())),
+            None => "Reading the bridge".to_string(),
+        }
     }
 
     fn hovered(&self, action: &Action) -> bool {
@@ -310,30 +435,23 @@ fn run_lights() -> Result<()> {
     });
 
     let mut http = HostHttp;
-    let mut snapshot = Snapshot::default();
-    let (status, error) = match Bridge::with_credential(HUE_ORIGIN, HUE_CREDENTIAL) {
-        Ok(bridge) => match bridge
-            .snapshot(&mut http)
-            .and_then(|value| Snapshot::parse(&value))
-        {
-            Ok(value) => {
-                snapshot = value;
-                ("Updated from the bridge".to_string(), false)
-            }
-            Err(message) => (message, true),
-        },
-        Err(message) => (message, true),
-    };
-    let selected = snapshot.initial_group();
+    // Open the window before the first read. A bridge that is slow to answer
+    // costs a skeleton frame, not a blank surface, and a bridge that never
+    // answers still shows the error instead of hanging on a white rectangle.
     let view = LightsView {
-        snapshot,
-        selected,
+        snapshot: Snapshot::default(),
+        selected: "0".to_string(),
         active_scene: None,
-        status,
-        error,
+        active_color: BTreeMap::new(),
+        status: String::new(),
+        error: false,
+        phase: Phase::Loading,
+        updated_at: None,
+        stale: false,
         width: width as f32,
         height: height as f32,
         hovered: None,
+        dragging: None,
     };
 
     let scale = surface::scale() as f32;
@@ -345,8 +463,23 @@ fn run_lights() -> Result<()> {
     let any: AnyWindowHandle = window.into();
     let mut window_size = (width, height);
     let mut dirty = true;
+    let mut first_read = true;
+    let mut last_tick = Instant::now();
 
     loop {
+        if first_read {
+            // The skeleton goes out before the blocking read, so the wearer
+            // sees the layout of the thing they are waiting for.
+            first_read = false;
+            draw_and_present(&mut cx, any, &context)?;
+            window.update(&mut cx, |view, _, cx| {
+                view.refresh(&mut http);
+                view.selected = view.snapshot.initial_group();
+                cx.notify();
+            })?;
+            dirty = true;
+        }
+
         let size_now = surface::size();
         if size_now != window_size {
             window_size = size_now;
@@ -358,12 +491,17 @@ fn run_lights() -> Result<()> {
             dirty = true;
         }
 
+        // The status line counts up, so the surface is one frame stale even
+        // when nothing has been touched.
+        if !dirty && last_tick.elapsed() >= Duration::from_secs(1) {
+            last_tick = Instant::now();
+            if window.update(&mut cx, |view, _, _| view.updated_at.is_some())? {
+                dirty = true;
+            }
+        }
+
         if dirty {
-            cx.update_window(any, |_, window, app| {
-                let _ = window.draw(app);
-            })?;
-            let image = cx.capture_screenshot(any)?;
-            present_frame(&context, image.width(), image.height(), image.as_raw())?;
+            draw_and_present(&mut cx, any, &context)?;
             dirty = false;
         }
 
@@ -397,21 +535,51 @@ fn run_lights() -> Result<()> {
                 }
                 input::Event::Moved(pointer) => {
                     window.update(&mut cx, |view, _, cx| {
-                        let hit = view.hit(pointer.x, pointer.y);
-                        if hit != view.hovered {
-                            view.hovered = hit;
-                            cx.notify();
+                        if view.dragging.is_some() {
+                            view.drag_to(pointer.x, &mut http, false);
+                        } else {
+                            let hit = view.hit(pointer.x, pointer.y);
+                            if hit != view.hovered {
+                                view.hovered = hit;
+                            }
                         }
+                        cx.notify();
                     })?;
                 }
                 input::Event::Button(button)
                     if button.pressed && button.button == input::PointerButton::Left =>
                 {
                     window.update(&mut cx, |view, _, cx| {
-                        if let Some(action) = view.hit(button.x, button.y) {
-                            view.perform(action, &mut http);
-                            cx.notify();
+                        let target = view
+                            .layout()
+                            .hits
+                            .iter()
+                            .rev()
+                            .find(|hit| hit.rect.contains(button.x, button.y))
+                            .cloned();
+                        match target {
+                            // A track is a drag target: the press already sets
+                            // the value, so a tap and a drag behave the same.
+                            Some(hit) if is_track(&hit.action) => {
+                                view.dragging = Some(Drag {
+                                    action: hit.action,
+                                    rect: hit.rect,
+                                    last_sent: None,
+                                });
+                                view.drag_to(button.x, &mut http, true);
+                            }
+                            Some(hit) => view.perform(hit.action, &mut http),
+                            None => {}
                         }
+                        cx.notify();
+                    })?;
+                }
+                input::Event::Button(button)
+                    if !button.pressed && button.button == input::PointerButton::Left =>
+                {
+                    window.update(&mut cx, |view, _, cx| {
+                        view.end_drag(button.x, &mut http);
+                        cx.notify();
                     })?;
                 }
                 input::Event::Scrolled(scroll) => {
@@ -437,6 +605,18 @@ fn run_lights() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn draw_and_present(
+    cx: &mut HeadlessAppContext,
+    any: AnyWindowHandle,
+    context: &WgpuContext,
+) -> anyhow::Result<()> {
+    cx.update_window(any, |_, window, app| {
+        let _ = window.draw(app);
+    })?;
+    let image = cx.capture_screenshot(any)?;
+    present_frame(context, image.width(), image.height(), image.as_raw())
 }
 
 fn present_frame(
@@ -507,15 +687,22 @@ impl Render for LightsView {
             stack.push(self.top_header(&layout));
         }
         stack.push(self.content_header(&layout));
-        stack.extend(self.room_hits(&layout));
-        stack.extend(self.scene_hits(&layout));
-        stack.extend(self.card_hits(&layout));
-        if let Some(power) = &layout.group_power {
-            stack.push(self.power_button(power));
+        if self.phase == Phase::Loading {
+            stack.extend(self.skeleton(&layout));
+        } else {
+            stack.extend(self.room_hits(&layout));
+            stack.extend(self.scene_hits(&layout));
+            stack.extend(self.card_hits(&layout));
+            stack.extend(self.control_hits(&layout));
+            if let Some(power) = &layout.group_power {
+                stack.push(self.power_button(power));
+            }
+            if layout.cards.is_empty() {
+                stack.push(self.empty_notice(&layout));
+            }
         }
         stack.push(self.refresh_button(&layout.refresh));
-        let success_fits = layout.mode != lights_core::Mode::Compact || layout.content.h >= 520.0;
-        if !self.status.is_empty() && (self.error || success_fits) {
+        if self.phase == Phase::Ready {
             stack.push(self.status_line(&layout));
         }
 
@@ -632,14 +819,22 @@ impl LightsView {
         let group = self.selected_group();
         let title = group.map_or("All lights", |group| group.name.as_str());
         let count = self.snapshot.lights_in(&self.selected).len();
-        let subtitle = match group {
-            Some(group) if group.kind != "Group" => format!(
-                "{} lights · {} · {}",
-                count,
-                group.kind,
-                if group.on { "on" } else { "off" }
-            ),
-            _ => format!("{count} lights · {}", self.snapshot.bridge_name),
+        let subtitle = if self.phase == Phase::Loading {
+            "Reading the bridge".to_string()
+        } else if self.error && count == 0 {
+            "No snapshot yet".to_string()
+        } else if count == 0 {
+            "No lights".to_string()
+        } else {
+            match group {
+                Some(group) if group.kind != "Group" => format!(
+                    "{} lights · {} · {}",
+                    count,
+                    group.kind,
+                    if group.on { "on" } else { "off" }
+                ),
+                _ => format!("{count} lights · {}", self.snapshot.bridge_name),
+            }
         };
         let (x, y) = if layout.mode == lights_core::Mode::Wide {
             (layout.header.x + 22.0, 24.0)
@@ -825,36 +1020,266 @@ impl LightsView {
                 continue;
             };
             elements.push(self.light_card(hit, light));
-            let rect = hit.rect;
-            let preset_w = (rect.w - 30.0 - 8.0) / 3.0;
-            for (index, (label, value)) in [("25", 64u8), ("50", 127), ("100", 254)]
-                .into_iter()
-                .enumerate()
-            {
-                let preset = Rect::new(
-                    rect.x + 15.0 + index as f32 * (preset_w + 4.0),
-                    rect.y + rect.h - 38.0,
-                    preset_w,
-                    26.0,
-                );
-                let active = light
-                    .brightness
-                    .is_some_and(|bri| (bri as i32 - value as i32).abs() < 10);
-                let button = Button::new(format!("preset-{id}-{value}"))
-                    .label(label)
-                    .xsmall()
-                    .rounded(px(6.0))
+        }
+        elements
+    }
+
+    /// What sits in the card area when there is nothing to draw: an unreachable
+    /// bridge on the first read, or a room the bridge says has no lights.
+    fn empty_notice(&self, layout: &Layout) -> AnyElement {
+        let (icon, title, body) = if self.error {
+            (
+                IconName::TriangleAlert,
+                "Can't reach the bridge",
+                self.status.clone(),
+            )
+        } else {
+            (
+                IconName::Palette,
+                "No lights here",
+                "This room has nothing the bridge will list.".to_string(),
+            )
+        };
+        div()
+            .absolute()
+            .left(px(layout.content.x))
+            .top(px(layout.content.y + 56.0))
+            .w(px(layout.content.w))
+            .h(px(96.0))
+            .rounded_lg()
+            .border_1()
+            .border_color(rgb(0x18222e))
+            .bg(rgb(PANEL))
+            .px(px(18.0))
+            .py(px(16.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .text_size(px(13.0))
+                    .when(self.error, |this| this.text_color(rgb(ROSE)))
+                    .child(Icon::new(icon).with_size(Size::Small))
+                    .child(SharedString::from(title)),
+            )
+            .child(
+                div()
+                    .mt(px(6.0))
+                    .text_size(px(10.0))
+                    .text_color(rgb(MUTED))
+                    .truncate()
+                    .child(SharedString::from(body)),
+            )
+            .into_any_element()
+    }
+
+    /// Brightness tracks, color ramps, and swatches. They paint after the card
+    /// so a busy light can still be dragged.
+    fn control_hits(&self, layout: &Layout) -> Vec<AnyElement> {
+        let mut elements = Vec::new();
+        for hit in &layout.controls {
+            match &hit.action {
+                Action::Brightness { light } => {
+                    let Some(light) = self.snapshot.lights.get(light) else {
+                        continue;
+                    };
+                    elements.push(self.track(hit, light));
+                }
+                Action::ColorTemp { light } => {
+                    let Some(light) = self.snapshot.lights.get(light) else {
+                        continue;
+                    };
+                    elements.push(self.ramp(hit, light));
+                }
+                Action::Color { light, swatch } => {
+                    let active = self.active_color.get(light) == Some(swatch);
+                    elements.push(self.swatch(hit, *swatch, active));
+                }
+                _ => {}
+            }
+        }
+        elements
+    }
+
+    /// The brightness bar. Its hit rect is taller than the bar so a fingertip
+    /// can find it on a phone; the bar itself stays thin.
+    fn track(&self, hit: &Hit, light: &Light) -> AnyElement {
+        let rect = hit.rect;
+        let fraction = light
+            .brightness
+            .map(|bri| f32::from(bri) / 254.0)
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
+        let accent = if light.on { AMBER } else { DIM };
+        let y = rect.y + rect.h / 2.0 - 3.0;
+        div()
+            .absolute()
+            .left(px(rect.x))
+            .top(px(rect.y))
+            .w(px(rect.w))
+            .h(px(rect.h))
+            .child(
+                div()
                     .absolute()
-                    .left(px(preset.x))
-                    .top(px(preset.y))
-                    .w(px(preset.w))
-                    .h(px(preset.h));
-                let button = if active {
-                    button.warning()
-                } else {
-                    button.ghost()
-                };
-                elements.push(button.into_any_element());
+                    .left(px(0.0))
+                    .top(px(y - rect.y))
+                    .w_full()
+                    .h(px(6.0))
+                    .rounded_full()
+                    .bg(rgb(TRACK)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(px(0.0))
+                    .top(px(y - rect.y))
+                    .w(relative(fraction))
+                    .h(px(6.0))
+                    .rounded_full()
+                    .bg(rgb(accent)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(px((rect.w * fraction - 6.0).clamp(-6.0, rect.w - 6.0)))
+                    .top(px(rect.h / 2.0 - 6.0))
+                    .w(px(12.0))
+                    .h(px(12.0))
+                    .rounded_full()
+                    .bg(rgb(if light.on { 0xfff0d2 } else { MUTED })),
+            )
+            .into_any_element()
+    }
+
+    /// The color-temperature ramp: warm on the left, daylight on the right,
+    /// with a marker where the bulb currently sits.
+    fn ramp(&self, hit: &Hit, light: &Light) -> AnyElement {
+        let rect = hit.rect;
+        let fraction = light
+            .ct
+            .map(|ct| 1.0 - (f32::from(ct) - 153.0) / (500.0 - 153.0))
+            .unwrap_or(0.5)
+            .clamp(0.0, 1.0);
+        let y = rect.y + rect.h / 2.0 - 4.0;
+        let segments = 18;
+        let mut bar = div()
+            .absolute()
+            .left(px(0.0))
+            .top(px(y - rect.y))
+            .w_full()
+            .h(px(8.0))
+            .rounded_full()
+            .flex()
+            .overflow_hidden();
+        for index in 0..segments {
+            let t = index as f32 / (segments - 1) as f32;
+            let mired = (500.0 - t * (500.0 - 153.0)).round() as u16;
+            let (r, g, b) = hue_client::mired_to_rgb(mired);
+            bar = bar.child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .bg(rgb(u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b))),
+            );
+        }
+        div()
+            .absolute()
+            .left(px(rect.x))
+            .top(px(rect.y))
+            .w(px(rect.w))
+            .h(px(rect.h))
+            .when(!light.on, |this| this.opacity(0.45))
+            .child(bar)
+            .child(
+                div()
+                    .absolute()
+                    .left(px((rect.w * fraction - 5.0).clamp(-5.0, rect.w - 5.0)))
+                    .top(px(rect.h / 2.0 - 7.0))
+                    .w(px(10.0))
+                    .h(px(14.0))
+                    .rounded_full()
+                    .bg(rgb(TEXT))
+                    .border_1()
+                    .border_color(rgb(0x0b0f16)),
+            )
+            .into_any_element()
+    }
+
+    fn swatch(&self, hit: &Hit, swatch: ColorSwatch, active: bool) -> AnyElement {
+        let (r, g, b) = swatch.rgb();
+        let colour = u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b);
+        let dot = (hit.rect.w - 12.0).clamp(12.0, 20.0);
+        div()
+            .absolute()
+            .left(px(hit.rect.x + (hit.rect.w - dot) / 2.0))
+            .top(px(hit.rect.y + (hit.rect.h - dot) / 2.0))
+            .w(px(dot))
+            .h(px(dot))
+            .rounded_full()
+            .bg(rgb(colour))
+            .border_2()
+            .border_color(rgb(if active { TEXT } else { colour }))
+            .when(!active, |this| this.opacity(0.85))
+            .into_any_element()
+    }
+
+    /// Placeholder cards while the first read is in flight.
+    fn skeleton(&self, layout: &Layout) -> Vec<AnyElement> {
+        let mut elements = Vec::new();
+        let gap = 10.0;
+        let columns = layout.columns.max(1) as f32;
+        let width = (layout.content.w - gap * (columns - 1.0)) / columns;
+        let top = layout.content.y + 56.0;
+        for row in 0..2 {
+            for column in 0..layout.columns {
+                let y = top + row as f32 * (layout.card_h + gap);
+                if y + layout.card_h > layout.content.y + layout.content.h {
+                    continue;
+                }
+                let x = layout.content.x + column as f32 * (width + gap);
+                elements.push(
+                    div()
+                        .absolute()
+                        .left(px(x))
+                        .top(px(y))
+                        .w(px(width))
+                        .h(px(layout.card_h))
+                        .rounded_lg()
+                        .bg(rgb(PANEL))
+                        .border_1()
+                        .border_color(rgb(0x141d28))
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(15.0))
+                                .top(px(14.0))
+                                .w(px(width * 0.45))
+                                .h(px(10.0))
+                                .rounded_full()
+                                .bg(rgb(0x18232f)),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(15.0))
+                                .top(px(34.0))
+                                .w(px(width * 0.28))
+                                .h(px(7.0))
+                                .rounded_full()
+                                .bg(rgb(0x141d28)),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(15.0))
+                                .top(px(66.0))
+                                .w(px(width - 30.0))
+                                .h(px(6.0))
+                                .rounded_full()
+                                .bg(rgb(0x18232f)),
+                        )
+                        .into_any_element(),
+                );
             }
         }
         elements
@@ -869,11 +1294,19 @@ impl LightsView {
         } else {
             DIM
         };
-        let fraction = light
-            .brightness
-            .map(|bri| f32::from(bri) / 254.0)
-            .unwrap_or(0.0)
-            .clamp(0.0, 1.0);
+        let state = if !light.reachable {
+            "Unreachable".to_string()
+        } else if light.on {
+            format!("On · {}%", percent(light.brightness))
+        } else {
+            "Off".to_string()
+        };
+        let dot = if light.on {
+            self.dot_colour(light)
+        } else {
+            None
+        };
+        let full = rect.h >= 160.0;
         let mut card = div()
             .absolute()
             .left(px(rect.x))
@@ -884,71 +1317,80 @@ impl LightsView {
             .bg(rgb(if light.on { PANEL_RAISED } else { PANEL }))
             .border_1()
             .border_color(rgb(if light.on { 0x263647 } else { 0x18222e }))
-            .px(px(15.0))
-            .py(px(13.0))
             .child(
                 div()
-                    .w(px(rect.w - 76.0))
-                    .text_size(px(14.0))
+                    .absolute()
+                    .left(px(15.0))
+                    .top(px(if full { 12.0 } else { 8.0 }))
+                    .w(px((rect.w - if full { 96.0 } else { 30.0 }).max(20.0)))
+                    .text_size(px(if full { 14.0 } else { 12.0 }))
                     .font_weight(FontWeight::SEMIBOLD)
                     .truncate()
                     .child(SharedString::from(light.name.clone())),
             )
             .child(
                 div()
-                    .mt(px(3.0))
-                    .text_size(px(10.0))
-                    .text_color(rgb(accent))
-                    .child(SharedString::from(if !light.reachable {
-                        "Unreachable".to_string()
-                    } else if light.on {
-                        format!("On · {}%", percent(light.brightness))
-                    } else {
-                        "Off".to_string()
-                    })),
+                    .absolute()
+                    .left(px(15.0))
+                    .top(px(if full { 34.0 } else { 27.0 }))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .when_some(dot, |this, colour| {
+                        this.child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(rgb(colour)))
+                    })
+                    .child(
+                        div()
+                            .text_size(px(10.0))
+                            .text_color(rgb(accent))
+                            .child(SharedString::from(state)),
+                    ),
             )
             .child(
                 div()
-                    .mt(px(14.0))
-                    .relative()
-                    .h(px(6.0))
-                    .w_full()
-                    .rounded_lg()
-                    .bg(rgb(TRACK))
+                    .absolute()
+                    .left(px(rect.w - 75.0))
+                    .top(px(if full { 12.0 } else { 22.0 }))
+                    .w(px(60.0))
+                    .h(px(if full { 26.0 } else { 24.0 }))
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .child(
-                        div()
-                            .absolute()
-                            .left(px(0.0))
-                            .top(px(0.0))
-                            .h(px(6.0))
-                            .w(relative(fraction))
-                            .rounded_lg()
-                            .bg(rgb(accent)),
+                        Switch::new(format!("light-switch-{}", light.id))
+                            .checked(light.on)
+                            .with_size(Size::Small)
+                            .color(rgb(AMBER))
+                            .accessibility_label(format!(
+                                "Turn {} {}",
+                                light.name,
+                                if light.on { "off" } else { "on" }
+                            )),
                     ),
             );
-        card = card.child(
-            div()
-                .absolute()
-                .left(px(rect.w - 75.0))
-                .top(px(12.0))
-                .w(px(60.0))
-                .h(px(26.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    Switch::new(format!("light-switch-{}", light.id))
-                        .checked(light.on)
-                        .with_size(Size::Small)
-                        .color(rgb(AMBER))
-                        .accessibility_label(format!(
-                            "Turn {} {}",
-                            light.name,
-                            if light.on { "off" } else { "on" }
-                        )),
-                ),
-        );
+        if self.stale {
+            card = card.opacity(0.75);
+        }
         card.into_any_element()
+    }
+
+    /// The dot next to a light's state: the swatch that was just picked, or the
+    /// color the bridge reports through `xy`/`ct`.
+    fn dot_colour(&self, light: &Light) -> Option<u32> {
+        let pack = |(r, g, b): (u8, u8, u8)| u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b);
+        if let Some(swatch) = self.active_color.get(&light.id) {
+            return Some(pack(swatch.rgb()));
+        }
+        match light.colormode.as_deref() {
+            Some("xy") => light.xy.map(|[x, y]| {
+                pack(hue_client::xy_to_rgb(
+                    f64::from(x) / 1000.0,
+                    f64::from(y) / 1000.0,
+                ))
+            }),
+            Some("ct") => light.ct.map(|ct| pack(hue_client::mired_to_rgb(ct))),
+            _ => None,
+        }
     }
 
     fn watch_row(&self, hit: &Hit, light: &Light) -> AnyElement {
@@ -1058,41 +1500,49 @@ impl LightsView {
     }
 
     fn status_line(&self, layout: &Layout) -> AnyElement {
-        let (x, y, w) = if layout.mode == lights_core::Mode::Wide {
-            (22.0, layout.rail.h - 70.0, layout.rail.w - 44.0)
+        let rect = layout.status;
+        let (colour, icon) = if self.error {
+            (ROSE, IconName::TriangleAlert)
+        } else if self.stale {
+            (AMBER, IconName::TriangleAlert)
         } else {
-            (
-                16.0,
-                layout.content.y + layout.content.h - 20.0,
-                layout.content.w,
-            )
+            (GREEN, IconName::CircleCheck)
         };
+        let text = self.status_text();
         div()
             .absolute()
-            .left(px(x))
-            .top(px(y))
-            .w(px(w))
+            .left(px(rect.x))
+            .top(px(rect.y))
+            .w(px(rect.w))
+            .h(px(rect.h))
             .px(px(2.0))
             .flex()
             .items_center()
-            .gap(px(4.0))
+            .gap(px(5.0))
             .text_size(px(9.0))
-            .text_color(rgb(if self.error { ROSE } else { GREEN }))
-            .child(
-                Icon::new(if self.error {
-                    IconName::TriangleAlert
-                } else {
-                    IconName::CircleCheck
-                })
-                .with_size(Size::XSmall),
-            )
+            .text_color(rgb(colour))
+            .child(Icon::new(icon).with_size(Size::XSmall))
             .child(
                 div()
                     .min_w(px(0.0))
                     .truncate()
-                    .child(SharedString::from(self.status.clone())),
+                    .child(SharedString::from(text)),
             )
             .into_any_element()
+    }
+}
+
+fn is_track(action: &Action) -> bool {
+    matches!(action, Action::Brightness { .. } | Action::ColorTemp { .. })
+}
+
+fn ago(elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs();
+    match seconds {
+        0 => "just now".to_string(),
+        1..=59 => format!("{seconds}s ago"),
+        60..=3599 => format!("{}m ago", seconds / 60),
+        _ => format!("{}h ago", seconds / 3600),
     }
 }
 

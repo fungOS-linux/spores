@@ -8,13 +8,31 @@ the pointer stream, the origin allowlist, and the bridge key.
 
 ![lights-view on a watch-sized surface](assets/lights-view-watch.png)
 
+Both captures are the real presenter against the live bridge, taken while every
+light in the house was off.
+
 ## What it shows
 
 - **Rooms** from the bridge's groups, with the bridge's all-lights group first.
 - **Scenes** scoped to the selected room; never a scene from another room.
-- **Lights** as cards with power, a brightness meter, and 25/50/100 presets.
-- **Watch mode** below 560 px tall: room chips, a group power switch, and one
-  toggle row per visible light.
+- **Lights** as cards with power, a draggable brightness track, a color
+  temperature ramp, and six color swatches — each card shows only the controls
+  the bulb's `capabilities` says it has.
+- **A color dot** beside each light's state, painted from the `xy` or `ct` the
+  bridge reports, so the card reflects the bulb rather than the button that was
+  last pressed.
+- **Watch mode** below 560 px tall or 400 px wide: room chips, a group power
+  switch, and one toggle row per visible light.
+
+## States
+
+The surface opens before the bridge answers: the first frame is a skeleton in
+the real card grid, so a slow bridge costs a placeholder rather than a blank
+window. When a read fails, the last snapshot stays on screen, the cards dim, and
+the status line turns amber; the room header says so and a click anywhere on
+that line retries. With no snapshot at all, the card area explains the failure
+instead of showing an empty grid. The status line counts up ("Updated 12s ago")
+and the frame is redrawn once a second to keep it honest.
 
 When a request fails, the last snapshot stays on screen and the status line
 reports the bridge error. The view never fabricates an off state or a zero
@@ -44,7 +62,10 @@ same `--hue-bridge` and Geode flags so the child inherits the grant.
 
 ## Input
 
-- click a room, scene, light, switch, or preset
+- click a room, scene, light, switch, or swatch
+- drag a brightness track or a color ramp: the value follows the pointer and
+  the bridge hears at most one command per 90 ms, with the released value last
+- click the status line to read the bridge again
 - `up` / `down`: previous/next room
 - `space`: toggle the selected room
 - `r`: refresh the bridge snapshot
@@ -68,15 +89,16 @@ The kit gives us consistent buttons, switches, focus structure, and theme
 tokens. The remaining UI work is mostly outside the component library:
 
 - route host pointer/key events into GPUI so hover, press, focus rings, and
-  slider drags animate inside the components; today the Spore hit-tests the
-  normalized events itself
-- a color/temperature picker and a real brightness slider (Hue `xy`/`ct`)
-- a scroll/clip viewport for long rooms and short compact screens
+  transitions animate inside the components; today the Spore hit-tests the
+  normalized events itself and drives its own drag state
+- a two-dimensional color picker over the bulb's gamut, rather than six fixed
+  swatches and a fixed temperature ramp
+- a scroll/clip viewport for rooms with more lights than fit
 - pairing, bridge discovery, and room/scene editing sheets
-- a11y tree publication for the raw hit region, plus a second font weight for
-  hierarchy
-- a non-blocking request state so a slow bridge shows a skeleton instead of
-  freezing the frame
+- a11y tree publication for the raw hit region, focus traversal, and larger
+  watch touch targets
+- a genuinely non-blocking read: the first frame is a skeleton now, but the
+  fetch still blocks the guest until the bridge answers
 
 ## Build
 
