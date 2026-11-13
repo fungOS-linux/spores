@@ -31,6 +31,7 @@ default = "canvas"
 surfaces = ["canvas"]
 
 [grants]
+"wasi:webgpu" = "render the force layout into one host-presented texture"
 "soil:http" = "fetch the read-only run list from the sidecar"
 "soil:present" = "draw and present its own surface"
 
