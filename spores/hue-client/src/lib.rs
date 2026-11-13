@@ -248,6 +248,70 @@ pub fn brightness(value: u8) -> Value {
     json!({ "bri": value, "on": true })
 }
 
+/// A color-temperature body. Hue takes mired, not Kelvin, and rejects values
+/// outside `153..=500`.
+pub fn color_temp(mired: u16) -> Value {
+    json!({ "ct": mired.clamp(153, 500), "on": true })
+}
+
+/// A color body for an sRGB swatch. The bridge takes CIE xy.
+pub fn color(r: u8, g: u8, b: u8) -> Value {
+    let (x, y) = rgb_to_xy(r, g, b);
+    json!({ "xy": [x, y], "on": true })
+}
+
+/// The inverse of [`rgb_to_xy`], for painting a light's current color.
+///
+/// Approximate on purpose: the dot next to a light name only has to read as
+/// "warm white" or "teal", and the round trip through xy loses saturation
+/// that the gamut of a real bulb would clamp anyway.
+pub fn xy_to_rgb(x: f64, y: f64) -> (u8, u8, u8) {
+    if y <= f64::EPSILON {
+        return (255, 255, 255);
+    }
+    let xr = x / y;
+    let yr = 1.0;
+    let zr = (1.0 - x - y) / y;
+    let r = xr * 3.2406 - yr * 1.5372 - zr * 0.4986;
+    let g = -xr * 0.9689 + yr * 1.8758 + zr * 0.0415;
+    let b = xr * 0.0557 - yr * 0.2040 + zr * 1.0570;
+    let encode = |value: f64| {
+        let value = value.clamp(0.0, 1.0);
+        let value = if value > 0.003_130_8 {
+            1.055 * value.powf(1.0 / 2.4) - 0.055
+        } else {
+            12.92 * value
+        };
+        (value * 255.0).round().clamp(0.0, 255.0) as u8
+    };
+    (encode(r), encode(g), encode(b))
+}
+
+/// A blackbody approximation of a mired value, for the same dot.
+pub fn mired_to_rgb(mired: u16) -> (u8, u8, u8) {
+    let kelvin = f64::from(mired.clamp(153, 500)).recip() * 1_000_000.0;
+    let t = kelvin / 100.0;
+    let red = if t <= 66.0 {
+        255.0
+    } else {
+        329.698_727_446 * (t - 60.0).powf(-0.133_204_759_2)
+    };
+    let green = if t <= 66.0 {
+        99.470_802_586_1 * t.ln() - 161.119_568_166_1
+    } else {
+        288.122_169_528_3 * (t - 60.0).powf(-0.075_514_849_2)
+    };
+    let blue = if t >= 66.0 {
+        255.0
+    } else if t <= 19.0 {
+        0.0
+    } else {
+        138.517_731_223_1 * (t - 10.0).ln() - 305.044_792_730_7
+    };
+    let channel = |value: f64| value.clamp(0.0, 255.0) as u8;
+    (channel(red), channel(green), channel(blue))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,5 +408,40 @@ mod tests {
         let (x, y) = rgb_to_xy(255, 0, 0);
         assert!((x - 0.7006).abs() < 0.001, "{x}");
         assert!((y - 0.2993).abs() < 0.001, "{y}");
+    }
+
+    #[test]
+    fn color_bodies_carry_xy_and_switch_the_light_on() {
+        let body = color(255, 0, 0);
+        assert_eq!(body["on"], true);
+        let x = body["xy"][0].as_f64().unwrap();
+        let y = body["xy"][1].as_f64().unwrap();
+        assert!((x - 0.7006).abs() < 0.001, "{x}");
+        assert!((y - 0.2993).abs() < 0.001, "{y}");
+    }
+
+    #[test]
+    fn color_temperature_is_clamped_to_the_bridge_range() {
+        assert_eq!(color_temp(366)["ct"], 366);
+        assert_eq!(color_temp(0)["ct"], 153);
+        assert_eq!(color_temp(900)["ct"], 500);
+    }
+
+    #[test]
+    fn painting_a_color_survives_the_round_trip() {
+        let (r, g, b) = xy_to_rgb(0.7, 0.3);
+        assert!(r > 180 && g < 80 && b < 80, "{r} {g} {b}");
+        let (r, g, b) = xy_to_rgb(0.0, 0.0);
+        assert_eq!((r, g, b), (255, 255, 255));
+    }
+
+    #[test]
+    fn mired_reads_warm_at_one_end_and_cool_at_the_other() {
+        // 153 mired is ~6500 K, which is the white end: the channels sit
+        // together. 500 mired is ~2000 K and should be visibly amber.
+        let (r, _, b) = mired_to_rgb(153);
+        assert!((i32::from(r) - i32::from(b)).abs() < 20, "cool end {r} {b}");
+        let (r, _, b) = mired_to_rgb(500);
+        assert!(i32::from(r) - i32::from(b) > 100, "warm end {r} {b}");
     }
 }
