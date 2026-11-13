@@ -20,11 +20,11 @@ wit_bindgen::generate!({
     generate_all,
 });
 
-/// The same window without the namespace.
-///
-/// A host that has not linked `soil:vfs` cannot instantiate a component that
-/// imports it, so this build exists to render the arrangement against a fixed
-/// listing. It is a harness for looking at the UI, never the shipped Spore.
+// The same window without the namespace.
+//
+// A host that has not linked `soil:vfs` cannot instantiate a component that
+// imports it, so this build exists to render the arrangement against a fixed
+// listing. It is a harness for looking at the UI, never the shipped Spore.
 #[cfg(feature = "demo")]
 wit_bindgen::generate!({
     path: "wit-demo",
@@ -37,11 +37,11 @@ wit_bindgen::generate!({
 
 use std::{borrow::Cow, sync::Arc};
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AppContext as _, Context, HeadlessAppContext, IntoElement, ParentElement as _,
-    PlatformTextSystem as _, Render, Styled as _, Window, px, rgb, size,
+    PlatformTextSystem as _, Render, Styled as _, Window, px, size,
 };
-use gpui::prelude::FluentBuilder as _;
 use gpui_component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
 use soil::present::{cursor, input, surface};
@@ -57,6 +57,7 @@ const LILEX_BOLD: &[u8] = include_bytes!("../assets/Lilex-Bold.ttf");
 const PREVIEW_BYTES: u32 = 24 * 1024;
 
 /// How many entries one page asks for.
+#[cfg_attr(feature = "demo", allow(dead_code))]
 const PAGE: u32 = 500;
 
 /// One row in the list.
@@ -95,6 +96,9 @@ struct Finder {
     selected: usize,
     preview: Preview,
     note: Option<String>,
+    /// How many tiles fit in one row, as of the last render. Arrow keys use it to
+    /// move by a row; the arrangement is the only thing that knows the width.
+    columns: usize,
 }
 
 impl Finder {
@@ -105,6 +109,7 @@ impl Finder {
             selected: 0,
             preview: Preview::empty("select a file to look inside it"),
             note: None,
+            columns: 1,
         };
         finder.reload();
         // The harness build opens on a file, so a captured frame shows the
@@ -122,7 +127,9 @@ impl Finder {
             Ok(rows) => {
                 self.entries = rows;
                 self.entries.sort_by(|a, b| {
-                    b.directory.cmp(&a.directory).then_with(|| a.name.cmp(&b.name))
+                    b.directory
+                        .cmp(&a.directory)
+                        .then_with(|| a.name.cmp(&b.name))
                 });
                 self.selected = 0;
                 self.note = None;
@@ -171,7 +178,10 @@ impl Finder {
                 if text.contains('\u{0}') {
                     return Preview {
                         title: row.name.clone(),
-                        body: format!("binary · {} bytes · {} shown\n{}", row.size, shown, content_id),
+                        body: format!(
+                            "binary · {} bytes · {} shown\n{}",
+                            row.size, shown, content_id
+                        ),
                         footer: if eof { footer } else { String::new() },
                         error: false,
                     };
@@ -223,32 +233,38 @@ impl Finder {
             return;
         }
         let leaving = self.path.clone();
-        self.path = leaving.rsplit_once('/').map_or_else(String::new, |(head, _)| head.to_owned());
+        self.path = leaving
+            .rsplit_once('/')
+            .map_or_else(String::new, |(head, _)| head.to_owned());
         self.reload();
-        if let Some(index) = self
-            .entries
-            .iter()
-            .position(|row| row.path == leaving)
-        {
+        if let Some(index) = self.entries.iter().position(|row| row.path == leaving) {
             self.select(index);
         }
     }
 
     fn handle_key(&mut self, key: &str) -> bool {
         match key {
-            "arrow-down" | "j" => {
+            "arrow-right" | "l" => {
                 self.move_selection(1);
                 true
             }
-            "arrow-up" | "k" => {
+            "arrow-left" | "h" => {
                 self.move_selection(-1);
                 true
             }
-            "enter" | "arrow-right" => {
+            "arrow-down" | "j" => {
+                self.move_selection(self.columns.max(1) as isize);
+                true
+            }
+            "arrow-up" | "k" => {
+                self.move_selection(-(self.columns.max(1) as isize));
+                true
+            }
+            "enter" => {
                 self.enter();
                 true
             }
-            "backspace" | "arrow-left" => {
+            "backspace" => {
                 self.up();
                 true
             }
@@ -259,6 +275,58 @@ impl Finder {
             _ => false,
         }
     }
+}
+
+/// An icon drawn from rectangles, because a Spore has no asset source and this
+/// fork has no path transforms. Kind is read from the name: it is a hint, not a
+/// claim about the bytes, and the preview is where the truth is.
+///
+/// Ink is the theme's foreground and the detail is punched in the theme's
+/// background, so the same glyph reads in either mode without a second palette.
+fn tile_icon(row: &Row, theme: &gpui_component::Theme) -> gpui::AnyElement {
+    let name = row.name.to_ascii_lowercase();
+    let folder = theme.primary;
+    let paper = theme.foreground;
+    let ink = theme.background;
+
+    if row.directory {
+        return v_flex()
+            .items_start()
+            .child(gpui::div().w(px(18.0)).h(px(6.0)).rounded_t_sm().bg(folder))
+            .child(gpui::div().w(px(44.0)).h(px(30.0)).rounded_sm().bg(folder))
+            .into_any_element();
+    }
+
+    // A page with a folded corner, and what is written on it: bars for text,
+    // a chevron pair for code, a bar chart for a deck or a sheet.
+    let (width, lines) = if name.ends_with(".md") || name.ends_with(".txt") {
+        (34.0, 3)
+    } else if name.ends_with(".lua") || name.ends_with(".rs") || name.ends_with(".toml") {
+        (34.0, 2)
+    } else if name.ends_with(".pptx") || name.ends_with(".docx") || name.ends_with(".xlsx") {
+        (34.0, 4)
+    } else {
+        (34.0, 3)
+    };
+
+    let mut body = v_flex()
+        .w(px(width + 8.0))
+        .h(px(width + 12.0))
+        .items_center()
+        .justify_center()
+        .gap_0p5()
+        .rounded_sm()
+        .bg(paper);
+
+    for index in 0..lines {
+        body = body.child(
+            gpui::div()
+                .w(px(if index == lines - 1 { 12.0 } else { 20.0 }))
+                .h(px(2.0))
+                .bg(ink),
+        );
+    }
+    body.into_any_element()
 }
 
 fn describe(path: &str) -> String {
@@ -284,55 +352,117 @@ impl Render for Finder {
         let muted = theme.muted_foreground;
         let border = theme.border;
 
-        let rows: Vec<gpui::AnyElement> = self
+        // What the preview is looking at, said in the header rather than guessed at:
+        // a size, and whether the bytes are actually on this machine.
+        let subtitle = self.entries.get(self.selected).map(|row| {
+            if row.directory {
+                "directory".to_owned()
+            } else {
+                format!(
+                    "{} · {}",
+                    human_size(row.size),
+                    if row.hydrated {
+                        "on this machine"
+                    } else {
+                        "not on this machine"
+                    }
+                )
+            }
+        });
+
+        // The path as breadcrumb segments, root first, the last one where we are.
+        // One chip per segment beats one string: the eye lands on the leaf, and a
+        // deep path does not read as a sentence.
+        let segments: Vec<&str> = self
+            .path
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
+        let mut crumbs: Vec<gpui::AnyElement> = Vec::new();
+        if segments.is_empty() {
+            crumbs.push(
+                gpui::div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child("/")
+                    .into_any_element(),
+            );
+        } else {
+            crumbs.push(
+                gpui::div()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("/")
+                    .into_any_element(),
+            );
+            for (index, segment) in segments.iter().enumerate() {
+                if index > 0 {
+                    crumbs.push(
+                        gpui::div()
+                            .text_sm()
+                            .text_color(muted)
+                            .child("/")
+                            .into_any_element(),
+                    );
+                }
+                let current = index + 1 == segments.len();
+                crumbs.push(
+                    gpui::div()
+                        .text_sm()
+                        .text_color(if current { theme.foreground } else { muted })
+                        .child((*segment).to_owned())
+                        .into_any_element(),
+                );
+            }
+        }
+
+        // A grid of tiles, the way a launcher or a Finder icon view reads: the
+        // icon says what kind of thing it is and the name sits under it, so a
+        // column of paths is not the only way to know what is here.
+        const TILE: f32 = 112.0;
+        const GAP: f32 = 8.0;
+        let list_width = (width as f32) * 0.58;
+        let columns = (((list_width - 24.0) / (TILE + GAP)).floor() as usize).max(1);
+        self.columns = columns;
+
+        let tiles: Vec<gpui::AnyElement> = self
             .entries
             .iter()
             .enumerate()
             .map(|(index, row)| {
                 let selected = index == self.selected;
-                gpui::div()
-                    .flex()
+                v_flex()
+                    .w(px(TILE))
+                    .h(px(TILE + 8.0))
                     .items_center()
-                    .justify_between()
-                    .w_full()
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
+                    .justify_start()
+                    .gap_1p5()
+                    .pt_2()
+                    .rounded_lg()
                     .when(selected, |this| this.bg(theme.accent))
+                    // A fixed well for the icon, so names sit on one line across
+                    // the grid no matter how tall the glyph is. A row flex, so
+                    // `justify_center` is what centres the icon horizontally.
                     .child(
-                        gpui::div()
-                            .flex()
+                        h_flex()
+                            .h(px(52.0))
+                            .w_full()
                             .items_center()
-                            .gap_2()
-                            .child(
-                                gpui::div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child(if row.directory {
-                                        format!("{}/", row.name)
-                                    } else {
-                                        row.name.clone()
-                                    }),
-                            )
-                            .when(!row.hydrated, |this| {
-                                this.child(
-                                    gpui::div()
-                                        .text_xs()
-                                        .text_color(muted)
-                                        .child("not here"),
-                                )
-                            }),
+                            .justify_center()
+                            .child(tile_icon(row, theme)),
                     )
                     .child(
                         gpui::div()
+                            .px_1()
+                            .max_w_full()
                             .text_xs()
-                            .text_color(muted)
-                            .child(if row.directory {
-                                String::new()
-                            } else {
-                                human_size(row.size)
-                            }),
+                            .truncate()
+                            .text_color(theme.foreground)
+                            .child(row.name.clone()),
                     )
+                    .when(!row.hydrated, |this| {
+                        this.child(gpui::div().text_xs().text_color(muted).child("not here"))
+                    })
                     .into_any_element()
             })
             .collect();
@@ -349,36 +479,40 @@ impl Render for Finder {
                     .py_2()
                     .border_b_1()
                     .border_color(border)
-                    .child(
-                        gpui::div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(describe(&self.path)),
-                    )
-                    .child(
-                        gpui::div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(format!(
-                                "{} entr{} · enter opens · backspace goes up · r reloads",
-                                self.entries.len(),
-                                if self.entries.len() == 1 { "y" } else { "ies" }
-                            )),
-                    ),
+                    .child(h_flex().items_center().gap_1().children(crumbs))
+                    .child(gpui::div().text_xs().text_color(muted).child(format!(
+                        "{} entr{} · enter opens · backspace up",
+                        self.entries.len(),
+                        if self.entries.len() == 1 { "y" } else { "ies" }
+                    ))),
             )
             .child(
                 h_flex()
                     .flex_1()
                     .min_h_0()
                     .child(
-                        v_flex()
-                            .w(px((width as f32) * 0.46))
+                        h_flex()
+                            .w(px(list_width))
                             .h_full()
-                            .gap_0p5()
-                            .p_2()
+                            .items_start()
+                            .content_start()
+                            .flex_wrap()
+                            .gap(px(GAP))
+                            .p_3()
                             .border_r_1()
                             .border_color(border)
-                            .children(rows),
+                            .children(if self.entries.is_empty() {
+                                vec![
+                                    gpui::div()
+                                        .p_1()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .child("this directory is empty")
+                                        .into_any_element(),
+                                ]
+                            } else {
+                                tiles
+                            }),
                     )
                     .child(
                         v_flex()
@@ -388,15 +522,28 @@ impl Render for Finder {
                             .p_3()
                             .gap_2()
                             .child(
-                                gpui::div()
-                                    .text_sm()
-                                    .text_color(theme.foreground)
-                                    .child(self.preview.title.clone()),
+                                v_flex()
+                                    .gap_0p5()
+                                    .child(
+                                        gpui::div()
+                                            .text_sm()
+                                            .text_color(theme.foreground)
+                                            .child(self.preview.title.clone()),
+                                    )
+                                    .when_some(subtitle, |this, text| {
+                                        this.child(
+                                            gpui::div().text_xs().text_color(muted).child(text),
+                                        )
+                                    }),
                             )
                             .child(
                                 gpui::div()
                                     .text_xs()
-                                    .text_color(if self.preview.error { theme.danger } else { muted })
+                                    .text_color(if self.preview.error {
+                                        theme.danger
+                                    } else {
+                                        muted
+                                    })
                                     .child(self.preview.body.clone()),
                             )
                             .when(!self.preview.footer.is_empty(), |this| {
@@ -417,19 +564,24 @@ impl Render for Finder {
                     .py_1()
                     .border_t_1()
                     .border_color(border)
+                    .child(gpui::div().text_xs().text_color(muted).child(
+                        self.note.clone().unwrap_or_else(
+                            || match self.entries.get(self.selected) {
+                                Some(row) => format!(
+                                    "{} of {} · {}",
+                                    self.selected + 1,
+                                    self.entries.len(),
+                                    row.name
+                                ),
+                                None => format!("{} × {}", width, height),
+                            },
+                        ),
+                    ))
                     .child(
                         gpui::div()
                             .text_xs()
                             .text_color(muted)
-                            .child(self.note.clone().unwrap_or_else(|| {
-                                format!("{} × {}", width, height)
-                            })),
-                    )
-                    .child(
-                        gpui::div()
-                            .text_xs()
-                            .text_color(rgb(0x808080))
-                            .child("q quits"),
+                            .child("d theme · q quits"),
                     ),
             )
     }
@@ -454,13 +606,17 @@ fn run_xplorer() -> anyhow::Result<()> {
     });
 
     cx.update(gpui_component::init);
+    // Dark by default: this is a surface for looking at files at night as often as
+    // in daylight, and the palette is the kit's, so one call moves everything.
+    cx.update(|cx| {
+        gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+    });
 
     let scale = surface::scale() as f32;
-    let window = cx.open_window_scaled(
-        size(px(width as f32), px(height as f32)),
-        scale,
-        |_, cx| cx.new(|_| Finder::open()),
-    )?;
+    let window =
+        cx.open_window_scaled(size(px(width as f32), px(height as f32)), scale, |_, cx| {
+            cx.new(|_| Finder::open())
+        })?;
     let any: gpui::AnyWindowHandle = window.into();
 
     let mut dirty = true;
@@ -497,6 +653,22 @@ fn run_xplorer() -> anyhow::Result<()> {
                     break;
                 }
                 let changed = window.update(&mut cx, |finder, _, cx| {
+                    // The theme is app state, not view state, so the toggle happens
+                    // here where the App is in hand; the view only asks for a redraw.
+                    if key.key == "d" {
+                        let dark = !cx.theme().mode.is_dark();
+                        gpui_component::Theme::change(
+                            if dark {
+                                gpui_component::ThemeMode::Dark
+                            } else {
+                                gpui_component::ThemeMode::Light
+                            },
+                            None,
+                            cx,
+                        );
+                        cx.notify();
+                        return true;
+                    }
                     let changed = finder.handle_key(&key.key);
                     if changed {
                         cx.notify();

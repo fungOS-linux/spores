@@ -13,21 +13,22 @@ use crate::Row;
 pub fn ls(path: &str) -> Result<Vec<Row>, String> {
     use soil::vfs::vfs;
     match vfs::ls(path, 0, crate::PAGE) {
-        Ok(page) => Ok(sort(page
-            .entries
-            .into_iter()
-            .map(|entry| Row {
-                name: if entry.name.is_empty() {
-                    entry.path.clone()
-                } else {
-                    entry.name.clone()
-                },
-                path: entry.path,
-                directory: matches!(entry.kind, vfs::Kind::Directory),
-                size: entry.size,
-                hydrated: matches!(entry.hydration, vfs::Hydration::Present),
-            })
-            .collect())),
+        Ok(page) => Ok(sort(
+            page.entries
+                .into_iter()
+                .map(|entry| Row {
+                    name: if entry.name.is_empty() {
+                        entry.path.clone()
+                    } else {
+                        entry.name.clone()
+                    },
+                    path: entry.path,
+                    directory: matches!(entry.kind, vfs::Kind::Directory),
+                    size: entry.size,
+                    hydrated: matches!(entry.hydration, vfs::Hydration::Present),
+                })
+                .collect(),
+        )),
         Err(error) => Err(format!("{error:?}")),
     }
 }
@@ -70,9 +71,18 @@ pub fn ls(path: &str) -> Result<Vec<Row>, String> {
         "" => vec![
             row("notes", true, 0),
             row("projects", true, 0),
+            row("vendor", true, 0),
             row("README.md", false, 1_842),
             row("tend.lua", false, 6),
             row("wit-provenance.txt", false, 914),
+            row("design-notes.md", false, 2_310),
+            row("render.rs", false, 4_190),
+            row("Cargo.toml", false, 402),
+            row("budget.xlsx", false, 22_110),
+            row("launch.pptx", false, 1_204_300),
+            row("thesis.pdf", false, 3_908_772),
+            row("sketch.png", false, 88_400),
+            row("voice-memo.m4a", false, 512_000),
         ],
         "projects" => vec![
             row("fungos-vfs.md", false, 436),
