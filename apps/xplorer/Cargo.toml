@@ -1,0 +1,27 @@
+[package]
+name = "xplorer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+publish = false
+description = "A file manager Spore: the host's namespace, previewed instantly"
+
+# Its own workspace: a Spore is a `wasm32-wasip2` component built against the
+# headless `gpui` in `fungOS-linux/gpui-fast`, and nothing here should share a
+# lockfile with the native apps in this repository.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1"
+gpui = { git = "https://github.com/fungOS-linux/gpui-fast", rev = "60ebb175729ad2a17acf59d8e988e794ff4b7eb4", package = "gpui", default-features = false, features = ["headless"] }
+gpui_wgpu = { git = "https://github.com/fungOS-linux/gpui-fast", rev = "60ebb175729ad2a17acf59d8e988e794ff4b7eb4", package = "gpui_wgpu", features = ["headless"] }
+wgpu = { version = "30", default-features = false, features = ["wgsl"] }
+wgpu-wasi-webgpu = { git = "https://github.com/fungOS-linux/wgpu-wasi-webgpu", rev = "bec921356c366450408d5faee2d206b6a1b8061b" }
+wit-bindgen = "0.57"
+# The house component library: the fork branch that pins the same `gpui` 0.2.2
+# rev a Spore builds against, so its elements are our elements.
+gpui-component = { git = "https://github.com/fungOS-linux/gpui-kit", rev = "8feed9ee6526d0ee8e7b3e11349290b3d38319ed", package = "gpui-component", default-features = false }

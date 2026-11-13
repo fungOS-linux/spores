@@ -1,0 +1,15 @@
+schema = 1
+
+[spore]
+id = "dev.fungos.xplorer"
+name = "xplorer"
+version = "0.1.0"
+license = "MIT"
+summary = "Browse the workspace: list, preview, and open"
+
+The Spore declares no `[[surfaces]]` on purpose. A Rust module that draws its own
+frame is the host's default presentation; a declared surface is for a `canvas`
+Lua view or a `web` page, and neither is what this is.
+
+[module]
+path = "xplorer.wasm"
