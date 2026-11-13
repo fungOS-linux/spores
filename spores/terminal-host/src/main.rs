@@ -712,6 +712,7 @@ fn main() -> Result<()> {
         args
     };
     let module = std::env::var("TERMINAL_SPORE")
+        .or_else(|_| std::env::var("SOIL_SPORE_MODULE"))
         .unwrap_or_else(|_| "spores/terminal/module.wasm".to_string());
 
     let engine = Engine::default();
