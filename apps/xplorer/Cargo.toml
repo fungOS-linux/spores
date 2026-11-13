@@ -15,6 +15,11 @@ description = "A file manager Spore: the host's namespace, previewed instantly"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+# Render the window against a fixed listing, for a host that has not linked
+# `soil:vfs`. Never the shipped Spore — see `src/data.rs`.
+demo = []
+
 [dependencies]
 anyhow = "1"
 gpui = { git = "https://github.com/fungOS-linux/gpui-fast", rev = "60ebb175729ad2a17acf59d8e988e794ff4b7eb4", package = "gpui", default-features = false, features = ["headless"] }
