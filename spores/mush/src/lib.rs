@@ -270,6 +270,13 @@ impl Shell {
                 if let Some(value) = iter.next() {
                     env.insert("TERM".into(), value);
                 }
+            } else if let Some(value) = arg.strip_prefix("--env=") {
+                // The caller's environment, handed in one variable at a time.
+                // Names with VFS semantics (PATH, HOME, PWD, ...) are not passed
+                // this way: inside the shell they mean the VFS, not the host.
+                if let Some((key, value)) = value.split_once('=') {
+                    env.insert(key.into(), value.into());
+                }
             } else if let Some(value) = arg.strip_prefix("--home=") {
                 env.insert("HOME".into(), value.into());
             } else if let Some(value) = arg.strip_prefix("--principal=") {

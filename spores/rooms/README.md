@@ -2,8 +2,25 @@
 
 Shared audio/video rooms, rendered for Canvas. Each room also has a Holodeck
 twin: the same `space` id, the same members and the same media, with a VR
-presenter instead of this flat one. This Spore owns composition, not room
-state, media or transport.
+presenter instead of this flat one.
+
+The Spore owns room state, membership and admission, in `soil:records` under
+the `rooms` namespace:
+
+```text
+fungos.room/room@1       id, name, space, gated
+fungos.room/member@1     room, id, name, mic
+fungos.room/message@1    room, seq, from, name, text
+fungos.room/admission@1  room, session, name, status  (waiting/allowed/denied)
+```
+
+A room code is the room name. An open room is joined by its link; a closed
+room needs an admission record before `join` will accept the session. The
+module never signs a media token: that is a host capability over `soil:creds`,
+so no credential enters Wasm.
+
+Media and transport stay host-owned. This Spore owns composition and policy,
+not audio, video or network.
 
 ## What it renders
 
@@ -86,13 +103,21 @@ browser tabs served by this process. The service keeps a bounded, ephemeral
 history and includes it in `room.welcome.v1` for late joiners. `Ask JARVIS`
 uses the typed text for the addressed turn instead.
 
-Each tab has its own call session and its own call panel, while this server
-process is one Unibus member (the fixed participant identity in `CLIENT.json`).
-That is deliberate for the first live cut: two tabs can prove the WebRTC mesh,
-but they do not become two independent room members. A second person should run
-their own `rooms-serve` with their own client identity; JARVIS is not yet a
-browser peer. The page is audio-only (`video: false`); video and screen share
-ride a later track on the same peer connection.
+Each tab is a distinct LiveKit participant, while this server process is one
+Unibus member (the fixed participant identity in `CLIENT.json`). That keeps the
+call usable for two tabs without pretending they are two independent room
+members; a second person should run their own `rooms-serve` with their own
+client identity. `rooms-serve` mints the LiveKit token, so the API secret stays
+in the host process. JARVIS is not yet a browser call participant.
+
+The call uses LiveKit for camera, microphone and screen share. Configure it
+with `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` when starting
+`rooms-serve`; the page loads the pinned `livekit-client` browser bundle from
+jsDelivr. If LiveKit is not configured, the room and text composer still work,
+but Join call reports that the call service is unavailable.
+
+Screen share is currently a LiveKit track, not `soil:surface-export`; tying it
+to the native surface picker is a later adapter.
 
 The module is not yet an installable Spore package: `soil-spore check` requires
 a module or a chrome region, and `spores/gallery` has the same gap.

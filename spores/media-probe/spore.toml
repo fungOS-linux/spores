@@ -39,3 +39,8 @@ surfaces = ["native", "canvas"]
 "wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
 "wasi:clocks" = "monotonic timing for the guest's scheduler"
 "wasi:io" = "component-model async transport"
+
+[presentation]
+badge = "MP"
+color = "#5f8c96"
+mark = "assets/icon.svg"

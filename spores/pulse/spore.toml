@@ -43,3 +43,4 @@ host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
 # character, not an asset: it cannot go missing on someone else's machine.
 badge = "P"
 color = "#d9a55a"
+mark = "assets/icon.svg"

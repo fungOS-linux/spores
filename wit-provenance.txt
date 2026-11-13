@@ -35,6 +35,7 @@
 spores/contacts/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
 spores/crm/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
 spores/unibus/wit/deps/soil-records/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
+spores/rooms/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
 
 # --- soil-spore.wit ---------------------------------------------------------
 # source:      fungOS-linux/soil, wit/soil-spore.wit
@@ -61,6 +62,7 @@ spores/launcher-host/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15
 spores/spore-browser/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
 spores/spore-browser-host/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
 spores/probe-gpui/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
+spores/store/wit/deps/soil-spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
 
 # --- soil-surface-import.wit ------------------------------------------------
 # source:      fungOS-linux/soil, wit/soil-surface-import.wit

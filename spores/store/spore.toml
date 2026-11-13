@@ -89,3 +89,4 @@ role = "store"
 [presentation]
 badge = "S"
 color = "#f2c14e"
+mark = "assets/icon.svg"

@@ -42,3 +42,8 @@ surfaces = ["canvas", "native", "web"]
 [denied]
 "soil:http" = ["the CRM Spore has no network authority"]
 "wasi:filesystem" = ["the host maps namespaces to books"]
+
+[presentation]
+badge = "Cr"
+color = "#b98cff"
+mark = "assets/icon.svg"

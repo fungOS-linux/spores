@@ -1,0 +1,4 @@
+/target
+# The doc layer is not vendored into this repository: it lives in its own
+# checkout and is staged here read-only by scripts/vendor-doc-layer.sh.
+/vendor
