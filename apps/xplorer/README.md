@@ -61,6 +61,11 @@ That frame is real: `soil-webgpu` compiled the component, instantiated it agains
 against a fixed listing (see `src/data.rs`), because the host's Spore world does
 not import `soil:vfs` yet — the shipped build imports it and needs the grant.
 
+![the same window in light mode](frame-light.png)
+
+The light frame is the same build with the initial mode flipped, not a mockup:
+the frame runner sends no keys, so `d` could not be pressed to capture it.
+
 ## What it still needs before the shipped build can be seen
 
 A host must link `soil:present` (surface, input, cursor) **and `soil:vfs`** and
