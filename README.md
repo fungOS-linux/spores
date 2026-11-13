@@ -112,7 +112,6 @@ spores/worklog             cross-tool timeline (dev.fungos.worklog)
 spores/pulse               cron schedules and webhook ingress health (dev.fungos.pulse)
 spores/terminal            terminal Spore
 spores/terminal-core       terminal semantics shared by the tmux and host front ends
-spores/terminal-host       native terminal host
 spores/terminal-gpui       terminal view rendered by GPUI inside a wasm32-wasip2 Spore
 spores/launcher-gpui       GPUI launcher: installed Spores, selection, and launch
 spores/crm                 CRM Spore over namespaced records
@@ -129,6 +128,11 @@ spores/cli-http            the narrow host-mediated HTTP seam shared by CLI spor
 spores/media-probe         soil:media fixture
 spores/surface-probe       soil:surface-import fixture
 ```
+
+`terminal-host` is not here: it is the native Mycelium/PTY host in
+[`fungOS-linux/soil`](https://github.com/fungOS-linux/soil),
+`crates/terminal-host`. The terminal package names it as its
+`[launch] native` host.
 
 ## TUI spores
 

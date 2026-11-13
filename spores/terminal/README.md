@@ -40,24 +40,28 @@ The static archives are in `vendor/`; see `vendor/README.md` to rebuild them.
 
 ## Run
 
+`terminal-host` lives in the Soil workspace. Build it there with
+`cargo build -p terminal-host`, or install it with the Mycelium installer;
+the commands below use the installed binary.
+
 ```sh
 # real directory
-cargo run -p terminal-host -- list
+terminal-host list
 
 # real PTY to the first shell-capable target
-cargo run -p terminal-host -- open-first
+terminal-host open-first
 
 # real PTY to a specific target
-cargo run -p terminal-host -- open mycelium:agora-one
+terminal-host open mycelium:agora-one
 
 # live window
-TERMINAL_WINDOW=1 cargo run -p terminal-host -- open mycelium:agora-one
+TERMINAL_WINDOW=1 terminal-host open mycelium:agora-one
 
 # deterministic fixture for tests
-TERMINAL_MOCK=1 cargo run -p terminal-host -- open-first
+TERMINAL_MOCK=1 terminal-host open-first
 
 # exercise the PTY path without Mycelium
-TERMINAL_SHELL='printf "hello\n"' cargo run -p terminal-host -- open-first
+TERMINAL_SHELL='printf "hello\n"' terminal-host open-first
 ```
 
 `MYCELIUM_BIN` overrides the binary. `TERMINAL_SHELL` is development-only and
