@@ -16,6 +16,15 @@ pub struct Light {
     pub on: bool,
     pub brightness: Option<u8>,
     pub reachable: bool,
+    /// Current color temperature in mired, when the bridge reports one.
+    pub ct: Option<u16>,
+    /// Current CIE xy color in thousandths, kept integral so the snapshot stays
+    /// comparable. Only meaningful when `colormode` is `xy`.
+    pub xy: Option<[u16; 2]>,
+    /// `ct`, `xy`, or `hs` as the bridge last reported it.
+    pub colormode: Option<String>,
+    pub supports_ct: bool,
+    pub supports_color: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,6 +65,9 @@ impl Snapshot {
         if let Some(object) = value.get("lights").and_then(Value::as_object) {
             for (id, light) in object {
                 let state = light.get("state").unwrap_or(&Value::Null);
+                let control = light
+                    .get("capabilities")
+                    .and_then(|capabilities| capabilities.get("control"));
                 lights.insert(
                     id.clone(),
                     Light {
@@ -70,6 +82,24 @@ impl Snapshot {
                             .get("reachable")
                             .and_then(Value::as_bool)
                             .unwrap_or(true),
+                        ct: state
+                            .get("ct")
+                            .and_then(Value::as_u64)
+                            .map(|value| value.min(u64::from(u16::MAX)) as u16),
+                        xy: state.get("xy").and_then(|xy| {
+                            let x = xy.get(0)?.as_f64()?;
+                            let y = xy.get(1)?.as_f64()?;
+                            Some([
+                                (x * 1000.0).round().clamp(0.0, 1000.0) as u16,
+                                (y * 1000.0).round().clamp(0.0, 1000.0) as u16,
+                            ])
+                        }),
+                        colormode: state
+                            .get("colormode")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        supports_ct: control.is_some_and(|c| c.get("ct").is_some()),
+                        supports_color: control.is_some_and(|c| c.get("colorgamut").is_some()),
                     },
                 );
             }
@@ -235,13 +265,71 @@ impl Rect {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorSwatch {
+    Red,
+    Amber,
+    Green,
+    Teal,
+    Blue,
+    Magenta,
+}
+
+impl ColorSwatch {
+    pub const ALL: [Self; 6] = [
+        Self::Red,
+        Self::Amber,
+        Self::Green,
+        Self::Teal,
+        Self::Blue,
+        Self::Magenta,
+    ];
+
+    pub fn rgb(self) -> (u8, u8, u8) {
+        match self {
+            Self::Red => (0xe5, 0x48, 0x4d),
+            Self::Amber => (0xf5, 0xa5, 0x24),
+            Self::Green => (0x46, 0xa7, 0x58),
+            Self::Teal => (0x12, 0xa5, 0x94),
+            Self::Blue => (0x3e, 0x63, 0xdd),
+            Self::Magenta => (0xd6, 0x40, 0x9f),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Red => "Red",
+            Self::Amber => "Amber",
+            Self::Green => "Green",
+            Self::Teal => "Teal",
+            Self::Blue => "Blue",
+            Self::Magenta => "Magenta",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     SelectGroup(String),
     ToggleGroup(String),
-    Scene { group: String, scene: String },
+    Scene {
+        group: String,
+        scene: String,
+    },
     ToggleLight(String),
-    Brightness { light: String, value: u8 },
+    /// The brightness track of a light. The value comes from where the pointer
+    /// is on the rect, so a click and a drag are the same target.
+    Brightness {
+        light: String,
+    },
+    /// The color-temperature ramp of a light: 153 mired (cool) to 500 (warm).
+    ColorTemp {
+        light: String,
+    },
+    Color {
+        light: String,
+        swatch: ColorSwatch,
+    },
     Refresh,
 }
 
@@ -267,6 +355,14 @@ pub struct Layout {
     pub rooms: Vec<Hit>,
     pub scenes: Vec<Hit>,
     pub cards: Vec<Hit>,
+    /// Brightness tracks, color ramps, and swatches, in paint order.
+    pub controls: Vec<Hit>,
+    /// Card grid shape, so a caller can draw placeholders before the first
+    /// snapshot has any lights to lay out.
+    pub columns: usize,
+    pub card_h: f32,
+    /// Where the status line goes, and a click there reads the bridge again.
+    pub status: Rect,
     pub group_power: Option<Hit>,
     pub refresh: Hit,
     pub hits: Vec<Hit>,
@@ -288,7 +384,9 @@ const RAIL: f32 = 232.0;
 const PAD: f32 = 22.0;
 const ROOM_H: f32 = 44.0;
 const CHIP_H: f32 = 32.0;
-const CARD_H: f32 = 126.0;
+/// Height at which a card also shows the color ramp and the swatch row.
+const FULL_CARD_H: f32 = 160.0;
+const CARD_H: f32 = 176.0;
 
 pub fn layout(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layout {
     if width >= WIDE {
@@ -324,8 +422,9 @@ fn wide(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layout 
         rect: Rect::new(width - PAD - 104.0, 28.0, 104.0, 34.0),
         action: Action::ToggleGroup(group.id.clone()),
     });
+    let status = Rect::new(PAD, height - 70.0, RAIL - PAD * 2.0, 16.0);
     let columns = if content.w >= 520.0 { 3 } else { 2 };
-    let (scenes, cards, hits) = body(snapshot, selected, content, columns, CARD_H, 8.0);
+    let (scenes, cards, controls) = body(snapshot, selected, content, columns, CARD_H, 8.0);
     let mut all = Vec::new();
     all.extend(cards.clone());
     if let Some(power) = &group_power {
@@ -334,7 +433,11 @@ fn wide(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layout 
     all.extend(scenes.clone());
     all.extend(rooms.clone());
     all.push(refresh.clone());
-    all.extend(hits);
+    all.extend(controls.clone());
+    all.push(Hit {
+        rect: status,
+        action: Action::Refresh,
+    });
     Layout {
         mode: Mode::Wide,
         rail,
@@ -343,6 +446,10 @@ fn wide(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layout 
         rooms,
         scenes,
         cards,
+        controls,
+        columns,
+        card_h: CARD_H,
+        status,
         group_power,
         refresh,
         hits: all,
@@ -371,6 +478,7 @@ fn compact(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layo
     }
     let content_y = y + CHIP_H + 12.0;
     let content = Rect::new(16.0, content_y, width - 32.0, height - content_y);
+    let status = Rect::new(16.0, content.y + content.h - 20.0, content.w, 16.0);
     let group_power = snapshot.group(selected).map(|group| Hit {
         rect: Rect::new(width - 100.0, content_y + 4.0, 84.0, 30.0),
         action: Action::ToggleGroup(group.id.clone()),
@@ -380,8 +488,8 @@ fn compact(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layo
         action: Action::Refresh,
     };
     let columns = if content.h < 600.0 { 3 } else { 2 };
-    let card_h = if content.h < 500.0 { 100.0 } else { CARD_H };
-    let (scenes, cards, hits) = body(snapshot, selected, content, columns, card_h, 48.0);
+    let card_h = if content.h < 500.0 { 108.0 } else { CARD_H };
+    let (scenes, cards, controls) = body(snapshot, selected, content, columns, card_h, 48.0);
     let mut all = Vec::new();
     all.extend(cards.clone());
     if let Some(power) = &group_power {
@@ -390,7 +498,11 @@ fn compact(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layo
     all.extend(scenes.clone());
     all.extend(rooms.clone());
     all.push(refresh.clone());
-    all.extend(hits);
+    all.extend(controls.clone());
+    all.push(Hit {
+        rect: status,
+        action: Action::Refresh,
+    });
     Layout {
         mode: Mode::Compact,
         rail,
@@ -399,6 +511,10 @@ fn compact(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layo
         rooms,
         scenes,
         cards,
+        controls,
+        columns,
+        card_h,
+        status,
         group_power,
         refresh,
         hits: all,
@@ -440,6 +556,7 @@ fn watch(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layout
         rect: Rect::new(width - 62.0, 10.0, 50.0, 24.0),
         action: Action::Refresh,
     };
+    let status = Rect::new(12.0, height - 30.0, width - 24.0, 16.0);
     let mut cards = Vec::new();
     let mut hits = Vec::new();
     let lights = snapshot.lights_in(selected);
@@ -461,6 +578,10 @@ fn watch(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layout
     }
     hits.extend(rooms.clone());
     hits.push(refresh.clone());
+    hits.push(Hit {
+        rect: status,
+        action: Action::Refresh,
+    });
     Layout {
         mode: Mode::Watch,
         rail,
@@ -469,6 +590,10 @@ fn watch(snapshot: &Snapshot, selected: &str, width: f32, height: f32) -> Layout
         rooms,
         scenes: Vec::new(),
         cards,
+        controls: Vec::new(),
+        columns: 1,
+        card_h: 30.0,
+        status,
         group_power,
         refresh,
         hits,
@@ -540,20 +665,47 @@ fn body(
             rect: toggle,
             action: Action::ToggleLight(light.id.clone()),
         });
-        let preset_w = (rect.w - 30.0 - 8.0) / 3.0;
-        for (preset, value) in [64u8, 127, 254].into_iter().enumerate() {
+        // A tall card has room for the color ramp and the swatch row; a short
+        // one keeps only the brightness track, at a fixed offset the view can
+        // paint against.
+        let full = rect.h >= FULL_CARD_H && (light.supports_ct || light.supports_color);
+        let track_y = if full {
+            rect.y + 56.0
+        } else {
+            // Dense cards put the name on its own line and the switch beside
+            // the state, so the track can start right below them.
+            rect.y + (rect.h * 0.5 - 13.0).max(48.0)
+        };
+        details.push(Hit {
+            rect: Rect::new(rect.x + 15.0, track_y, rect.w - 30.0, 26.0),
+            action: Action::Brightness {
+                light: light.id.clone(),
+            },
+        });
+        if !full {
+            continue;
+        }
+        if light.supports_ct {
             details.push(Hit {
-                rect: Rect::new(
-                    rect.x + 15.0 + preset as f32 * (preset_w + 4.0),
-                    rect.y + rect.h - 38.0,
-                    preset_w,
-                    26.0,
-                ),
-                action: Action::Brightness {
+                rect: Rect::new(rect.x + 15.0, rect.y + 88.0, rect.w - 30.0, 26.0),
+                action: Action::ColorTemp {
                     light: light.id.clone(),
-                    value,
                 },
             });
+        }
+        if light.supports_color {
+            let span = rect.w - 30.0;
+            let slot = (span / ColorSwatch::ALL.len() as f32).min(34.0);
+            let start = rect.x + 15.0 + (span - slot * ColorSwatch::ALL.len() as f32) / 2.0;
+            for (index, swatch) in ColorSwatch::ALL.into_iter().enumerate() {
+                details.push(Hit {
+                    rect: Rect::new(start + index as f32 * slot, rect.y + 118.0, slot, 28.0),
+                    action: Action::Color {
+                        light: light.id.clone(),
+                        swatch,
+                    },
+                });
+            }
         }
     }
     (scenes, cards, details)
@@ -567,9 +719,17 @@ mod tests {
         Snapshot::parse(&serde_json::json!({
             "config": {"name": "Hue Bridge"},
             "lights": {
-                "1": {"name": "Sofa", "state": {"on": true, "bri": 128, "reachable": true}},
+                "1": {
+                    "name": "Sofa",
+                    "state": {"on": true, "bri": 128, "reachable": true, "ct": 300, "colormode": "ct"},
+                    "capabilities": {"control": {"ct": {}, "colorgamut": [[0.7, 0.3], [0.2, 0.7], [0.0, 0.0]]}}
+                },
                 "2": {"name": "Lamp", "state": {"on": false, "bri": 254, "reachable": false}},
-                "3": {"name": "Hall", "state": {"on": true, "bri": 64, "reachable": true}}
+                "3": {
+                    "name": "Hall",
+                    "state": {"on": true, "bri": 64, "reachable": true, "xy": [0.4, 0.4], "colormode": "xy"},
+                    "capabilities": {"control": {"ct": {}, "colorgamut": [[0.7, 0.3], [0.2, 0.7], [0.0, 0.0]]}}
+                }
             },
             "groups": {
                 "0": {"name": "All lights", "type": "LightGroup", "lights": ["1", "2", "3"], "action": {"on": true, "bri": 128}},
@@ -650,7 +810,7 @@ mod tests {
         }
     }
     #[test]
-    fn wide_layout_puts_rooms_cards_and_presets_in_reach() {
+    fn wide_layout_puts_rooms_and_light_controls_in_reach() {
         let snapshot = bridge();
         let layout = layout(&snapshot, "1", 1280.0, 900.0);
         assert_eq!(layout.mode, Mode::Wide);
@@ -668,10 +828,77 @@ mod tests {
             layout.hit(card.rect.x + card.rect.w - 45.0, card.rect.y + 25.0),
             Some(Action::ToggleLight(_))
         ));
+        assert_eq!(
+            layout.hit(card.rect.x + 20.0, card.rect.y + 69.0),
+            Some(Action::Brightness { light: "1".into() })
+        );
+        assert_eq!(
+            layout.hit(card.rect.x + 20.0, card.rect.y + 101.0),
+            Some(Action::ColorTemp { light: "1".into() })
+        );
         assert!(matches!(
-            layout.hit(card.rect.x + 20.0, card.rect.y + card.rect.h - 24.0),
-            Some(Action::Brightness { value: 64, .. })
+            layout.hit(card.rect.x + card.rect.w / 2.0, card.rect.y + 132.0),
+            Some(Action::Color { .. })
         ));
+    }
+
+    #[test]
+    fn a_light_without_capabilities_gets_no_color_controls() {
+        let snapshot = bridge();
+        let layout = layout(&snapshot, "1", 1280.0, 900.0);
+        let plain = &layout.cards[1];
+        let controls: Vec<_> = layout
+            .controls
+            .iter()
+            .filter(|hit| {
+                hit.rect.contains(plain.rect.x + 5.0, plain.rect.y + 5.0) || {
+                    hit.rect.x >= plain.rect.x
+                        && hit.rect.x < plain.rect.x + plain.rect.w
+                        && hit.rect.y >= plain.rect.y
+                        && hit.rect.y < plain.rect.y + plain.rect.h
+                }
+            })
+            .map(|hit| hit.action.clone())
+            .collect();
+        assert_eq!(controls.len(), 2, "toggle plus brightness: {controls:?}");
+        assert!(
+            controls
+                .iter()
+                .any(|action| matches!(action, Action::Brightness { .. }))
+        );
+    }
+
+    #[test]
+    fn swatches_are_all_reachable_side_by_side() {
+        let snapshot = bridge();
+        let layout = layout(&snapshot, "1", 1280.0, 900.0);
+        let card = &layout.cards[0];
+        let mut seen = Vec::new();
+        for swatch in ColorSwatch::ALL {
+            let action = layout
+                .controls
+                .iter()
+                .find(|hit| {
+                    hit.action
+                        == Action::Color {
+                            light: "1".into(),
+                            swatch,
+                        }
+                })
+                .expect("swatch hit");
+            assert!(
+                layout.hit(action.rect.x + action.rect.w / 2.0, action.rect.y + 14.0)
+                    == Some(Action::Color {
+                        light: "1".into(),
+                        swatch
+                    }),
+                "{} is not the top hit",
+                swatch.name()
+            );
+            seen.push(action.rect.x);
+        }
+        seen.windows(2).for_each(|pair| assert!(pair[1] > pair[0]));
+        assert!(seen[0] >= card.rect.x && *seen.last().unwrap() <= card.rect.x + card.rect.w);
     }
 
     #[test]
@@ -696,6 +923,16 @@ mod tests {
             watch
                 .hit(watch.cards[0].rect.x + 10.0, watch.cards[0].rect.y + 10.0)
                 .is_some_and(|action| matches!(action, Action::ToggleLight(_)))
+        );
+    }
+
+    #[test]
+    fn the_status_line_is_the_retry_target() {
+        let snapshot = bridge();
+        let layout = layout(&snapshot, "1", 1280.0, 900.0);
+        assert_eq!(
+            layout.hit(layout.status.x + 8.0, layout.status.y + 8.0),
+            Some(Action::Refresh)
         );
     }
 
