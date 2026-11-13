@@ -422,7 +422,9 @@ impl Render for Finder {
         const TILE: f32 = 112.0;
         const GAP: f32 = 8.0;
         let list_width = (width as f32) * 0.58;
-        let columns = (((list_width - 24.0) / (TILE + GAP)).floor() as usize).max(1);
+        // How many tiles fit: n tiles need n*TILE + (n-1)*GAP, so solve for n
+        // rather than dividing the width by a cell that includes no trailing gap.
+        let columns = (((list_width - 24.0 + GAP) / (TILE + GAP)).floor() as usize).max(1);
         self.columns = columns;
 
         let tiles: Vec<gpui::AnyElement> = self
