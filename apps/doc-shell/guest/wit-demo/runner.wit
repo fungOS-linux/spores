@@ -1,0 +1,13 @@
+package fungos:doc-shell-demo@0.1.0;
+
+/// The same window without the namespace.
+///
+/// A host that has not linked `soil:vfs` cannot instantiate a component that
+/// imports it, so this build renders the arrangement against a fixed vault. It
+/// is a harness for looking at the UI, never the shipped Spore.
+world runner {
+  import soil:present/surface@0.1.0;
+  import soil:present/input@0.1.0;
+  import soil:present/cursor@0.1.0;
+  export run: async func() -> u32;
+}

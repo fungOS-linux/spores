@@ -1,0 +1,23 @@
+package fungos:doc-shell@0.1.0;
+
+/// A document reader over the host's namespace.
+///
+/// The Spore reads one granted workspace through `soil:vfs`, finds a Word file,
+/// parses it from its own bytes, and draws the blocks it found. Block identity
+/// is the container's: `w14:paraId` is what Word already wrote, so two readers
+/// of the same bytes agree without a store between them.
+///
+/// No filesystem, no network, no process and no clock: a path it cannot see is
+/// a document it cannot open.
+world runner {
+  import soil:present/surface@0.1.0;
+  import soil:present/input@0.1.0;
+  import soil:present/cursor@0.1.0;
+  import soil:vfs/vfs@1.0.0;
+  // Pending comments are entities: they sync, get edited, get resolved. The
+  // book is where entities live, whatever they are attached to.
+  import soil:records/records@0.1.0;
+  // Who is commenting: attested by the host, never taken from argv.
+  import soil:principal/principal@0.1.0;
+  export run: async func() -> u32;
+}
