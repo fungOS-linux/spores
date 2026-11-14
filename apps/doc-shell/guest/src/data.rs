@@ -36,10 +36,31 @@ pub fn ls(path: &str) -> Result<Vec<Row>, String> {
 #[cfg(not(feature = "demo"))]
 pub fn read(path: &str, max: u32) -> Result<Vec<u8>, String> {
     use crate::soil::vfs::vfs;
-    match vfs::read(path, 0, max) {
-        Ok(chunk) => Ok(chunk.data),
-        Err(error) => Err(format!("{error:?}")),
+    // The host decides how much one read may ask for, and a range past that
+    // budget is `over-budget` rather than a short answer — so a document is
+    // read in pages the contract allows, not one optimistic call that happens
+    // to fit on the host it was written against.
+    const PAGE: u32 = 512 * 1024;
+    let mut out: Vec<u8> = Vec::new();
+    loop {
+        let want = max
+            .saturating_sub(u32::try_from(out.len()).unwrap_or(max))
+            .min(PAGE);
+        if want == 0 {
+            break;
+        }
+        match vfs::read(path, out.len() as u64, want) {
+            Ok(chunk) => {
+                let empty = chunk.data.is_empty();
+                out.extend_from_slice(&chunk.data);
+                if chunk.eof || empty {
+                    break;
+                }
+            }
+            Err(error) => return Err(format!("{error:?}")),
+        }
     }
+    Ok(out)
 }
 
 /// A fixed vault, so the window can be rendered without a namespace.

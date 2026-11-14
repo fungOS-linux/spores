@@ -234,8 +234,13 @@ impl Shell {
         // The harness build opens on a Word file with the document focused, so a
         // captured frame shows the cursor, the threads and the composer hint
         // instead of an empty pane. The shipped build opens on the vault.
-        #[cfg(feature = "demo")]
-        if let Some(index) = shell.entries.iter().position(|row| row.name == "nda.docx") {
+        // Open on a document rather than on an empty pane: a reader with one
+        // Word file in the vault is a reader with something to read.
+        if let Some(index) = shell
+            .entries
+            .iter()
+            .position(|row| !row.directory && row.name.ends_with(".docx"))
+        {
             shell.select(index);
             shell.focus = Focus::Document;
         }
@@ -563,8 +568,10 @@ impl Shell {
         ) else {
             return;
         };
-        pending.add(&block, &body);
-        self.note = Some(format!("comment left on {block}"));
+        match pending.add(&block, &body) {
+            Ok(_) => self.note = Some(format!("comment left on {block}")),
+            Err(error) => self.note = Some(format!("could not save the comment: {error}")),
+        }
     }
 
     /// Resolve the thread on the block under the cursor, or reopen it.
@@ -581,7 +588,13 @@ impl Shell {
             return;
         };
         if let Some(pending) = self.comments.as_mut() {
-            pending.set_resolved(&block, open);
+            match pending.set_resolved(&block, open) {
+                Ok(()) => {}
+                Err(error) => {
+                    self.note = Some(format!("could not save the resolution: {error}"));
+                    return;
+                }
+            }
         }
         self.note = Some(if open {
             format!("resolved the thread on {block}")
