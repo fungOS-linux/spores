@@ -15,7 +15,8 @@ wit_bindgen::generate!({
 
 use gpui::{
     AnyElement, AnyWindowHandle, AppContext as _, Context, FontWeight, HeadlessAppContext,
-    IntoElement, PlatformTextSystem, Render, SharedString, Window, div, prelude::*, px, rgb, size,
+    IntoElement, PlatformTextSystem, Render, SharedString, Window, div, prelude::*, px, rgb, rgba,
+    size,
 };
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
 use soil::present::{cursor, input, surface};
@@ -89,6 +90,12 @@ struct LauncherView {
     /// selected one.
     hovered: Option<usize>,
     status: SharedString,
+    /// A launch that failed. `Some` draws a modal over the grid: an app that
+    /// cannot open says why where the hand already is, and the message is also
+    /// the way out - acknowledging it closes the window.
+    error: Option<SharedString>,
+    /// Set when the modal is acknowledged; the run loop closes the window.
+    quit: bool,
 }
 
 impl LauncherView {
@@ -114,6 +121,8 @@ impl LauncherView {
                     selected: 0,
                     hovered: None,
                     status: SharedString::from(format!("{count} installed")),
+                    error: None,
+                    quit: false,
                 }
             }
             Err(error) => Self {
@@ -123,6 +132,12 @@ impl LauncherView {
                 selected: 0,
                 hovered: None,
                 status: SharedString::from(format!("catalog: {error:?}")),
+                // Nothing to click, so the catalogue's own failure is the
+                // modal: there is no grid behind it worth showing.
+                error: Some(SharedString::from(format!(
+                    "The catalogue could not be read: {error:?}"
+                ))),
+                quit: false,
             },
         }
     }
@@ -244,10 +259,19 @@ impl LauncherView {
         let Some(row) = self.rows.get(row) else {
             return false;
         };
-        self.status = match catalog::launch(&row.id, &row.default_surface) {
-            Ok(launched) => SharedString::from(format!("opened {}", launched.target)),
-            Err(error) => SharedString::from(format!("launch: {error:?}")),
-        };
+        match catalog::launch(&row.id, &row.default_surface) {
+            Ok(launched) => {
+                self.status = SharedString::from(format!("opened {}", launched.target));
+                self.error = None;
+            }
+            Err(error) => {
+                // The host refused. Say which app and why, and stop pretending
+                // the grid is the thing to be looking at.
+                let said = SharedString::from(format!("{} could not open: {error:?}", row.title));
+                self.status = said.clone();
+                self.error = Some(said);
+            }
+        }
         true
     }
 
@@ -455,6 +479,58 @@ impl Render for LauncherView {
                     .children(self.tiles(width)),
             )
             .child(self.footer())
+            .children(self.error.clone().map(|error| self.error_panel(error)))
+    }
+}
+
+impl LauncherView {
+    /// The modal a failed launch earns: what happened, and one way out.
+    fn error_panel(&self, error: SharedString) -> AnyElement {
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x0b0e13e6))
+            .child(
+                div()
+                    .w(px(540.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(16.0))
+                    .p(px(24.0))
+                    .rounded(px(14.0))
+                    .border_1()
+                    .border_color(rgb(0x3a414d))
+                    .bg(rgb(0x1b2028))
+                    .child(
+                        div()
+                            .text_size(px(15.0))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(0xf2f6fb))
+                            .child("That did not open"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(rgb(0xb8c2cf))
+                            .child(error),
+                    )
+                    .child(
+                        div().flex().justify_end().child(
+                            div()
+                                .px(px(18.0))
+                                .py(px(8.0))
+                                .rounded(px(8.0))
+                                .bg(rgb(0x2c3441))
+                                .text_size(px(12.0))
+                                .text_color(rgb(0xf2f6fb))
+                                .child("OK  ·  enter"),
+                        ),
+                    ),
+            )
+            .into_any_element()
     }
 }
 
@@ -549,6 +625,10 @@ fn run_launcher() -> anyhow::Result<()> {
     let mut dirty = true;
     let mut window_size = (width, height);
     loop {
+        // Acknowledged error: the message was the window's only business.
+        if window.update(&mut cx, |view, _, _| view.quit)? {
+            break;
+        }
         // Follow the window: a launcher that keeps its first size looks broken
         // the moment someone drags a corner.
         let size_now = surface::size();
@@ -573,6 +653,15 @@ fn run_launcher() -> anyhow::Result<()> {
         }
         match input::poll(16) {
             Some(input::Event::KeyInput(key)) => {
+                // While a failure is up, the launcher is not a grid: enter,
+                // escape and space all do the one thing the modal offers.
+                if window.update(&mut cx, |view, _, _| view.error.is_some())? {
+                    if matches!(key.key.as_str(), "enter" | "escape" | "space") {
+                        window.update(&mut cx, |view, _, _| view.quit = true)?;
+                        break;
+                    }
+                    continue;
+                }
                 if key.key == "escape" {
                     break;
                 }
@@ -649,6 +738,12 @@ fn run_launcher() -> anyhow::Result<()> {
             }
             Some(input::Event::Button(button)) => {
                 if button.pressed && button.button == input::PointerButton::Left {
+                    // The OK button, and anywhere the scrim covers: one click
+                    // acknowledges a failure.
+                    if window.update(&mut cx, |view, _, _| view.error.is_some())? {
+                        window.update(&mut cx, |view, _, _| view.quit = true)?;
+                        break;
+                    }
                     let width = surface::size().0 as f32;
                     let changed = window.update(&mut cx, |view, _, cx| {
                         let target = view.tile_at(button.x, button.y, width);
