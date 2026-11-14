@@ -39,6 +39,53 @@ say *the block you commented on has changed* or *is gone* instead of silently
 drawing the note over different text, and an agent can be handed the bytes the
 commenter saw.
 
+## What delta.app already does
+
+Delta's own note surface is the closest working precedent, and three of its
+decisions are worth copying rather than re-deriving:
+
+```sh
+delta note add FILE --kind review -L 12,30      # a kind, and the ranges it is on
+delta note add FILE --revision HEAD~3 -L 12,30  # or the revision it was left on
+delta note show ID                              # "as it was left": content, author, the text it was left on
+delta note list --kind review FILE              # notes that touch a file or ranges
+delta note remove ID                            # for everyone
+```
+
+- **Notes are addressed by ranges, at a revision, with a small open vocabulary of
+  kinds** (`todo`, `review`, `rationale`, `decision`) rather than a schema per
+  surface. A block id is the same idea for a container that has stable ids.
+- **`show` renders the note as it was left**, including the text it was left on.
+  That snapshot is what makes a note renderable after the file moved on — the
+  same job our `version` pin does, with the evidence stored rather than
+  re-derived.
+- **`remove` is for everyone.** Notes are one synced store with no per-actor
+  files — which is the argument for `soil:records` over per-actor comment files.
+
+## Projection, and why release may never happen
+
+A comment has to reach the agent's prompt, and a prompt prefix is only reusable
+while its bytes hold still: the model's K/V cache is keyed on the prefix, so
+inserting a note in the middle of a conversation re-derives everything after it.
+
+So the two halves of a comment point in opposite directions:
+
+- **the anchor is for the reader** — it says where the note belongs on screen,
+  and it is free to move or dangle;
+- **the projection is for the model** — the rendered note is appended into the
+  content at a stable boundary (the end of the current content, not the middle of
+  a past turn), where it becomes part of the prefix every later turn reuses.
+
+That makes "commit" a projection into content, not a move: the record stays as
+the pointer that the UI renders in place, and the content gains the rendered
+line. Which means a comment may **never be released at all** — the table keeps
+the pointer for as long as the UI wants to show the note where it was left, and
+release becomes a compaction decision (when the projection is the only copy
+anyone needs) rather than a step of commit.
+
+This is also why "it is a projection" and "it lands in the prompt" are not in
+tension: both are true, of different copies.
+
 ## Lifecycle
 
 ```text
@@ -53,7 +100,10 @@ pending ──commit──► committed ──release──► released
   will read (today: the transcript record). Commit appends first and marks the
   attachment committed second, so a crash between them leaves a duplicate that
   dedupes on comment id. The other order loses comments.
-- **released** — the pending form is dropped. This is *deferred*, on purpose:
+- **released** — the pending form is dropped, if it ever is. Deferring is not a
+  schedule detail: after a projection into content, the record is the *pointer*
+  the reader uses to draw the note where it was left, so releasing it is a
+  compaction decision and may never come. Where it does come, it is deferred:
   while the agent is working, the comment has to stay viewable, and dropping it
   the instant the append lands would make a crash-free but still-in-flight commit
   invisible to the person who wrote it. A defensible release rule is
@@ -79,7 +129,7 @@ The destination varies instead, and that is all the table needs:
 
 | destination | what commit does | release |
 | --- | --- | --- |
-| transcript (a records book) | append the durable entry, carrying provenance | deferred, self-observed |
+| transcript (a records book) | append the durable entry at a stable boundary, carrying provenance | deferred; often never |
 | the document or sheet itself | *not* a commit: the save accepts the text (`soil:vfs-mut`, `expected-version`) and resolves the comment | n/a |
 | another agent's context | append to that session's transcript | same as transcript |
 

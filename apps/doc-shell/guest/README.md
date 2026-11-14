@@ -31,16 +31,42 @@ hex number Word maintains) and a style name. So:
 host capability would own if we ever want the parse in one place. Nothing in this
 slice needs it.
 
-## Reading, and only reading
+## Comments, pending
+
+`tab` moves the keyboard between the vault and the document; in the document
+`j`/`k` move the block cursor, `c` (or `enter`) starts a comment on that block,
+`enter` leaves it, `x` resolves the thread. Left of each block is the identity
+the container gave it; right of it is the thread still pending on it. A resolved
+thread stays visible and dims, because a reply to a resolved thread still has to
+render.
+
+Comments are entities, so they live in the host's records book —
+`comment.pending`, one record per comment, body `doc.comment@1`. Two consequences
+worth naming:
+
+- **the store does not depend on the target.** A note on a document and a note on
+  a transcript both live in the book; only the *destination* of a commit differs.
+  Picking a store per target was the messy part of the earlier proposal.
+- **ordering is the host's revision, not a clock.** `soil:time` is monotonic per
+  process and explicitly not comparable across restarts or devices, so it cannot
+  order two people's comments. The book can.
+
+The harness build seeds three comments (one resolved, one reply) because a host
+that has not linked `soil:records` cannot instantiate the component at all.
+
+## Grants
 
 | grant | why |
 | --- | --- |
 | `soil:vfs` | list one workspace, read the bytes of the document it opens |
+| `soil:records` | read and write the pending comments left on a document's blocks |
+| `soil:principal` | the commenting identity, attested by the host rather than typed |
 | `soil:present` | the offscreen surface, keyboard input, the cursor |
 | `wasi:webgpu` | one offscreen device; the host keeps the adapter and the swap |
 
-Saving a document and writing a thread anchor are mutations, and this slice
-declares neither. See [What is not here yet](#what-is-not-here-yet).
+Saving a document, and accepting a comment into its text, are mutations against
+the namespace: they arrive as `soil:vfs-mut` with their own review. See
+[What is not here yet](#what-is-not-here-yet).
 
 ## Build
 
@@ -61,7 +87,8 @@ hands the host a texture. `soil:present/input` is the only keyboard.
 
 - **Saving.** `cmd-s` needs `soil:vfs-mut`; the record of *who* saved comes from
   `soil:principal` the host already attests.
-- **Threads.** A reply is anchored to a block id, and a thread has three fates:
+- **Threads that leave the reader.** A reply is anchored to a block id, and a
+  thread has three fates:
   it is *pending* (live, syncing, attached), it is *committed* into the durable
   artifact, or it is gone. "Render the same" is the requirement that decides the
   shape: a committed comment has to keep its provenance — comment id, author,
@@ -82,11 +109,12 @@ hands the host a texture. `soil:present/input` is the only keyboard.
   will read it, so it must never be lost and never be ordered after the reply it
   answers.
 
-  This slice implements neither, and the model behind them —
+  This slice implements only the first: pending, resolved, and rendered from the
+  book. The model behind the rest —
   [comments and attachments](../../../docs/comment-attachments.md) — settles the
-  part that was messy: pending comments live in one store whatever their target,
-  and *commit* belongs to the destination. It only guarantees the precondition:
-  block identity survives a re-read, so an anchor written today still resolves
-  when the comment is rendered from the artifact rather than the store.
+  rest: commit is a projection into content at a stable boundary (so a prompt
+  prefix, and its K/V cache, survives), the record stays as the pointer the
+  reader draws in place, and release is a compaction decision that may never
+  come.
 - **The transcript pane** and **preferences**: layout is per-device view state,
   which is what `soil:appdata`'s `local` scope is for.

@@ -939,6 +939,8 @@ dependencies = [
  "gpui-component",
  "gpui_wgpu",
  "quick-xml",
+ "serde",
+ "serde_json",
  "wgpu",
  "wgpu-wasi-webgpu",
  "wit-bindgen",

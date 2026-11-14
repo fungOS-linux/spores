@@ -31,14 +31,16 @@ surfaces = ["native"]
 [grants]
 "soil:vfs" = "list one granted workspace and read the bytes of the document it opens"
 "soil:present" = "draw the window: an offscreen surface, keyboard input and the cursor"
+"soil:records" = "read and write the pending comments left on a document's blocks"
+"soil:principal" = "the commenting identity, attested by the host rather than typed"
 "wasi:webgpu" = "one offscreen WebGPU device and queue; the host keeps the adapter, the surface and the swap"
 
 [denied]
-# Reading is the whole of this slice. Saving, and writing a thread anchor, are
-# mutations: they arrive as `soil:vfs-mut` and a records grant, reviewed
-# together, once the reader is worth editing in.
+# Comments are records; the document is not. Saving it, and accepting a comment
+# into its text, are mutations and arrive as `soil:vfs-mut` with their own
+# review.
 "soil:vfs-mut" = ["a reader that can overwrite the document cannot be trusted to show it"]
-"soil:records" = ["comment threads are a write surface; this slice opens documents, it does not annotate them"]
+"soil:records.sync" = ["the book syncs through the host; this Spore writes pending comments, it does not transport pages"]
 host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
 transport = ["socket", "quic", "iroh"]
 

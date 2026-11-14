@@ -14,5 +14,10 @@ world runner {
   import soil:present/input@0.1.0;
   import soil:present/cursor@0.1.0;
   import soil:vfs/vfs@1.0.0;
+  // Pending comments are entities: they sync, get edited, get resolved. The
+  // book is where entities live, whatever they are attached to.
+  import soil:records/records@0.1.0;
+  // Who is commenting: attested by the host, never taken from argv.
+  import soil:principal/principal@0.1.0;
   export run: async func() -> u32;
 }
