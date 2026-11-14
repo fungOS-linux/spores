@@ -63,7 +63,7 @@ spores/weather/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bc
 # empty until `spores/spore-catalog` put both hosts back on soil's main.
 
 spores/launcher/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
-spores/launcher-gpui/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
+spores/launcher-gpui/wit/deps/soil-spore/spore.wit 82ded7b51f179d87565874fa96621127e9135373
 spores/launcher-host/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
 spores/spore-browser/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
 spores/spore-browser-host/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5

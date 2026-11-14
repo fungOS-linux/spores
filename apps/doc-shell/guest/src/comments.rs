@@ -67,8 +67,11 @@ impl Pending {
         threads
     }
 
-    /// Say something on a block. Returns the comment so the caller can select it.
-    pub fn add(&mut self, block: &str, body: &str) -> Comment {
+    /// Say something on a block.
+    ///
+    /// The comment is only kept if the store took it: a comment that was typed
+    /// and silently dropped is worse than one that was refused out loud.
+    pub fn add(&mut self, block: &str, body: &str) -> Result<Comment, String> {
         self.refresh();
         let n = self
             .comments
@@ -84,13 +87,13 @@ impl Pending {
             body: body.to_owned(),
             resolved: false,
         };
-        self.put(&comment);
+        self.put(&comment)?;
         self.comments.push(comment.clone());
-        comment
+        Ok(comment)
     }
 
     /// Mark every unresolved comment on a block resolved, or reopen them.
-    pub fn set_resolved(&mut self, block: &str, resolved: bool) {
+    pub fn set_resolved(&mut self, block: &str, resolved: bool) -> Result<(), String> {
         self.refresh();
         let mut changed = Vec::new();
         for comment in &mut self.comments {
@@ -100,8 +103,9 @@ impl Pending {
             }
         }
         for comment in changed {
-            self.put(&comment);
+            self.put(&comment)?;
         }
+        Ok(())
     }
 }
 
@@ -168,11 +172,8 @@ mod store {
             self.revisions = order.iter().map(|index| revisions[*index]).collect();
         }
 
-        pub(super) fn put(&mut self, comment: &Comment) {
-            let body = match serde_json::to_vec(comment) {
-                Ok(body) => body,
-                Err(_) => return,
-            };
+        pub(super) fn put(&mut self, comment: &Comment) -> Result<(), String> {
+            let body = serde_json::to_vec(comment).map_err(|error| error.to_string())?;
             let entry = records::records::Entry {
                 key: records::records::Key {
                     collection: COLLECTION.to_owned(),
@@ -185,7 +186,9 @@ mod store {
                 deleted: false,
                 body,
             };
-            let _ = records::records::upsert(&entry);
+            records::records::upsert(&entry)
+                .map(|_| ())
+                .map_err(|error| format!("{error:?}"))
         }
     }
 }
@@ -275,9 +278,10 @@ mod store {
     impl Pending {
         pub(super) fn refresh(&mut self) {}
 
-        pub(super) fn put(&mut self, _comment: &Comment) {
+        pub(super) fn put(&mut self, _comment: &Comment) -> Result<(), String> {
             self.next += 1;
             self.revisions.push(self.next);
+            Ok(())
         }
     }
 }

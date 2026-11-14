@@ -271,10 +271,9 @@ impl fmt::Display for DfuError {
                 write!(f, "expected response {expected:#04x}, got {data:02x?}")
             }
             Self::UnexpectedReceipt(data) => write!(f, "not a receipt: {data:02x?}"),
-            Self::ReceiptMismatch { sent, reported } => write!(
-                f,
-                "watch received {reported} bytes; {sent} were sent"
-            ),
+            Self::ReceiptMismatch { sent, reported } => {
+                write!(f, "watch received {reported} bytes; {sent} were sent")
+            }
             Self::UnexpectedNotification { phase, data } => {
                 write!(f, "unexpected notification {data:02x?} in phase {phase}")
             }
@@ -313,7 +312,10 @@ mod tests {
             Action::Packet(packet) => {
                 assert_eq!(packet.len(), 12);
                 assert_eq!(&packet[..8], &[0u8; 8]);
-                assert_eq!(u32::from_le_bytes([packet[8], packet[9], packet[10], packet[11]]), 50);
+                assert_eq!(
+                    u32::from_le_bytes([packet[8], packet[9], packet[10], packet[11]]),
+                    50
+                );
             }
             other => panic!("expected the size packet, got {other:?}"),
         }
@@ -364,10 +366,7 @@ mod tests {
         assert_eq!(dfu.sent(), 200);
 
         // A receipt for the wrong count is a failure, not a nudge.
-        assert_eq!(
-            dfu.on_control(&[0x11, 0xC8, 0x00, 0x00, 0x00]),
-            Ok(())
-        );
+        assert_eq!(dfu.on_control(&[0x11, 0xC8, 0x00, 0x00, 0x00]), Ok(()));
         for _ in 0..2 {
             assert!(matches!(dfu.next(), Action::Packet(_)));
         }
@@ -431,7 +430,13 @@ mod tests {
     fn empty_inputs_are_refused_before_the_first_write() {
         assert_eq!(Dfu::new(&[], &[1], 10).err(), Some(DfuError::EmptyImage));
         assert_eq!(Dfu::new(&[1], &[], 10).err(), Some(DfuError::EmptyInit));
-        assert_eq!(Dfu::new(&[1], &[1], 0).err(), Some(DfuError::BadInterval(0)));
-        assert_eq!(Dfu::new(&[1], &[1], 300).err(), Some(DfuError::BadInterval(300)));
+        assert_eq!(
+            Dfu::new(&[1], &[1], 0).err(),
+            Some(DfuError::BadInterval(0))
+        );
+        assert_eq!(
+            Dfu::new(&[1], &[1], 300).err(),
+            Some(DfuError::BadInterval(300))
+        );
     }
 }
