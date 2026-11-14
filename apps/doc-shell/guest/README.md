@@ -82,8 +82,11 @@ hands the host a texture. `soil:present/input` is the only keyboard.
   will read it, so it must never be lost and never be ordered after the reply it
   answers.
 
-  This slice implements neither. It only guarantees the precondition: block
-  identity survives a re-read, so an anchor written today still resolves when the
-  comment is rendered from the artifact rather than the store.
+  This slice implements neither, and the model behind them —
+  [comments and attachments](../../../docs/comment-attachments.md) — settles the
+  part that was messy: pending comments live in one store whatever their target,
+  and *commit* belongs to the destination. It only guarantees the precondition:
+  block identity survives a re-read, so an anchor written today still resolves
+  when the comment is rendered from the artifact rather than the store.
 - **The transcript pane** and **preferences**: layout is per-device view state,
   which is what `soil:appdata`'s `local` scope is for.
