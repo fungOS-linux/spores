@@ -673,6 +673,107 @@ pub fn forecast_packet(timestamp: u64, days: &[ForecastDay]) -> Vec<u8> {
     out
 }
 
+/// A firmware version, parsed from the DIS firmware string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Semver {
+    pub major: u16,
+    pub minor: u16,
+    pub patch: u16,
+}
+
+/// The services this Spore speaks, and the InfiniTime release each arrived in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Service {
+    /// Music service, 0.8.
+    Music,
+    /// Navigation service, 0.11.
+    Navigation,
+    /// Call characteristic on ANS, 0.13.
+    Call,
+    /// Motion service, 1.7.
+    Motion,
+    /// Simple Weather service, 1.14. The 1.8 weather service it replaced is not
+    /// spoken: one weather service is enough, and it is the current one.
+    SimpleWeather,
+    /// Current Time Service, present since the first release.
+    CurrentTime,
+}
+
+impl Service {
+    #[must_use]
+    pub const fn since(self) -> Option<Semver> {
+        match self {
+            Self::CurrentTime => None,
+            Self::Music => Some(Semver {
+                major: 0,
+                minor: 8,
+                patch: 0,
+            }),
+            Self::Navigation => Some(Semver {
+                major: 0,
+                minor: 11,
+                patch: 0,
+            }),
+            Self::Call => Some(Semver {
+                major: 0,
+                minor: 13,
+                patch: 0,
+            }),
+            Self::Motion => Some(Semver {
+                major: 1,
+                minor: 7,
+                patch: 0,
+            }),
+            Self::SimpleWeather => Some(Semver {
+                major: 1,
+                minor: 14,
+                patch: 0,
+            }),
+        }
+    }
+}
+
+/// Find the first `major.minor[.patch]` in a firmware string such as
+/// `InfiniTime 1.16.0` or `1.14`.
+pub fn parse_firmware(text: &str) -> Option<Semver> {
+    let mut digits = String::new();
+    let mut parts: Vec<&str> = Vec::new();
+    for chunk in text.split(|c: char| !(c.is_ascii_digit() || c == '.')) {
+        if chunk.is_empty() {
+            continue;
+        }
+        if chunk.chars().next().is_some_and(|c| c.is_ascii_digit()) && chunk.contains('.') {
+            parts = chunk.split('.').collect();
+            break;
+        }
+    }
+    if parts.len() < 2 {
+        return None;
+    }
+    digits.clear();
+    let major = parts[0].parse().ok()?;
+    let minor = parts[1].parse().ok()?;
+    let patch = parts.get(2).and_then(|part| part.parse().ok()).unwrap_or(0);
+    Some(Semver {
+        major,
+        minor,
+        patch,
+    })
+}
+
+/// `Some(true)` when the firmware is new enough, `Some(false)` when it predates
+/// the service, `None` when the version string is unreadable.
+///
+/// Unreadable is not the same as old: a custom or patched firmware gets the
+/// benefit of the doubt, and the write that follows fails loudly on its own if
+/// the characteristic is missing.
+#[must_use]
+pub fn firmware_supports(firmware: &str, service: Service) -> Option<bool> {
+    let since = service.since()?;
+    let version = parse_firmware(firmware)?;
+    Some(version >= since)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -841,6 +942,53 @@ mod tests {
         assert_eq!(&packet[16..18], &(-200i16).to_le_bytes());
         assert_eq!(packet[20], 7);
         assert!(packet[21..].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn firmware_versions_are_found_in_dis_strings() {
+        assert_eq!(
+            parse_firmware("InfiniTime 1.16.0"),
+            Some(Semver {
+                major: 1,
+                minor: 16,
+                patch: 0
+            })
+        );
+        assert_eq!(
+            parse_firmware("1.14"),
+            Some(Semver {
+                major: 1,
+                minor: 14,
+                patch: 0
+            })
+        );
+        assert_eq!(parse_firmware("custom build"), None);
+    }
+
+    #[test]
+    fn service_minimums_gate_on_the_firmware() {
+        assert_eq!(
+            firmware_supports("InfiniTime 1.16.0", Service::SimpleWeather),
+            Some(true)
+        );
+        assert_eq!(
+            firmware_supports("InfiniTime 1.12.1", Service::SimpleWeather),
+            Some(false)
+        );
+        assert_eq!(
+            firmware_supports("InfiniTime 1.6", Service::Navigation),
+            Some(true)
+        );
+        assert_eq!(
+            firmware_supports("InfiniTime 0.10", Service::Navigation),
+            Some(false)
+        );
+        assert_eq!(firmware_supports("custom build", Service::Navigation), None);
+        // The Current Time Service has no minimum: every release has it.
+        assert_eq!(
+            firmware_supports("InfiniTime 0.1", Service::CurrentTime),
+            None
+        );
     }
 
     #[test]

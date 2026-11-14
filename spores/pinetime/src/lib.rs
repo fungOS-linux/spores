@@ -265,6 +265,16 @@ fn run_connected(args: &Args, advertised_name: &str) -> Result<(), String> {
         );
     };
 
+    if let Some((service, since)) = command_service(&args.command) {
+        match proto::firmware_supports(&firmware, service) {
+            Some(false) => println!(
+                "pinetime: {} needs InfiniTime {}.{}.{} or newer; this watch reports {firmware:?}",
+                args.command, since.0, since.1, since.2
+            ),
+            Some(true) | None => {}
+        }
+    }
+
     let battery = read_battery()?;
     upsert_device_state(&device_id, &model, &firmware, battery, &args.wearer)?;
 
@@ -583,6 +593,20 @@ fn write_media(args: &Args, writes: &mut Vec<Written>) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The service a command speaks and the firmware it needs. Commands that only
+/// use services present since the first release return `None`.
+fn command_service(command: &str) -> Option<(proto::Service, (u16, u16, u16))> {
+    let service = match command {
+        "watch" => proto::Service::Motion,
+        "media" => proto::Service::Music,
+        "nav" => proto::Service::Navigation,
+        "weather" => proto::Service::SimpleWeather,
+        _ => return None,
+    };
+    let since = service.since()?;
+    Some((service, (since.major, since.minor, since.patch)))
 }
 
 /// What went to the radio, and optionally what the watch read back.
