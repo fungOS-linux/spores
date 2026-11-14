@@ -146,7 +146,10 @@ fn a_label_names_both_the_watch_and_the_record() {
     .expect("run");
     assert_eq!(host.records[0].0, "living-room");
     assert_eq!(host.records[0].1["location"], json!("Living-room"));
-    assert!(output.starts_with("Living-room: 12.8\u{b0}C rain"), "{output}");
+    assert!(
+        output.starts_with("Living-room: 12.8\u{b0}C rain"),
+        "{output}"
+    );
 }
 
 #[test]
@@ -215,7 +218,8 @@ fn an_unmatched_place_names_the_query() {
 
 #[test]
 fn a_denied_origin_names_the_host_rule_and_the_url() {
-    let mut host = FakeHost::failing("denied: the host's origin allowlist does not include this URL");
+    let mut host =
+        FakeHost::failing("denied: the host's origin allowlist does not include this URL");
     let error = run(&args("now --place Seattle"), &mut host).unwrap_err();
     assert!(error.starts_with("geocoding: denied:"), "{error}");
     assert!(

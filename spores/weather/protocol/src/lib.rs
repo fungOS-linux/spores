@@ -12,7 +12,7 @@
 //! Nothing here touches wasm or the network: request URLs, response parsing,
 //! the WMO table, and the record body are host-testable with inline fixtures.
 
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 /// The records collection that holds one record per place.
 pub const COLLECTION: &str = "weather.current";
@@ -74,7 +74,10 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownWeatherCode(code) => {
-                write!(f, "weather code {code} is not in the WMO table this Spore maps")
+                write!(
+                    f,
+                    "weather code {code} is not in the WMO table this Spore maps"
+                )
             }
             Self::UnknownIcon(name) => write!(f, "unknown weather icon {name:?}"),
             Self::Missing(field) => write!(f, "missing {field}"),
@@ -641,7 +644,8 @@ fn provider_error(value: &Value) -> Option<Error> {
 }
 
 fn member<'a>(map: &'a Map<String, Value>, key: &str, field: &str) -> Result<&'a Value, Error> {
-    map.get(key).ok_or_else(|| Error::Missing(field.to_string()))
+    map.get(key)
+        .ok_or_else(|| Error::Missing(field.to_string()))
 }
 
 fn object<'a>(
@@ -649,28 +653,30 @@ fn object<'a>(
     key: &str,
     field: &str,
 ) -> Result<&'a Map<String, Value>, Error> {
-    member(map, key, field)?.as_object().ok_or_else(|| Error::WrongType {
-        field: field.to_string(),
-        expected: "an object",
-    })
+    member(map, key, field)?
+        .as_object()
+        .ok_or_else(|| Error::WrongType {
+            field: field.to_string(),
+            expected: "an object",
+        })
 }
 
-fn array<'a>(
-    map: &'a Map<String, Value>,
-    key: &str,
-    field: &str,
-) -> Result<&'a Vec<Value>, Error> {
-    member(map, key, field)?.as_array().ok_or_else(|| Error::WrongType {
-        field: field.to_string(),
-        expected: "an array",
-    })
+fn array<'a>(map: &'a Map<String, Value>, key: &str, field: &str) -> Result<&'a Vec<Value>, Error> {
+    member(map, key, field)?
+        .as_array()
+        .ok_or_else(|| Error::WrongType {
+            field: field.to_string(),
+            expected: "an array",
+        })
 }
 
 fn text<'a>(map: &'a Map<String, Value>, key: &str, field: &str) -> Result<&'a str, Error> {
-    member(map, key, field)?.as_str().ok_or_else(|| Error::WrongType {
-        field: field.to_string(),
-        expected: "a string",
-    })
+    member(map, key, field)?
+        .as_str()
+        .ok_or_else(|| Error::WrongType {
+            field: field.to_string(),
+            expected: "a string",
+        })
 }
 
 fn optional_text(map: &Map<String, Value>, key: &str) -> Option<String> {
@@ -678,10 +684,12 @@ fn optional_text(map: &Map<String, Value>, key: &str) -> Option<String> {
 }
 
 fn number(map: &Map<String, Value>, key: &str, field: &str) -> Result<f64, Error> {
-    member(map, key, field)?.as_f64().ok_or_else(|| Error::WrongType {
-        field: field.to_string(),
-        expected: "a number",
-    })
+    member(map, key, field)?
+        .as_f64()
+        .ok_or_else(|| Error::WrongType {
+            field: field.to_string(),
+            expected: "a number",
+        })
 }
 
 /// An integer-valued JSON number. Open-Meteo sends whole numbers as `3`, but a

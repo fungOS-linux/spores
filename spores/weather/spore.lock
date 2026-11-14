@@ -1,6 +1,6 @@
 spore-lock 1
 spore dev.fungos.weather
 version 0.1.0
-file 625619dd9a5c5db8fd45e8403de231ffd65284dcca08d3f404299d2b3a342b70 294871 module.wasm
+file 7e39c4ff851f336bfc51dbf7cfc87d01ceab37249c97f5ca5622dbdc5d03a9ba 294871 module.wasm
 file cd492d6252c8258e53f9f09371a6cb4a909d2c4aff37c241b1a030806264f4cc 2092 spore.toml
-digest a9d4788bec11b1dfe46ab8df5360bb8c9aa4f570fe8fb5668237c22c6daed6d9
+digest 669c9e9dcada1efbabc31580cd20e99ed5440d1a995938e9ba4d5bb64b8694b8

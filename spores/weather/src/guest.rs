@@ -5,7 +5,7 @@
 
 use std::cell::RefCell;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use soil::http::http as http_abi;
 use soil::records::records;
 use soil::time::time;

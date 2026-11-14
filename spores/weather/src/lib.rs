@@ -12,7 +12,7 @@
 #[cfg(target_arch = "wasm32")]
 mod guest;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use weather_protocol as weather;
 
 /// The host capabilities this Spore needs, in plain Rust so the command logic
@@ -160,10 +160,7 @@ impl Command {
     /// Turn the flags into a point and the two names a record needs: the string
     /// the watch shows, and the one the record id is derived from (`None` for a
     /// bare coordinate query, whose id is the coordinates themselves).
-    fn resolve(
-        self,
-        host: &mut dyn Host,
-    ) -> Result<(f64, f64, String, Option<String>), String> {
+    fn resolve(self, host: &mut dyn Host) -> Result<(f64, f64, String, Option<String>), String> {
         match (self.place, self.latitude, self.longitude) {
             (Some(place), None, None) => {
                 let url = weather::geocode_url(weather::GEOCODING_ORIGIN, &place);
@@ -184,9 +181,9 @@ impl Command {
                 Ok((latitude, longitude, label, id_label))
             }
             (Some(_), _, _) => Err("use --place, or --lat and --lon, not both".to_string()),
-            (None, None, None) => Err(
-                "weather now needs a place: pass --place NAME, or --lat and --lon".to_string(),
-            ),
+            (None, None, None) => {
+                Err("weather now needs a place: pass --place NAME, or --lat and --lon".to_string())
+            }
             (None, Some(_), None) => Err("--lat needs --lon as well".to_string()),
             (None, None, Some(_)) => Err("--lon needs --lat as well".to_string()),
         }

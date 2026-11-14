@@ -134,7 +134,8 @@ fn the_wmo_table_maps_every_documented_code() {
     // snow showers 85/86 that the same table carries.
     let mut checked = 0;
     for code in 0..=99 {
-        let documented = matches!(code, 0..=3 | 45 | 48 | 51..=67 | 71..=77 | 80..=82 | 85 | 86 | 95..=99);
+        let documented =
+            matches!(code, 0..=3 | 45 | 48 | 51..=67 | 71..=77 | 80..=82 | 85 | 86 | 95..=99);
         if documented {
             assert_eq!(icon_for_code(code), Ok(expected(code)), "code {code}");
             checked += 1;
@@ -146,7 +147,11 @@ fn the_wmo_table_maps_every_documented_code() {
             );
         }
     }
-    assert_eq!(checked, 4 + 2 + 17 + 7 + 3 + 2 + 5, "every documented code is covered");
+    assert_eq!(
+        checked,
+        4 + 2 + 17 + 7 + 3 + 2 + 5,
+        "every documented code is covered"
+    );
 }
 
 #[test]
@@ -180,7 +185,10 @@ fn a_timestamp_with_an_offset_suffix_is_refused() {
         "2026-11-13 20:45",
     ] {
         assert!(
-            matches!(local_seconds(value, "current.time"), Err(Error::BadTime { .. })),
+            matches!(
+                local_seconds(value, "current.time"),
+                Err(Error::BadTime { .. })
+            ),
             "{value} must be refused"
         );
     }
@@ -356,7 +364,10 @@ fn the_record_id_is_a_slug_or_the_coordinates() {
         record_id(Some("  Z\u{fc}rich  "), 47.6, -122.3).unwrap(),
         "z-rich"
     );
-    assert_eq!(record_id(None, 47.60621, -122.33207).unwrap(), "47.6062,-122.3321");
+    assert_eq!(
+        record_id(None, 47.60621, -122.33207).unwrap(),
+        "47.6062,-122.3321"
+    );
     assert!(matches!(
         record_id(Some("\u{6771}\u{4eac}"), 1.0, 2.0),
         Err(Error::EmptyRecordId(_))
@@ -368,7 +379,10 @@ fn a_location_the_watch_would_truncate_is_refused() {
     assert!(check_location("Living room").is_ok());
     assert!(check_location(&"a".repeat(LOCATION_BYTES)).is_ok());
     let error = check_location(&"a".repeat(LOCATION_BYTES + 1)).unwrap_err();
-    assert_eq!(error.to_string(), "location is 33 bytes; the watch field holds 32");
+    assert_eq!(
+        error.to_string(),
+        "location is 33 bytes; the watch field holds 32"
+    );
 
     let error = parse_forecast(SEATTLE, &request(&"b".repeat(40), 0.0, 0.0)).unwrap_err();
     assert!(matches!(error, Error::LocationTooLong(40)));
@@ -389,5 +403,8 @@ fn a_date_with_a_clock_still_names_the_day() {
 #[test]
 fn a_body_that_is_not_json_says_so() {
     let error = CurrentWeather::from_body(b"not json").unwrap_err();
-    assert!(error.to_string().starts_with("response is not JSON:"), "{error}");
+    assert!(
+        error.to_string().starts_with("response is not JSON:"),
+        "{error}"
+    );
 }
