@@ -49,6 +49,7 @@ struct Command {
     label: Option<String>,
     json: bool,
     help: bool,
+    provider: String,
 }
 
 impl Command {
@@ -60,6 +61,7 @@ impl Command {
             label: None,
             json: false,
             help: false,
+            provider: "open-meteo".to_string(),
         };
         let mut words = Vec::new();
         let mut index = 0;
@@ -76,6 +78,15 @@ impl Command {
                 }
                 "--label" => command.label = Some(take(args, &mut index, "--label")?),
                 "--json" => command.json = true,
+                "--provider" => {
+                    let value = take(args, &mut index, "--provider")?;
+                    if value != "open-meteo" && value != "nws" {
+                        return Err(format!(
+                            "--provider: {value:?} is not one of open-meteo, nws"
+                        ));
+                    }
+                    command.provider = value;
+                }
                 "--help" | "-h" | "help" => command.help = true,
                 flag if flag.starts_with("--") => return Err(format!("unknown argument {flag:?}")),
                 word => words.push(word.to_string()),
@@ -102,6 +113,7 @@ impl Command {
             });
         }
         let json = self.json;
+        let provider = self.provider.clone();
         let (latitude, longitude, label, id_label) = self.resolve(host)?;
         if !(-90.0..=90.0).contains(&latitude) {
             return Err(format!("--lat: {latitude} is outside -90..90"));
@@ -114,22 +126,40 @@ impl Command {
         let id = weather::record_id(id_label.as_deref(), latitude, longitude)
             .map_err(|error| error.to_string())?;
 
-        let url = weather::forecast_url(weather::FORECAST_ORIGIN, latitude, longitude);
-        let body = fetch(host, &url, "open-meteo")?;
-        // The fetch is done; this is when the sample arrived, not when it left.
         let fetched_at_monotonic_ms = host
             .monotonic_ms()
             .map_err(|error| format!("time: {error}"))?;
-        let record = weather::parse_forecast(
-            &body,
-            &weather::SampleRequest {
-                location: &label,
-                latitude,
-                longitude,
-                fetched_at_monotonic_ms,
-            },
-        )
-        .map_err(|error| error.to_string())?;
+        let request = weather::SampleRequest {
+            location: &label,
+            latitude,
+            longitude,
+            fetched_at_monotonic_ms,
+        };
+        let record = match provider.as_str() {
+            "nws" => {
+                // Two calls: the point resolves a grid, the grid's forecast URL
+                // returns the periods.
+                let points = fetch(
+                    host,
+                    &weather::nws::points_url(weather::nws::ORIGIN, latitude, longitude),
+                    "nws points",
+                )?;
+                let grid = weather::nws::parse_points(&points)
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| {
+                        "nws: this point is outside the National Weather Service's coverage; use --provider open-meteo".to_string()
+                    })?;
+                let body = fetch(host, &grid.forecast_url, "nws forecast")?;
+                weather::nws::parse_forecast(&body, &request, &grid)
+                    .map_err(|error| error.to_string())?
+            }
+            _ => {
+                let url = weather::forecast_url(weather::FORECAST_ORIGIN, latitude, longitude);
+                let body = fetch(host, &url, "open-meteo")?;
+                weather::parse_forecast(&body, &request).map_err(|error| error.to_string())?
+            }
+        }
+        .with_computed_sun();
 
         let record_body = record.body();
         let bytes =

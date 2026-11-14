@@ -28,7 +28,7 @@ default = "native"
 surfaces = ["native"]
 
 [grants]
-"soil:http" = "read the forecast and the place lookup from the two Open-Meteo origins the host allowlists"
+"soil:http" = "read the forecast and the place lookup from the provider origins the host allowlists (Open-Meteo, or api.weather.gov for NWS)"
 "soil:records" = "write the weather.current.v1 record other Spores read"
 "soil:time" = "stamp fetched_at_monotonic_ms with the host's monotonic clock; no wall clock"
 # Rust std on wasm32-wasip2 pulls these in even though this Spore opens no file

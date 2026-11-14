@@ -13,6 +13,7 @@
 //! the WMO table, and the record body are host-testable with inline fixtures.
 
 pub mod nws;
+pub mod sun;
 
 use serde_json::{json, Map, Value};
 
@@ -288,6 +289,26 @@ pub struct CurrentWeather {
 }
 
 impl CurrentWeather {
+    /// Fill sunrise and sunset from the coordinates and the sample's own local
+    /// date. A provider that publishes them still wins: this is only called
+    /// where the source leaves them unknown.
+    #[must_use]
+    pub fn with_computed_sun(mut self) -> Self {
+        let (sunrise, sunset) = crate::sun::sunrise_sunset(
+            self.latitude,
+            self.longitude,
+            self.timestamp,
+            self.utc_offset_seconds,
+        );
+        if self.sunrise_min == SUN_UNKNOWN {
+            self.sunrise_min = sunrise;
+        }
+        if self.sunset_min == SUN_UNKNOWN {
+            self.sunset_min = sunset;
+        }
+        self
+    }
+
     /// The record body. The key set is the schema; [`Self::from_body`] reads
     /// exactly what this writes.
     #[must_use]
