@@ -66,13 +66,44 @@ not import `soil:vfs` yet — the shipped build imports it and needs the grant.
 The light frame is the same build with the initial mode flipped, not a mockup:
 the frame runner sends no keys, so `d` could not be pressed to capture it.
 
+## The package
+
+The manifest is a package, not an intention: `soil-spore check` validates it
+against the host's rules, `lock` covers the bytes that ship, and `pack` writes
+the tar. `module.wasm` and `spore.lock` are committed because every other module
+Spore here commits them, and `scripts/package.sh` regenerates both:
+
+```sh
+./scripts/package.sh --tar                      # → xplorer.spore
+soil-install install xplorer.spore --root ~/.local/share/fungos/spores
+soil-store index --spores-root ~/.local/share/fungos/spores -o <index.json>
+```
+
+What that buys is the **Store** panel on `home.myc`: it counts installed Spores
+and lists them from that index. It does not buy a tile, and there are two
+reasons, both facts about the host rather than about this package:
+
+- the launcher draws **one tile per route** in
+  `~/.mycelium/gateway/routes.json`, and the store only supplies each tile's
+  mark and colour — an installed Spore with no route is not a tile;
+- nothing serves a native module Spore over HTTP yet. `spore-serve` renders Lua
+  views, `canvas-winit` opens a local window, and `soil-webgpu` captures a
+  frame. A route needs a host that presents these frames and accepts input.
+
+A store listing is a further step: `check --publish` wants a `[catalog]` with a
+category from the fixed vocabulary and `ipfs://` screenshots, which a package
+cannot invent for itself.
+
 ## What it still needs before the shipped build can be seen
 
-A host must link `soil:present` (surface, input, cursor) **and `soil:vfs`** and
-then call `run`. `crates/soil-webgpu/wit/runner.wit` is where that import is
-missing; its state type then has to implement `soil:vfs/vfs::Host` — which
-`crates/soil-vfs-host`'s `VfsHost` already does — and the runner needs a
-`--root <workspace>` to open.
+The shipped build compiles — `import soil:vfs` is in the world, and the module
+now reads it through `crate::soil`, which is what a submodule needs since a
+bare `soil::` path resolves against the module, not the crate root. To *run* it,
+a host must link `soil:present` (surface, input, cursor), `soil:vfs` and
+`wasi:webgpu`, then call `run`. `crates/soil-webgpu/wit/runner.wit` is where the
+`soil:vfs` import is missing; its state type then has to implement
+`soil:vfs/vfs::Host` — which `crates/soil-vfs-host`'s `VfsHost` already does —
+and the runner needs a `--root <workspace>` to open.
 
 `crates/soil-vfs-host` in soil already implements `soil:vfs` and `soil:index`
 over `fungos-vfs`, and `crates/soil-webgpu` already presents a component's

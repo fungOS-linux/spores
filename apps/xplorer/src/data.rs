@@ -11,7 +11,7 @@ use crate::Row;
 /// Read a directory's entries, sorted with directories first.
 #[cfg(not(feature = "demo"))]
 pub fn ls(path: &str) -> Result<Vec<Row>, String> {
-    use soil::vfs::vfs;
+    use crate::soil::vfs::vfs;
     match vfs::ls(path, 0, crate::PAGE) {
         Ok(page) => Ok(sort(
             page.entries
@@ -37,7 +37,7 @@ pub fn ls(path: &str) -> Result<Vec<Row>, String> {
 /// the whole object.
 #[cfg(not(feature = "demo"))]
 pub fn read(path: &str, max: u32) -> Result<(Vec<u8>, String, bool), String> {
-    use soil::vfs::vfs;
+    use crate::soil::vfs::vfs;
     match vfs::read(path, 0, max) {
         Ok(chunk) => Ok((chunk.data, chunk.content_id, chunk.eof)),
         Err(error) => Err(format!("{error:?}")),
