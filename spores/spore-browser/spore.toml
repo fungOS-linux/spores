@@ -56,3 +56,9 @@ host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
 badge = "L"
 color = "#c9a6ff"
 mark = "assets/icon.svg"
+
+[system]
+# A host with soil is supposed to have a launcher; the seed names which
+# package fills the role today, so the publisher can change without the
+# host learning a package id.
+role = "launcher"
