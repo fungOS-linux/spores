@@ -61,9 +61,29 @@ hands the host a texture. `soil:present/input` is the only keyboard.
 
 - **Saving.** `cmd-s` needs `soil:vfs-mut`; the record of *who* saved comes from
   `soil:principal` the host already attests.
-- **Threads.** A reply is anchored to a block id. Whether that lives in
-  `soil:records` (one record per comment, so an append cannot clobber another
-  writer) or in `soil:vfs-mut` (the per-actor JSON files `fungos-vfs` writes
-  today) is the next interface decision, deliberately not made by this slice.
+- **Threads.** A reply is anchored to a block id, and a thread has three fates:
+  it is *pending* (live, syncing, attached), it is *committed* into the durable
+  artifact, or it is gone. "Render the same" is the requirement that decides the
+  shape: a committed comment has to keep its provenance — comment id, author,
+  time, the block it was on — or the view cannot draw it like the ones that are
+  still pending, and nobody can tell it began life as a comment.
+
+  Where pending threads live follows where the artifact lives, so a commit can
+  be one transaction rather than two:
+
+  | target | pending in | commit |
+  | --- | --- | --- |
+  | transcript (a records book) | `soil:records`, one record per comment | append the durable entry and drop the pending record, in one store |
+  | document or sheet (bytes in the namespace) | `soil:vfs-mut`, per-actor files | not a commit: resolving is the end of a comment |
+
+  A doc comment is *accepted into the text* on save, which is why it has no
+  agent-facing commit step: nobody reads a spreadsheet as instructions. A
+  transcript comment is the opposite — committing is what puts it where an agent
+  will read it, so it must never be lost and never be ordered after the reply it
+  answers.
+
+  This slice implements neither. It only guarantees the precondition: block
+  identity survives a re-read, so an anchor written today still resolves when the
+  comment is rendered from the artifact rather than the store.
 - **The transcript pane** and **preferences**: layout is per-device view state,
   which is what `soil:appdata`'s `local` scope is for.
