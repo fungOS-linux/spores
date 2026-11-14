@@ -804,6 +804,7 @@ impl Shell {
             "test" => self.test_status(args),
             "[" => self.test_bracket(args),
             "read" => self.read(args),
+            "prompt" => self.prompt_command(args).map(|_| 0),
             "export" | "set" => self.set_env(args).map(|_| 0),
             "unset" => self.unset_env(args).map(|_| 0),
             "env" => {
@@ -2689,6 +2690,81 @@ impl Shell {
         }
     }
 
+    /// The branch of the repository `cwd` sits in, read from the VFS.
+    ///
+    /// `.git/HEAD` is either `ref: refs/heads/name` or a detached sha. No
+    /// repository, no segment — a prompt that guesses is worse than one that
+    /// leaves a gap.
+    fn git_branch(&self) -> Option<String> {
+        let head = self.read_text("*.git/HEAD")?;
+        let head = head.trim();
+        if let Some(name) = head.strip_prefix("ref: refs/heads/") {
+            return Some(name.to_string());
+        }
+        if head.len() >= 7 && head.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Some(head[..7].to_string());
+        }
+        None
+    }
+
+    /// Look for `name` in the current directory and every parent.
+    fn read_text(&self, name: &str) -> Option<String> {
+        let mut at = self.cwd.clone();
+        loop {
+            let candidate = if at.is_empty() {
+                name.to_string()
+            } else {
+                format!("{at}/{name}")
+            };
+            if let Ok(bytes) = self.read_file(&candidate) {
+                return String::from_utf8(bytes).ok();
+            }
+            if at.is_empty() {
+                return None;
+            }
+            at = match at.rfind('/') {
+                Some(index) => at[..index].to_string(),
+                None => String::new(),
+            };
+        }
+    }
+
+    /// `prompt` prints what the next prompt will look like; `prompt theme NAME`
+    /// picks a preset; `prompt set FORMAT` takes a PS1-style string.
+    fn prompt_command(&mut self, args: &[String]) -> Result<(), String> {
+        match args.first().map(String::as_str) {
+            None => {
+                self.out.push_str(&self.prompt());
+                self.out.push('\n');
+            }
+            Some("theme") => {
+                let name = args.get(1).map(String::as_str).unwrap_or("mush");
+                let Some(format) = prompt_theme(name) else {
+                    return Err(format!(
+                        "prompt: unknown theme {name:?}; try {}",
+                        PROMPT_THEMES.join(", ")
+                    ));
+                };
+                self.env.insert("PS1".into(), format.into());
+                self.out.push_str(&self.prompt());
+                self.out.push('\n');
+            }
+            Some("set") => {
+                let format = args[1..].join(" ");
+                if format.is_empty() {
+                    return Err("prompt set: needs a format".into());
+                }
+                self.env.insert("PS1".into(), format);
+            }
+            Some("themes") => {
+                self.out.push_str(&PROMPT_THEMES.join("\n"));
+                self.out.push('\n');
+            }
+            Some(other) => return Err(format!("prompt: unknown subcommand {other:?}")),
+        }
+        Ok(())
+    }
+
     fn prompt(&self) -> String {
         let format = self
             .env
@@ -2725,6 +2801,24 @@ impl Shell {
                 Some('$') => prompt.push('$'),
                 Some('n') => prompt.push('\n'),
                 Some('t') => prompt.push_str("00:00:00"),
+                // Escape, so a theme can carry colour without the mushrc
+                // having to spell out a raw 0x1b.
+                Some('e') => prompt.push('\x1b'),
+                // The repo the current directory is in, if it is in one.
+                Some('g') => {
+                    if let Some(branch) = self.git_branch() {
+                        prompt.push_str(&branch);
+                    }
+                }
+                // What the last command did: the one thing a prompt is for.
+                Some('s') => prompt.push_str(if self.status == 0 {
+                    "\x1b[38;5;114m\u{2714}\x1b[0m"
+                } else {
+                    "\x1b[38;5;203m\u{2718}\x1b[0m"
+                }),
+                // `\[` and `\]` mark zero-width text for a terminal that wraps
+                // by cell count. mush does not wrap, so they vanish.
+                Some('[') | Some(']') => {}
                 Some(other) => prompt.push(other),
                 None => prompt.push('\\'),
             }
@@ -4019,6 +4113,7 @@ Shell syntax:
 Any other command resolves through the virtual PATH to an installed wasm
 package. Commands get explicit args, piped stdin, the VFS cwd, and no host
 environment; they never run host binaries.
+  prompt [theme NAME]     show the prompt, or pick a theme (list: prompt themes)
   echo TEXT               print text
   printf FORMAT [ARG...]  formatted output
   test EXPR               evaluate a condition (or [ EXPR ])
@@ -4294,4 +4389,26 @@ fn arith_primary(
         }
         _ => Err("arithmetic: expected a number, name, or (".into()),
     }
+}
+
+/// The themes `prompt theme` knows, in the order `prompt themes` lists them.
+pub const PROMPT_THEMES: &[&str] = &["mush", "plain", "clean", "amber"];
+
+/// A PS1 for one preset name.
+///
+/// 256-colour codes and `\e[0m` resets, no Nerd Font glyphs: a prompt that
+/// needs a patched font is a prompt that renders as boxes on the machine you
+/// are debugging.
+fn prompt_theme(name: &str) -> Option<&'static str> {
+    Some(match name {
+        // The house style: path, repo, status. Calm colours, no boxes.
+        "mush" => "\\[\\e[38;5;110m\\]\\w\\[\\e[0m\\]\\[\\e[38;5;180m\\]\\g\\[\\e[0m\\]\\[\\e[38;5;144m\\]\\s\\[\\e[0m\\] ",
+        // For a transcript: no colour at all.
+        "plain" => "\\w\\g \\$ ",
+        // Deliberately quiet: the directory only, with the status glyph.
+        "clean" => "\\[\\e[38;5;250m\\]\\W\\[\\e[0m\\] \\s ",
+        // Warm and high-contrast, for a dark terminal.
+        "amber" => "\\[\\e[38;5;214m\\]\\u\\[\\e[0m\\] \\[\\e[38;5;222m\\]\\w\\[\\e[0m\\]\\[\\e[38;5;180m\\]\\g\\[\\e[0m\\]\\[\\e[38;5;144m\\]\\s\\[\\e[0m\\] ",
+        _ => return None,
+    })
 }
