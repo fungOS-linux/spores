@@ -394,6 +394,7 @@ dependencies = [
  "infinitime",
  "serde_json",
  "watch-core",
+ "weather-protocol",
  "wit-bindgen",
 ]
 
@@ -651,6 +652,13 @@ dependencies = [
 
 [[package]]
 name = "watch-core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "weather-protocol"
 version = "0.1.0"
 dependencies = [
  "serde_json",

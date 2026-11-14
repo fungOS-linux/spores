@@ -23,7 +23,8 @@ pinetime media   [--artist A] [--track T] [--album L] [--playing true|false]
 pinetime find    [--wearer W]
 pinetime time    --epoch UNIX [--offset-min N]
 pinetime nav     --icon NAME [--narrative T] [--distance D] [--progress 0-100]
-pinetime weather --epoch UNIX --icon NAME --temp-c C [--min-c C] [--max-c C]
+pinetime weather --from-record [--id ID]
+pinetime weather --epoch UNIX --icon NAME --temp-c C --min-c C --max-c C
                  [--location L] [--sunrise-min N] [--sunset-min N]
                  [--forecast "min,max,icon;min,max,icon"]
 ```
@@ -44,10 +45,18 @@ pinetime weather --epoch UNIX --icon NAME --temp-c C [--min-c C] [--max-c C]
   the caller's instant and `--offset-min` is the local offset to display.
 - `nav` writes the four Navigation characteristics: a validated `pure-maps`
   icon name, the instruction, the distance to it, and route progress.
-- `weather` writes Simple Weather current conditions (version 1, with
-  sunrise/sunset) and, with `--forecast`, a five-day forecast. Temperatures are
-  decimal Celsius on the command line and hundredths in the packet; sunrise and
-  sunset accept the service's `-1` (unknown) and `-2` (does not occur).
+- `weather --from-record` reads the newest `weather.current.v1` record (or the
+  one named by `--id`) and writes the frames from it. The record carries what
+  the watch shows, so no caller-typed temperature or icon is involved; a
+  forecast frame is written when the record carries days, and skipped when it
+  does not. The record struct is `weather-protocol`'s, the same crate the
+  `weather` Spore writes, so the body has one definition.
+- `weather --epoch … --icon …` writes the same frames from flags, for a caller
+  that already knows the values. Temperatures are decimal Celsius on the command
+  line and hundredths in the packet; sunrise and sunset accept the service's
+  `-1` (unknown) and `-2` (does not occur). Mixing record fields into
+  `--from-record` is refused rather than silently ignored, and the three
+  temperatures are required: the frame has no honest default.
 
 Every write command reports what it sent. `--read-back` also reads each
 characteristic immediately after the write and records `true`, `"mismatch"`, or
@@ -117,6 +126,8 @@ would rekey records readers and per-app Canvas settings.
   infers a wearer from proximity.
 - `device.state` collection: one `device.state.v1` record per device with
   model, firmware, battery, wearer, and monotonic observation time.
+- `weather.current` (read only, written by the `weather` Spore): the current
+  conditions this Spore sends with `weather --from-record`.
 - `signal` collection: append-only `signal.sample.v1` records for
   `body.hr.v1`, `body.steps.v1`, `body.motion.v1`, `media.event.v1`, and
   `call.response.v1`.
@@ -129,7 +140,7 @@ would rekey records readers and per-app Canvas settings.
 | Grant | Why |
 |---|---|
 | `soil:ble` | observe (scan/services/read/subscribe/next-event), connect (take the radio lease), write (notifications, media, find) |
-| `soil:records` | read previous state and write device/signal records |
+| `soil:records` | read previous state and the weather record, and write device/signal records |
 | `soil:time` | monotonic observation timestamps |
 | `wasi:cli`, `wasi:clocks`, `wasi:io` | Rust std runtime on `wasm32-wasip2`; no file or network I/O |
 

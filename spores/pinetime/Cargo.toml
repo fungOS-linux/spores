@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 infinitime = { path = "../infinitime" }
+weather-protocol = { path = "../weather/protocol" }
 watch-core = { path = "../watch-core" }
 serde_json = "1"
 wit-bindgen = "0.41"
