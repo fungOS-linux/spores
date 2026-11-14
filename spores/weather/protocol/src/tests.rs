@@ -69,7 +69,7 @@ fn the_geocoding_url_escapes_the_place_name() {
         geocode_url(GEOCODING_ORIGIN, "New York, NY"),
         "https://geocoding-api.open-meteo.com/v1/search?name=New%20York%2C%20NY&count=1&language=en&format=json"
     );
-    assert_eq!(percent_encode("Z\u00fcrich"), "Z%C3%BCrich");
+    assert_eq!(percent_encode("Z\u{fc}rich"), "Z%C3%BCrich");
 }
 
 #[test]
@@ -134,7 +134,7 @@ fn the_wmo_table_maps_every_documented_code() {
     // snow showers 85/86 that the same table carries.
     let mut checked = 0;
     for code in 0..=99 {
-        let documented = matches!(code, 0..=3 | 45 | 48 | 51..=67 | 71..=77 | 80..=86 | 95..=99);
+        let documented = matches!(code, 0..=3 | 45 | 48 | 51..=67 | 71..=77 | 80..=82 | 85 | 86 | 95..=99);
         if documented {
             assert_eq!(icon_for_code(code), Ok(expected(code)), "code {code}");
             checked += 1;
@@ -146,7 +146,7 @@ fn the_wmo_table_maps_every_documented_code() {
             );
         }
     }
-    assert_eq!(checked, 4 + 2 + 17 + 7 + 7 + 5, "every documented code is covered");
+    assert_eq!(checked, 4 + 2 + 17 + 7 + 3 + 2 + 5, "every documented code is covered");
 }
 
 #[test]
@@ -353,12 +353,12 @@ fn the_record_id_is_a_slug_or_the_coordinates() {
         "living-room"
     );
     assert_eq!(
-        record_id(Some("  Z\u00fcrich  "), 47.6, -122.3).unwrap(),
+        record_id(Some("  Z\u{fc}rich  "), 47.6, -122.3).unwrap(),
         "z-rich"
     );
     assert_eq!(record_id(None, 47.60621, -122.33207).unwrap(), "47.6062,-122.3321");
     assert!(matches!(
-        record_id(Some("\u6771\u4eac"), 1.0, 2.0),
+        record_id(Some("\u{6771}\u{4eac}"), 1.0, 2.0),
         Err(Error::EmptyRecordId(_))
     ));
 }

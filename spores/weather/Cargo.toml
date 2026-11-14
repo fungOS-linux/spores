@@ -17,4 +17,8 @@ wit-bindgen = "0.41"
 [lints.rust]
 unsafe_code = "allow"
 
+# The protocol crate is where the record and the WMO table live, so its
+# tests are part of a plain `cargo test` here.
 [workspace]
+members = [".", "protocol"]
+default-members = [".", "protocol"]

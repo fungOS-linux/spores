@@ -43,7 +43,7 @@ transport = ["socket", "quic", "iroh"]
 host = ["process", "secrets", "environment", "raw-filesystem", "wall-clock"]
 
 [catalog]
-categories = ["utilities", "environment"]
+categories = ["utilities", "science"]
 keywords = ["weather", "forecast", "open-meteo", "wmo", "pinetime"]
 
 [presentation]
