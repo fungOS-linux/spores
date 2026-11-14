@@ -630,7 +630,8 @@ fn weather_from_flags(args: &Args) -> Result<(Vec<u8>, Option<Vec<u8>>), String>
     let icon = proto::WeatherIcon::parse(&args.icon).map_err(|error| error.to_string())?;
     let epoch = epoch(args)?;
     let required = |value: Option<i16>, flag: &str| {
-        value.ok_or_else(|| format!("weather needs {flag} (or --from-record with a weather record)"))
+        value
+            .ok_or_else(|| format!("weather needs {flag} (or --from-record with a weather record)"))
     };
     let current = proto::current_weather_packet(
         epoch,
@@ -664,7 +665,9 @@ fn weather_from_record(args: &Args) -> Result<(Vec<u8>, Option<Vec<u8>>), String
     if entry.schema != weather::SCHEMA {
         return Err(format!(
             "weather.current/{} is {}, not {}",
-            entry.key.id, entry.schema, weather::SCHEMA
+            entry.key.id,
+            entry.schema,
+            weather::SCHEMA
         ));
     }
     let record = weather::CurrentWeather::from_body(&entry.body)
@@ -710,13 +713,15 @@ fn newest_weather_record() -> Result<Entry, String> {
 
 /// Record to wire. The frame layout stays in `infinitime`; this only decides
 /// which values the watch gets.
-fn weather_frames(
-    record: &weather::CurrentWeather,
-) -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
+fn weather_frames(record: &weather::CurrentWeather) -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
     let timestamp = u64::try_from(record.timestamp).map_err(|_| {
-        format!("timestamp {} is before 1970 and does not fit the wire", record.timestamp)
+        format!(
+            "timestamp {} is before 1970 and does not fit the wire",
+            record.timestamp
+        )
     })?;
-    let icon = proto::WeatherIcon::parse(record.icon.as_str()).map_err(|error| error.to_string())?;
+    let icon =
+        proto::WeatherIcon::parse(record.icon.as_str()).map_err(|error| error.to_string())?;
     let current = proto::current_weather_packet(
         timestamp,
         hundredths(record.temp_c, "temp_c")?,
@@ -1029,8 +1034,8 @@ mod tests {
         // when the body is read rather than during the frame build.
         let mut body = record_body();
         body["icon"] = json!("hail");
-        let error = weather::CurrentWeather::from_body(&serde_json::to_vec(&body).unwrap())
-            .unwrap_err();
+        let error =
+            weather::CurrentWeather::from_body(&serde_json::to_vec(&body).unwrap()).unwrap_err();
         assert_eq!(error.to_string(), "unknown weather icon \"hail\"");
     }
 
@@ -1081,10 +1086,8 @@ mod tests {
 
     #[test]
     fn the_flags_path_still_parses_its_own_values() {
-        let args = Args::parse(&argv(
-            "weather --from-record --id seattle --read-back",
-        ))
-        .expect("args");
+        let args =
+            Args::parse(&argv("weather --from-record --id seattle --read-back")).expect("args");
         assert!(args.from_record);
         assert_eq!(args.record_id.as_deref(), Some("seattle"));
 
