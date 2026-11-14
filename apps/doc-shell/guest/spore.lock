@@ -1,6 +1,6 @@
 spore-lock 1
 spore dev.fungos.doc-shell
 version 0.1.0
-file 318a8e9db049e43c5d34175a247ab25ca0f2f9155aa572a2d240e5691f1e23d2 18175666 module.wasm
+file 9dabcbd908f2bb596fc78b89bc6fd63487b7ae4eb78a78e4672a3bd685db37e8 18214844 module.wasm
 file f49aff982bbb8096cdc37000dbed8099bf98a5818b99ededc57e757bd7818122 1927 spore.toml
-digest 4939255b181fae3a433a18453cabf7979bc52ce741cc35644f599fa0fbde0dd6
+digest a289acb3cbe78a924e4b7851bc1be6f6b3a54daff5a1c1a73a583d350409309d

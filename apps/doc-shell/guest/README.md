@@ -13,6 +13,21 @@ that presents Spores does not link `soil:vfs` yet. The document in it is a real
 `.docx`: `src/data.rs` writes the zip in memory, so the frame exercises the
 shipped reader rather than a stub.
 
+Two more frames sit beside it, each captured from a demo build seeded into the
+state it shows — the shipped build opens dark, on the reader, with no overlay:
+
+| frame | the state it was seeded into |
+| --- | --- |
+| [frame-help.png](frame-help.png) | `?` — the keymap, over the reader |
+| [frame-light.png](frame-light.png) | `d` — the same window in light mode |
+
+The harness build has no pointer because the real one has none: `soil:present`
+delivers keys, and a Spore cannot be tested against affordances its input path
+does not carry. So the demo vault holds a directory, two Word files (one long
+enough to scroll) and a Markdown file the reader refuses, and its comments are
+seeded on one document only — opening the other has to look like a file with no
+comments, not a copy of the first one's.
+
 ## One reader, no database
 
 A `.docx` is a zip whose `word/document.xml` is the outline. Two things make it a
@@ -23,9 +38,9 @@ hex number Word maintains) and a style name. So:
 - **the identity is the container's**, so two readers of the same bytes agree
   without a store between them — which is what makes an anchor ("this reply is on
   `1A2B3C4D`") resolvable by anyone holding the file;
-- a paragraph Word did not name gets `#n · position`, rendered in the warning
-  colour, because an identity derived from position is not the same claim as one
-  Word wrote.
+- a paragraph Word did not name gets `#n` and the word `position` in the margin,
+  marked by a dot rather than by colour alone, because an identity derived from
+  position is not the same claim as one Word wrote.
 
 `fungos-vfs` reads the same container in the native app; that reader is the one a
 host capability would own if we ever want the parse in one place. Nothing in this
@@ -35,10 +50,14 @@ slice needs it.
 
 `tab` moves the keyboard between the vault and the document; in the document
 `j`/`k` move the block cursor, `c` (or `enter`) starts a comment on that block,
-`enter` leaves it, `x` resolves the thread. Left of each block is the identity
-the container gave it; right of it is the thread still pending on it. A resolved
-thread stays visible and dims, because a reply to a resolved thread still has to
-render.
+`enter` leaves it, `x` resolves the thread, `n`/`p` jump to the next and
+previous thread. Left of each block is the identity the container gave it; the
+rail on the right holds the pending threads in the document's own order.
+
+A thread is the unit the reader resolves, and a resolved thread stays and dims,
+because a reply to a resolved thread still has to render. The rail is its own
+column and its own scroll: a thread taller than its paragraph must not push the
+next paragraph down, or a document stops reading as a document.
 
 Comments are entities, so they live in the host's records book —
 `comment.pending`, one record per comment, body `doc.comment@1`. Two consequences
@@ -51,8 +70,41 @@ worth naming:
   process and explicitly not comparable across restarts or devices, so it cannot
   order two people's comments. The book can.
 
-The harness build seeds three comments (one resolved, one reply) because a host
-that has not linked `soil:records` cannot instantiate the component at all.
+The harness build seeds three threads — one open and answered, one open and
+alone, one resolved with a reply under it — because a host that has not linked
+`soil:records` cannot instantiate the component at all.
+
+## Keys
+
+There is no pointer, so everything the window offers is a key, and the window
+says so where the eye goes: the toolbar names `c`, `x` and `?`, the status bar
+names `d` and `q`, and `?` names all of them.
+
+| key | what it does |
+| --- | --- |
+| `tab` | the keyboard moves between the vault and the document |
+| `j` `k` (or the arrows) | move: a row, a block, or a heading while the outline is open |
+| `enter` | open a directory, comment on the block, jump to a heading |
+| `c` | comment on the block under the cursor |
+| `x` | resolve the block's thread, or reopen it |
+| `n` `p` | the next and previous thread |
+| `o` | the outline: the document read as headings, which `j`/`k` then jump between |
+| `/` | filter the vault as you type; `esc` clears it |
+| `r` | re-read the vault and the open document |
+| `d` | light or dark |
+| `esc` | close whatever is open |
+| `q` | quit |
+
+Nothing that is not a key looks like one: there are no buttons, no scrollbars to
+drag, and no hover. The document keeps the cursor's block in view and the rail
+keeps the cursor's thread in view, which is the only scrolling a window with no
+pointer can honestly do.
+
+A block the container did not name is marked by a dot and by the word
+`position` rather than by colour alone, and the pane's header says how many of
+the document's identities came from Word and how many did not. A pane with
+nothing to read — an empty directory, a file that is not Word, a parse that
+failed — says what is in the way and which key gets out of it.
 
 ## Grants
 
@@ -90,8 +142,11 @@ style extensions (`font_semibold`, the text scale), the `StatusBar`, the theme
 and its tokens. Not the `gpui-kit` umbrella: the fork carries exactly four crates
 for wasm and excludes the umbrella, because it pulls the desktop and browser
 platforms in with it. Not `gpui-kit-assets` either — on `target_family = "wasm"`
-its asset source fetches icons over HTTP, and a Spore has no network — so the two
-icons in this window (a folder and a page) are drawn from rectangles.
+its asset source fetches icons over HTTP, and a Spore has no network — so the
+vault's folder is drawn from two rectangles, a Word file is marked with ¶ (the
+paragraph mark the native shell also uses), and every other mark in the window is
+a glyph Lilex actually has — · ¶ — → ↳ ✓ — checked against the font rather than
+assumed, because a missing glyph renders as a box.
 
 ## What is not here yet
 
