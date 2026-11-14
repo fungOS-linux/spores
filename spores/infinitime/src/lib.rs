@@ -1027,11 +1027,7 @@ impl watch_core::WatchProfile for Profile {
         ]
     }
 
-    fn decode(
-        &self,
-        char_uuid: &str,
-        data: &[u8],
-    ) -> Result<Option<watch_core::Signal>, String> {
+    fn decode(&self, char_uuid: &str, data: &[u8]) -> Result<Option<watch_core::Signal>, String> {
         use watch_core::{Signal, Stream};
         let signal = if char_uuid.eq_ignore_ascii_case(HEART_RATE_MEASUREMENT) {
             let heart_rate = parse_heart_rate(data).map_err(|error| error.to_string())?;

@@ -8,7 +8,7 @@
 //! Nothing here imports wasm: streams, envelopes and the identity rule are
 //! testable on the host.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 /// A stream of observations a watch can emit. The Spore lets the wearer pick a
 /// subset, so a control-heavy session need not turn on health data.
@@ -236,7 +236,10 @@ mod tests {
             vec![Stream::HeartRate, Stream::Steps]
         );
         // Duplicates collapse; order is the caller's.
-        assert_eq!(Stream::parse("hr,hr").expect("streams"), vec![Stream::HeartRate]);
+        assert_eq!(
+            Stream::parse("hr,hr").expect("streams"),
+            vec![Stream::HeartRate]
+        );
         assert_eq!(Stream::parse("all").expect("streams"), Stream::ALL.to_vec());
         let error = Stream::parse("hr,hartrate").expect_err("typo");
         assert!(error.contains("hartrate"), "{error}");
@@ -258,7 +261,15 @@ mod tests {
             retention_class: "raw",
             quality: 1.0,
         };
-        let body = signal_body("pt-1", "owner", "dev.fungos.pinetime", "0.1.0", &signal, 1_000, 7);
+        let body = signal_body(
+            "pt-1",
+            "owner",
+            "dev.fungos.pinetime",
+            "0.1.0",
+            &signal,
+            1_000,
+            7,
+        );
         assert_eq!(body["source_device"], "pt-1");
         assert_eq!(body["kind"], "body.hr.v1");
         assert_eq!(body["wearer"], "owner");
@@ -270,7 +281,10 @@ mod tests {
     #[test]
     fn identity_prefers_the_serial_and_never_invents_one() {
         assert_eq!(device_id(" SN-1 ", None), Some("SN-1".into()));
-        assert_eq!(device_id("", Some("provisioned")), Some("provisioned".into()));
+        assert_eq!(
+            device_id("", Some("provisioned")),
+            Some("provisioned".into())
+        );
         assert_eq!(device_id("  ", Some("  ")), None);
         assert_eq!(device_id("", None), None);
     }
