@@ -322,6 +322,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "infinitime"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "watch-core",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -380,15 +388,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
-name = "pinetime-protocol"
-version = "0.1.0"
-
-[[package]]
 name = "pinetime-spore"
 version = "0.1.0"
 dependencies = [
- "pinetime-protocol",
+ "infinitime",
  "serde_json",
+ "watch-core",
  "wit-bindgen",
 ]
 
@@ -642,6 +647,13 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap",
  "semver",
+]
+
+[[package]]
+name = "watch-core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

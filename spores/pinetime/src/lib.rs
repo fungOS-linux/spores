@@ -6,16 +6,21 @@
 
 use std::cell::RefCell;
 
-use pinetime_protocol as proto;
+use infinitime as proto;
 use serde_json::{json, Value};
 use soil::ble::ble;
 use soil::ble::types::Event;
 use soil::records::records::{self, Entry, Key};
 use soil::time::time;
+use watch_core::{Intent, Stream, WatchProfile};
 
 wit_bindgen::generate!({ path: "wit", world: "pinetime-spore", generate_all });
 
 const SOURCE_SPORE: &str = "dev.fungos.pinetime";
+/// The wire this Spore speaks. A second watch is a second profile, not a fork
+/// of this crate.
+const PROFILE: proto::Profile = proto::Profile;
+const MODEL_VERSION: &str = "pinetime-spore@0.2.0";
 
 thread_local! {
     static SNAPSHOT: RefCell<Value> = RefCell::new(Value::Null);
@@ -53,6 +58,7 @@ struct Args {
     sunset_min: i16,
     forecast: Vec<proto::ForecastDay>,
     read_back: bool,
+    streams: Vec<Stream>,
 }
 
 impl Default for Args {
@@ -84,6 +90,7 @@ impl Default for Args {
             sunset_min: proto::SUN_UNKNOWN,
             forecast: Vec::new(),
             read_back: false,
+            streams: Stream::ALL.to_vec(),
         }
     }
 }
@@ -129,6 +136,7 @@ impl Args {
                 "--track" => args.track = value.clone(),
                 "--album" => args.album = value.clone(),
                 "--playing" => args.playing = matches!(value.as_str(), "true" | "1" | "yes"),
+                "--streams" => args.streams = Stream::parse(value)?,
                 "--epoch" => {
                     args.epoch = Some(
                         value
@@ -169,26 +177,16 @@ impl Args {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-struct Counts {
-    heart_rate: u64,
-    battery: u64,
-    steps: u64,
-    motion: u64,
-    music: u64,
-    calls: u64,
-}
+#[derive(Debug, Default, Clone)]
+struct Counts(std::collections::BTreeMap<&'static str, u64>);
 
 impl Counts {
-    fn json(self) -> Value {
-        json!({
-            "heart_rate": self.heart_rate,
-            "battery": self.battery,
-            "steps": self.steps,
-            "motion": self.motion,
-            "music": self.music,
-            "calls": self.calls,
-        })
+    fn bump(&mut self, stream: Stream) {
+        *self.0.entry(stream.as_str()).or_default() += 1;
+    }
+
+    fn json(&self) -> Value {
+        json!(self.0)
     }
 }
 
@@ -254,24 +252,18 @@ fn run_connected(args: &Args, advertised_name: &str) -> Result<(), String> {
     // the firmware exposes no serial, an explicit provisioning id is the only
     // honest fallback; inventing one from the platform handle would split the
     // same watch into a new device on every host.
-    let device_id = if !serial.is_empty() {
-        serial
-    } else if let Some(id) = &args.device {
-        id.clone()
-    } else {
-        return Err(
-            "PineTime exposed no DIS serial; pass --device <provisioned-id> instead of using the BLE address"
-                .to_string(),
-        );
-    };
+    let device_id = watch_core::device_id(&serial, args.device.as_deref()).ok_or_else(|| {
+        "PineTime exposed no DIS serial; pass --device <provisioned-id> instead of using the BLE address"
+            .to_string()
+    })?;
 
-    if let Some((service, since)) = command_service(&args.command) {
-        match proto::firmware_supports(&firmware, service) {
-            Some(false) => println!(
-                "pinetime: {} needs InfiniTime {}.{}.{} or newer; this watch reports {firmware:?}",
-                args.command, since.0, since.1, since.2
-            ),
-            Some(true) | None => {}
+    let intent = intent_of(&args.command);
+    if let Some(intent) = intent {
+        if PROFILE.supports(&firmware, intent) == Some(false) {
+            println!(
+                "pinetime: {} is not supported by firmware {firmware:?}; writing anyway and letting the characteristic answer",
+                intent.as_str()
+            );
         }
     }
 
@@ -281,8 +273,15 @@ fn run_connected(args: &Args, advertised_name: &str) -> Result<(), String> {
     let mut writes: Vec<Written> = Vec::new();
     let counts = match args.command.as_str() {
         "watch" => {
-            subscribe_watch()?;
-            drain(&device_id, &args.wearer, args.hold_ms, &model, &firmware)?
+            subscribe(&args.streams)?;
+            drain(
+                &device_id,
+                &args.wearer,
+                args.hold_ms,
+                &model,
+                &firmware,
+                &args.streams,
+            )?
         }
         "notify" => {
             let category =
@@ -299,7 +298,14 @@ fn run_connected(args: &Args, advertised_name: &str) -> Result<(), String> {
         "media" => {
             write_media(args, &mut writes)?;
             ble::subscribe(proto::MUSIC_EVENT).map_err(ble_err)?;
-            drain(&device_id, &args.wearer, args.hold_ms, &model, &firmware)?
+            drain(
+                &device_id,
+                &args.wearer,
+                args.hold_ms,
+                &model,
+                &firmware,
+                &args.streams,
+            )?
         }
         "find" => {
             // Immediate Alert level 2 (high) makes the watch vibrate.
@@ -374,6 +380,8 @@ fn run_connected(args: &Args, advertised_name: &str) -> Result<(), String> {
             "firmware": firmware.clone(),
             "battery_percent": battery,
             "wearer": args.wearer.clone(),
+            "profile": PROFILE.name(),
+            "streams": args.streams.iter().map(|stream| stream.as_str()).collect::<Vec<_>>(),
             "signals": counts.json(),
             "writes": write_report(&writes),
             "updated_at_monotonic_ms": now,
@@ -382,23 +390,30 @@ fn run_connected(args: &Args, advertised_name: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn subscribe_watch() -> Result<(), String> {
-    for uuid in [
-        proto::HEART_RATE_MEASUREMENT,
-        proto::STEP_COUNT,
-        proto::MOTION_VALUES,
-    ] {
-        ble::subscribe(uuid).map_err(ble_err)?;
+/// The characteristics a stream comes from.
+fn characteristic(stream: Stream) -> &'static str {
+    match stream {
+        Stream::HeartRate => proto::HEART_RATE_MEASUREMENT,
+        Stream::Steps => proto::STEP_COUNT,
+        Stream::Motion => proto::MOTION_VALUES,
+        Stream::Media => proto::MUSIC_EVENT,
+        Stream::Calls => proto::NOTIFICATION_EVENT,
+        Stream::Battery => proto::BATTERY_LEVEL,
     }
-    // Optional on older firmware: a missing music/call service must not make a
-    // health sync fail.
-    for uuid in [
-        proto::BATTERY_LEVEL,
-        proto::MUSIC_EVENT,
-        proto::NOTIFICATION_EVENT,
-    ] {
-        if let Err(error) = ble::subscribe(uuid) {
-            println!("pinetime: optional subscribe {uuid} failed: {error:?}");
+}
+
+/// Subscribe only to the streams the wearer asked for. The health streams are
+/// required — without them a watch session has nothing to show — while music,
+/// calls and battery are optional, because older firmware may not expose them.
+fn subscribe(streams: &[Stream]) -> Result<(), String> {
+    for stream in streams {
+        let uuid = characteristic(*stream);
+        match ble::subscribe(uuid) {
+            Ok(()) => {}
+            Err(error) if matches!(stream, Stream::HeartRate | Stream::Steps | Stream::Motion) => {
+                return Err(ble_err(error));
+            }
+            Err(error) => println!("pinetime: optional subscribe {uuid} failed: {error:?}"),
         }
     }
     Ok(())
@@ -410,6 +425,7 @@ fn drain(
     hold_ms: u64,
     model: &str,
     firmware: &str,
+    streams: &[Stream],
 ) -> Result<Counts, String> {
     let start = time::monotonic_ms().map_err(time_err)?;
     let deadline = start.saturating_add(hold_ms);
@@ -430,6 +446,7 @@ fn drain(
                     firmware,
                     &notification.char_uuid,
                     &notification.data,
+                    streams,
                     &mut counts,
                 )?;
             }
@@ -449,90 +466,30 @@ fn handle_notification(
     firmware: &str,
     char_uuid: &str,
     data: &[u8],
+    streams: &[Stream],
     counts: &mut Counts,
 ) -> Result<(), String> {
-    if same(char_uuid, proto::HEART_RATE_MEASUREMENT) {
-        let heart_rate = proto::parse_heart_rate(data).map_err(|error| error.to_string())?;
-        let value = match heart_rate.bpm {
-            Some(bpm) => json!({
-                "bpm": bpm,
-                "contact": heart_rate.contact,
-                "rr_intervals": heart_rate.rr_intervals,
-            }),
-            None => json!({"bpm": null, "status": "no-measurement"}),
-        };
-        note_signal(
-            device_id,
-            wearer,
-            "body.hr.v1",
-            value,
-            "health",
-            "raw",
-            if heart_rate.bpm.is_some() { 1.0 } else { 0.0 },
-        )?;
-        counts.heart_rate += 1;
-    } else if same(char_uuid, proto::STEP_COUNT) {
-        let steps = proto::parse_steps(data).map_err(|error| error.to_string())?;
-        note_signal(
-            device_id,
-            wearer,
-            "body.steps.v1",
-            json!({"count": steps}),
-            "health",
-            "summary",
-            1.0,
-        )?;
-        counts.steps += 1;
-    } else if same(char_uuid, proto::MOTION_VALUES) {
-        let motion = proto::parse_motion(data).map_err(|error| error.to_string())?;
-        note_signal(
-            device_id,
-            wearer,
-            "body.motion.v1",
-            json!({"x": motion.x, "y": motion.y, "z": motion.z}),
-            "health",
-            "raw",
-            1.0,
-        )?;
-        counts.motion += 1;
-    } else if same(char_uuid, proto::MUSIC_EVENT) {
-        let byte = data
-            .first()
-            .copied()
-            .ok_or_else(|| "empty music event".to_string())?;
-        let event = proto::parse_music_event(byte).map_err(|error| error.to_string())?;
-        note_signal(
-            device_id,
-            wearer,
-            "media.event.v1",
-            json!({"event": event.as_str()}),
-            "presence",
-            "summary",
-            1.0,
-        )?;
-        counts.music += 1;
-    } else if same(char_uuid, proto::NOTIFICATION_EVENT) {
-        let byte = data
-            .first()
-            .copied()
-            .ok_or_else(|| "empty call response".to_string())?;
-        let response = proto::parse_call_response(byte).map_err(|error| error.to_string())?;
-        note_signal(
-            device_id,
-            wearer,
-            "call.response.v1",
-            json!({"response": response.as_str()}),
-            "presence",
-            "summary",
-            1.0,
-        )?;
-        counts.calls += 1;
-    } else if same(char_uuid, proto::BATTERY_LEVEL) {
+    // Battery is device state, not a body signal: it belongs on the device
+    // record and never on the signal stream.
+    if same(char_uuid, proto::BATTERY_LEVEL) {
+        if !streams.contains(&Stream::Battery) {
+            return Ok(());
+        }
         let battery = proto::parse_battery(data).map_err(|error| error.to_string())?;
-        // Battery lives on the device state record; it is not a body signal.
         upsert_device_state(device_id, model, firmware, battery, wearer)?;
-        counts.battery += 1;
+        counts.bump(Stream::Battery);
+        return Ok(());
     }
+    let Some(signal) = PROFILE.decode(char_uuid, data)? else {
+        return Ok(());
+    };
+    // `--streams` narrows what the wearer asked for; a notification for a
+    // stream that was not selected is not an error, just not wanted.
+    if !streams.contains(&signal.stream) {
+        return Ok(());
+    }
+    note_signal(device_id, wearer, &signal)?;
+    counts.bump(signal.stream);
     Ok(())
 }
 
@@ -595,18 +552,19 @@ fn write_media(args: &Args, writes: &mut Vec<Written>) -> Result<(), String> {
     Ok(())
 }
 
-/// The service a command speaks and the firmware it needs. Commands that only
-/// use services present since the first release return `None`.
-fn command_service(command: &str) -> Option<(proto::Service, (u16, u16, u16))> {
-    let service = match command {
-        "watch" => proto::Service::Motion,
-        "media" => proto::Service::Music,
-        "nav" => proto::Service::Navigation,
-        "weather" => proto::Service::SimpleWeather,
-        _ => return None,
-    };
-    let since = service.since()?;
-    Some((service, (since.major, since.minor, since.patch)))
+/// The intent a command expresses, for the profile's firmware gate. Commands
+/// that use services present since the first release have none.
+fn intent_of(command: &str) -> Option<Intent> {
+    match command {
+        "watch" => Some(Intent::Watch),
+        "notify" => Some(Intent::Notify),
+        "media" => Some(Intent::Media),
+        "find" => Some(Intent::Find),
+        "time" => Some(Intent::Time),
+        "nav" => Some(Intent::Nav),
+        "weather" => Some(Intent::Weather),
+        _ => None,
+    }
 }
 
 /// What went to the radio, and optionally what the watch read back.
@@ -698,64 +656,36 @@ fn upsert_device_state(
     wearer: &str,
 ) -> Result<(), String> {
     let now = time::monotonic_ms().map_err(time_err)?;
-    upsert(
-        "device.state",
+    let body = watch_core::device_state_body(
         device_id,
-        "device.state.v1",
-        &json!({
-            "device_id": device_id,
-            "model": model,
-            "firmware": firmware,
-            "battery_percent": battery,
-            "wearer": wearer,
-            "observed_at_device": now,
-            "received_at_host": now,
-            "provenance": "ble",
-            "source_spore": SOURCE_SPORE,
-        }),
-    )
+        wearer,
+        SOURCE_SPORE,
+        model,
+        firmware,
+        battery,
+        now,
+    );
+    upsert("device.state", device_id, "device.state.v1", &body)
 }
 
-fn note_signal(
-    device_id: &str,
-    wearer: &str,
-    kind: &str,
-    value: Value,
-    privacy_class: &str,
-    retention_class: &str,
-    quality: f32,
-) -> Result<(), String> {
+fn note_signal(device_id: &str, wearer: &str, signal: &watch_core::Signal) -> Result<(), String> {
     let now = time::monotonic_ms().map_err(time_err)?;
     let sequence = SEQUENCE.with(|cell| {
         let mut value = cell.borrow_mut();
         *value = value.saturating_add(1);
         *value
     });
-    let signal_id = format!("{device_id}:{kind}:{now}:{sequence}");
-    upsert(
-        "signal",
-        &signal_id,
-        "signal.sample.v1",
-        &json!({
-            "signal_id": signal_id,
-            "kind": kind,
-            "schema_version": 1,
-            "source_device": device_id,
-            "source_spore": SOURCE_SPORE,
-            "wearer": wearer,
-            "observed_at_device": now,
-            "received_at_host": now,
-            "monotonic_age_ms": 0,
-            "clock_uncertainty_ms": null,
-            "sync_epoch": 0,
-            "quality": quality,
-            "provenance": "ble",
-            "model_version": "pinetime-spore@0.1.0",
-            "privacy_class": privacy_class,
-            "retention_class": retention_class,
-            "value": value,
-        }),
-    )
+    let body = watch_core::signal_body(
+        device_id,
+        wearer,
+        SOURCE_SPORE,
+        MODEL_VERSION,
+        signal,
+        now,
+        sequence,
+    );
+    let signal_id = body["signal_id"].as_str().unwrap_or_default().to_string();
+    upsert("signal", &signal_id, "signal.sample.v1", &body)
 }
 
 fn upsert(collection: &str, id: &str, schema: &str, body: &Value) -> Result<(), String> {

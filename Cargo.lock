@@ -1061,6 +1061,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "infinitime"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "watch-core",
+]
+
+[[package]]
 name = "instability"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3103,6 +3111,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbc9c5aca783b3f1838be89f3f9937c528b90ec5faa6fb62d809726c16a7d8f7"
 dependencies = [
  "wast 263.0.0",
+]
+
+[[package]]
+name = "watch-core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

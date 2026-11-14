@@ -74,6 +74,38 @@ in a host tool with real file access and a recovery path, not in a capability
 Spore. Gadgetbridge is the Android app that implements this same InfiniTime wire
 protocol; the protocol is what is implemented here, not the app.
 
+## Streams
+
+`--streams` narrows what a session subscribes to and publishes. It can only
+narrow: the profile decides what the watch can emit, and a stream it does not
+offer is not selectable.
+
+```text
+pinetime watch --streams hr,steps          # a health sync
+pinetime watch --streams media,calls       # a control session, no health data
+pinetime watch                             # every stream the profile declares
+```
+
+Streams are `hr`, `steps`, `motion`, `media`, `calls`, `battery`, or `all`. An
+unknown name is an error that lists the known ones — a typo must not silently
+subscribe to everything. `battery` is device state, not a body signal: it
+updates the device record and never writes a sample.
+
+## Shape
+
+Only one of these three knows what a PineTime is:
+
+- **`spores/infinitime`** — the profile: service and characteristic UUIDs,
+  packet layouts, notification parsers, and the release each service arrived in.
+- **`spores/watch-core`** — the seam: streams, the signal envelope, the device
+  record body, the identity rule, and the `WatchProfile` trait.
+- **`spores/pinetime`** — this Spore: the BLE session, the lease, the CLI, and
+  one profile wired in.
+
+A second watch is a new profile crate and a new Spore that reuses `watch-core`,
+not a fork of this one. The id stays `dev.fungos.pinetime` because renaming it
+would rekey records readers and per-app Canvas settings.
+
 ## Identity and records
 
 - `device_id` comes from the DIS serial. If the firmware exposes no serial, the

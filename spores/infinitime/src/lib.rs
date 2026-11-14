@@ -1004,3 +1004,106 @@ mod tests {
         assert!(AlertCategory::parse("42").is_err());
     }
 }
+
+/// The InfiniTime profile: the wire formats above, presented through the
+/// hardware-agnostic seam `watch-core` defines.
+pub struct Profile;
+
+impl watch_core::WatchProfile for Profile {
+    fn name(&self) -> &'static str {
+        "infinitime"
+    }
+
+    fn streams(&self) -> &'static [watch_core::Stream] {
+        &[
+            watch_core::Stream::HeartRate,
+            watch_core::Stream::Steps,
+            watch_core::Stream::Motion,
+            watch_core::Stream::Media,
+            watch_core::Stream::Calls,
+            watch_core::Stream::Battery,
+        ]
+    }
+
+    fn decode(
+        &self,
+        char_uuid: &str,
+        data: &[u8],
+    ) -> Result<Option<watch_core::Signal>, String> {
+        use watch_core::{Signal, Stream};
+        let signal = if char_uuid.eq_ignore_ascii_case(HEART_RATE_MEASUREMENT) {
+            let heart_rate = parse_heart_rate(data).map_err(|error| error.to_string())?;
+            let value = match heart_rate.bpm {
+                Some(bpm) => serde_json::json!({
+                    "bpm": bpm,
+                    "contact": heart_rate.contact,
+                    "rr_intervals": heart_rate.rr_intervals,
+                }),
+                None => serde_json::json!({"bpm": null, "status": "no-measurement"}),
+            };
+            Signal {
+                stream: Stream::HeartRate,
+                value,
+                privacy_class: "health",
+                retention_class: "raw",
+                // A watch that reports no measurement is unknown, not zero.
+                quality: if heart_rate.bpm.is_some() { 1.0 } else { 0.0 },
+            }
+        } else if char_uuid.eq_ignore_ascii_case(STEP_COUNT) {
+            let steps = parse_steps(data).map_err(|error| error.to_string())?;
+            Signal {
+                stream: Stream::Steps,
+                value: serde_json::json!({"count": steps}),
+                privacy_class: "health",
+                retention_class: "summary",
+                quality: 1.0,
+            }
+        } else if char_uuid.eq_ignore_ascii_case(MOTION_VALUES) {
+            let motion = parse_motion(data).map_err(|error| error.to_string())?;
+            Signal {
+                stream: Stream::Motion,
+                value: serde_json::json!({"x": motion.x, "y": motion.y, "z": motion.z}),
+                privacy_class: "health",
+                retention_class: "raw",
+                quality: 1.0,
+            }
+        } else if char_uuid.eq_ignore_ascii_case(MUSIC_EVENT) {
+            let byte = data.first().copied().ok_or("empty music event")?;
+            let event = parse_music_event(byte).map_err(|error| error.to_string())?;
+            Signal {
+                stream: Stream::Media,
+                value: serde_json::json!({"event": event.as_str()}),
+                privacy_class: "presence",
+                retention_class: "summary",
+                quality: 1.0,
+            }
+        } else if char_uuid.eq_ignore_ascii_case(NOTIFICATION_EVENT) {
+            let byte = data.first().copied().ok_or("empty call response")?;
+            let response = parse_call_response(byte).map_err(|error| error.to_string())?;
+            Signal {
+                stream: Stream::Calls,
+                value: serde_json::json!({"response": response.as_str()}),
+                privacy_class: "presence",
+                retention_class: "summary",
+                quality: 1.0,
+            }
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(signal))
+    }
+
+    fn supports(&self, firmware: &str, intent: watch_core::Intent) -> Option<bool> {
+        use watch_core::Intent;
+        let service = match intent {
+            // Watching covers the motion service (steps and motion) plus the
+            // always-present heart-rate characteristic.
+            Intent::Watch => Service::Motion,
+            Intent::Media => Service::Music,
+            Intent::Nav => Service::Navigation,
+            Intent::Weather => Service::SimpleWeather,
+            Intent::Find | Intent::Notify | Intent::Time => return None,
+        };
+        firmware_supports(firmware, service)
+    }
+}
