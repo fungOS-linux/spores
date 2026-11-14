@@ -16,6 +16,7 @@ wit_bindgen::generate!({
 use gpui::{
     AnyElement, AnyWindowHandle, AppContext as _, Context, FontWeight, HeadlessAppContext,
     IntoElement, PlatformTextSystem, Render, SharedString, Window, div, prelude::*, px, rgb, size,
+    svg,
 };
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
 use soil::present::{cursor, input, surface};
@@ -65,6 +66,11 @@ fn hsl_to_rgb(hue: f32, saturation: f32, lightness: f32) -> u32 {
 const LILEX: &[u8] = include_bytes!("../assets/Lilex-Regular.ttf");
 const LILEX_BOLD: &[u8] = include_bytes!("../assets/Lilex-Bold.ttf");
 
+/// How much of the tile the mark covers. The tile stays the plate — its colour is
+/// the app's identity even when the package ships no art — and the mark sits on
+/// it at the proportion macOS uses for artwork inside an icon grid.
+const MARK_SCALE: f32 = 0.58;
+
 struct Row {
     id: SharedString,
     /// What the row shows. The host resolves it from the manifest, so the list
@@ -73,6 +79,10 @@ struct Row {
     version: SharedString,
     summary: SharedString,
     default_surface: SharedString,
+    /// The app's own art, read out of the package by the host. `None` when the
+    /// package ships none or the asset is missing, which is why the badge below
+    /// stays the fallback rather than a placeholder.
+    mark: Option<catalog::Mark>,
 }
 
 struct LauncherView {
@@ -104,6 +114,7 @@ impl LauncherView {
                         version: SharedString::from(entry.version),
                         summary: SharedString::from(entry.summary),
                         default_surface: SharedString::from(entry.default_surface),
+                        mark: entry.mark,
                     })
                     .collect();
                 let visible = (0..rows.len()).collect();
@@ -349,6 +360,22 @@ impl LauncherView {
                     .next()
                     .map(|first| first.to_uppercase().collect())
                     .unwrap_or_else(|| "?".to_owned());
+                // The package's own art when it ships any, the badge when it does
+                // not. Only SVG is drawn: a PNG mark would need a decoder for a
+                // format no Spore ships yet, so it falls back rather than guessing.
+                let face: AnyElement = match &row.mark {
+                    Some(mark) if matches!(mark.format, catalog::MarkFormat::Svg) => svg()
+                        .data(&mark.bytes)
+                        .w(px(TILE * MARK_SCALE))
+                        .h(px(TILE * MARK_SCALE))
+                        .into_any_element(),
+                    _ => div()
+                        .text_size(px(40.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(rgb(0xffff_ffff))
+                        .child(SharedString::from(glyph))
+                        .into_any_element(),
+                };
                 let mut tile = div()
                     .w(px(TILE))
                     .h(px(TILE))
@@ -357,8 +384,6 @@ impl LauncherView {
                     .justify_center()
                     .rounded(px(24.0))
                     .bg(rgb(background))
-                    .text_size(px(40.0))
-                    .font_weight(FontWeight::BOLD)
                     .text_color(rgb(0xffff_ffff));
                 if selected {
                     tile = tile.border_2().border_color(rgb(0x7d_8b_99));
@@ -372,7 +397,7 @@ impl LauncherView {
                     .items_center()
                     .gap(px(6.0))
                     .w(px(TILE))
-                    .child(tile.child(SharedString::from(glyph)))
+                    .child(tile.child(face))
                     .child(
                         div()
                             .text_size(px(12.0))
