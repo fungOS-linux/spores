@@ -1,0 +1,19 @@
+// Weather Spore ABI.
+//
+// The Spore owns the place lookup, the provider mapping, and the record; the
+// host owns the connection and its origin allowlist, durability, and the
+// clock. Importing a package is the capability declaration; the manifest's
+// [grants] names the package and explains why.
+package fungos:weather@0.1.0;
+
+world weather {
+  import soil:http/http@0.1.0;
+  import soil:records/records@0.1.0;
+  import soil:time/time@1.0.0;
+
+  /// `now` with `--place NAME` or `--lat`/`--lon`; see README.md.
+  export run: func(args: list<string>) -> result<_, string>;
+
+  /// The last run's record id and timestamps, as JSON.
+  export snapshot: func() -> result<list<u8>, string>;
+}
