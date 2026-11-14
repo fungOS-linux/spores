@@ -17,20 +17,103 @@ renaming an id rekeys per-app Canvas settings and records readers.
 ## Commands
 
 ```text
-pinetime watch  [--wearer W] [--device ID] [--scan-ms N] [--hold-ms N]
-pinetime notify [--category C] [--title T] [--body B] [--wearer W]
-pinetime media  [--artist A] [--track T] [--album L] [--playing true|false]
-pinetime find   [--wearer W]
+pinetime watch   [--wearer W] [--device ID] [--scan-ms N] [--hold-ms N]
+pinetime notify  [--category C] [--title T] [--body B] [--wearer W]
+pinetime media   [--artist A] [--track T] [--album L] [--playing true|false]
+pinetime find    [--wearer W]
+pinetime time    --epoch UNIX [--offset-min N]
+pinetime nav     --icon NAME [--narrative T] [--distance D] [--progress 0-100]
+pinetime weather --from-record [--id ID]
+pinetime weather --epoch UNIX --icon NAME --temp-c C --min-c C --max-c C
+                 [--location L] [--sunrise-min N] [--sunset-min N]
+                 [--forecast "min,max,icon;min,max,icon"]
 ```
 
 - `watch` reads DIS model/firmware/serial and battery, subscribes to heart rate,
   step count, motion, music events, call events, and battery, then drains for
   `--hold-ms` (default 5000).
 - `notify` writes an ANS New Alert in InfiniTime's
-  `<category><amount>\x00<title>\x00<body>` format.
+  `<category><amount>\x00<title>\x00<body>` format. `--category` takes the
+  spec's names (`simple`, `email`, `news`, `call`, `missed-call`, `sms`,
+  `voicemail`, `schedule`, `high-priority`, `instant-message`, `all`) or its
+  byte.
 - `media` writes playback status, artist, track, and album, then drains music
   events for `--hold-ms`.
 - `find` writes Immediate Alert level 2, which makes the watch vibrate.
+- `time` writes the Current Time Service: local fields, weekday, and the
+  manual-update reason. The watch has no timezone or network, so `--epoch` is
+  the caller's instant and `--offset-min` is the local offset to display.
+- `nav` writes the four Navigation characteristics: a validated `pure-maps`
+  icon name, the instruction, the distance to it, and route progress.
+- `weather --from-record` reads the newest `weather.current.v1` record (or the
+  one named by `--id`) and writes the frames from it. The record carries what
+  the watch shows, so no caller-typed temperature or icon is involved; a
+  forecast frame is written when the record carries days, and skipped when it
+  does not. The record struct is `weather-protocol`'s, the same crate the
+  `weather` Spore writes, so the body has one definition.
+- `weather --epoch … --icon …` writes the same frames from flags, for a caller
+  that already knows the values. Temperatures are decimal Celsius on the command
+  line and hundredths in the packet; sunrise and sunset accept the service's
+  `-1` (unknown) and `-2` (does not occur). Mixing record fields into
+  `--from-record` is refused rather than silently ignored, and the three
+  temperatures are required: the frame has no honest default.
+
+Every write command reports what it sent. `--read-back` also reads each
+characteristic immediately after the write and records `true`, `"mismatch"`, or
+`"unsupported"` (write-only on that firmware) in the snapshot.
+
+## Spec coverage
+
+| InfiniTime service | Spore |
+|---|---|
+| Device Information, Battery, Heart Rate | read and subscribe |
+| Alert Notification (`0x2A46`) | `notify`, any category |
+| Notification Event (`00020001`) | call responses as signals |
+| Music (`0000000x`) | `media` plus event subscription |
+| Motion (`0003000x`) | steps and motion signals |
+| Navigation (`0001000x`) | `nav`, icon-validated |
+| Simple Weather (`0005000x`) | `weather`, current + forecast |
+| Current Time (`0x2A2B`) | `time` |
+| Immediate Alert | `find` |
+
+Deliberately not implemented: **DFU** and **BLE FS**. Both are file transfers —
+firmware images and watch-face assets — and this Spore has no filesystem grant.
+DFU in particular is a nine-step state machine that can brick a watch; it belongs
+in a host tool with real file access and a recovery path, not in a capability
+Spore. Gadgetbridge is the Android app that implements this same InfiniTime wire
+protocol; the protocol is what is implemented here, not the app.
+
+## Streams
+
+`--streams` narrows what a session subscribes to and publishes. It can only
+narrow: the profile decides what the watch can emit, and a stream it does not
+offer is not selectable.
+
+```text
+pinetime watch --streams hr,steps          # a health sync
+pinetime watch --streams media,calls       # a control session, no health data
+pinetime watch                             # every stream the profile declares
+```
+
+Streams are `hr`, `steps`, `motion`, `media`, `calls`, `battery`, or `all`. An
+unknown name is an error that lists the known ones — a typo must not silently
+subscribe to everything. `battery` is device state, not a body signal: it
+updates the device record and never writes a sample.
+
+## Shape
+
+Only one of these three knows what a PineTime is:
+
+- **`spores/infinitime`** — the profile: service and characteristic UUIDs,
+  packet layouts, notification parsers, and the release each service arrived in.
+- **`spores/watch-core`** — the seam: streams, the signal envelope, the device
+  record body, the identity rule, and the `WatchProfile` trait.
+- **`spores/pinetime`** — this Spore: the BLE session, the lease, the CLI, and
+  one profile wired in.
+
+A second watch is a new profile crate and a new Spore that reuses `watch-core`,
+not a fork of this one. The id stays `dev.fungos.pinetime` because renaming it
+would rekey records readers and per-app Canvas settings.
 
 ## Identity and records
 
@@ -43,6 +126,8 @@ pinetime find   [--wearer W]
   infers a wearer from proximity.
 - `device.state` collection: one `device.state.v1` record per device with
   model, firmware, battery, wearer, and monotonic observation time.
+- `weather.current` (read only, written by the `weather` Spore): the current
+  conditions this Spore sends with `weather --from-record`.
 - `signal` collection: append-only `signal.sample.v1` records for
   `body.hr.v1`, `body.steps.v1`, `body.motion.v1`, `media.event.v1`, and
   `call.response.v1`.
@@ -55,7 +140,7 @@ pinetime find   [--wearer W]
 | Grant | Why |
 |---|---|
 | `soil:ble` | observe (scan/services/read/subscribe/next-event), connect (take the radio lease), write (notifications, media, find) |
-| `soil:records` | read previous state and write device/signal records |
+| `soil:records` | read previous state and the weather record, and write device/signal records |
 | `soil:time` | monotonic observation timestamps |
 | `wasi:cli`, `wasi:clocks`, `wasi:io` | Rust std runtime on `wasm32-wasip2`; no file or network I/O |
 

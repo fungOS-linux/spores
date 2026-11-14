@@ -1,0 +1,6 @@
+spore-lock 1
+spore dev.fungos.xplorer
+version 0.1.0
+file 30fc4a40e25ca0486152c803a758215c27a62c3c2a622bb7b75789e6546af782 17950147 module.wasm
+file c47eddd3e7ea0b0b573d9bc925e43e298cda2c5b701701fb890fb69874e5f1b7 1627 spore.toml
+digest f9d50aaedb0b8a61ac9401be66460bac4a14e9e2ef647eb6eaa7343e8db19a34

@@ -1,0 +1,51 @@
+# Weather Spore: what the weather is, here, as a record.
+#
+# One provider (Open-Meteo, no key), one record per place, and a record the
+# PineTime Spore reads back instead of asking a caller to type the numbers.
+schema = 1
+
+[spore]
+id = "dev.fungos.weather"
+name = "weather"
+version = "0.1.0"
+license = "MIT"
+summary = "Current conditions for a place, as a weather.current record"
+description = "Geocodes a place name or takes coordinates, reads the forecast from Open-Meteo, maps the WMO weather code onto the nine icons a PineTime draws, and writes one weather.current.v1 record with a local timestamp and today's high and low. No API key, no socket, no filesystem: the host owns the connection and its origin allowlist."
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { http = "0.1.0", records = "0.1.0", time = "1.0.0" }
+
+[module]
+path = "module.wasm"
+
+[launch]
+# A CLI: the host runs it with arguments and prints the result. It does not
+# open a window, so there is no Lua UI to JIT.
+default = "native"
+surfaces = ["native"]
+
+[grants]
+"soil:http" = "read the forecast and the place lookup from the provider origins the host allowlists (Open-Meteo, or api.weather.gov for NWS)"
+"soil:records" = "write the weather.current.v1 record other Spores read"
+"soil:time" = "stamp fetched_at_monotonic_ms with the host's monotonic clock; no wall clock"
+# Rust std on wasm32-wasip2 pulls these in even though this Spore opens no file
+# or socket of its own. They are declared rather than hidden.
+"wasi:cli" = "Rust std stdio for the host's log stream"
+"wasi:clocks" = "Rust std runtime dependency; the record's clock fields come from soil:time and the provider"
+"wasi:io" = "Rust std runtime I/O primitives"
+
+[denied]
+# Open-Meteo needs no key, so this Spore has no credential to hold or leak.
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "wall-clock"]
+
+[catalog]
+categories = ["utilities", "science"]
+keywords = ["weather", "forecast", "open-meteo", "wmo", "pinetime"]
+
+[presentation]
+badge = "W"
+color = "#7cc4ff"

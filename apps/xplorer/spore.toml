@@ -1,0 +1,46 @@
+# Spore manifest, schema 1. See fungOS-linux/soil docs/spore-package.md.
+#
+# A grant is a statement of intent reviewed with the pull request, not a
+# capability the Spore can widen at runtime.
+
+schema = 1
+
+[spore]
+id = "dev.fungos.xplorer"
+name = "xplorer"
+version = "0.1.0"
+license = "MIT"
+summary = "Browse the workspace: a grid of files, previewed instantly"
+description = "A file manager that draws its own window: an icon grid over one granted workspace, a preview of what is selected, and nothing else."
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { present = "0.1.0", vfs = "1.0.0" }
+
+# A Rust module that draws its own frame is the host's default presentation, so
+# this package declares no `[[surfaces]]`: a `canvas` view or a `web` page is for
+# a Lua view or a page, and neither is what this is.
+[module]
+path = "module.wasm"
+
+[launch]
+default = "native"
+surfaces = ["native"]
+
+[grants]
+"soil:vfs" = "list one granted workspace and read bounded previews of its files"
+"soil:present" = "draw the window: an offscreen surface, keyboard input and the cursor"
+"wasi:webgpu" = "one offscreen WebGPU device and queue; the host keeps the adapter, the surface and the swap"
+
+[denied]
+# The finder names things; it does not change them. Write, rename and unlink are
+# a different Spore with a different review.
+"soil:vfs-mut" = ["a browser that can rename cannot be trusted to describe what it browsed"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+transport = ["socket", "quic", "iroh"]
+
+[presentation]
+badge = "X"
+color = "#7fb2a8"
