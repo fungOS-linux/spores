@@ -173,17 +173,21 @@ over `fungos.ui`.
 
 ## Command-line face
 
-The same Spore can be installed as a Mush command. It imports the same three
-capabilities and loads the same mapping and pad definitions:
+The same Spore is also a command. `bin/sfx.wasm` is the `--features cli` build of
+this crate: it imports the same capabilities and loads the same mapping and pad
+definitions, so there is nothing to install twice.
 
 ```sh
 cd spores/sfx
 cargo build --release --target wasm32-wasip2 \
   --no-default-features --features cli --bin sfx
-mkdir -p ~/.local/share/fungos/commands/sfx
-cp target/wasm32-wasip2/release/sfx.wasm ~/.local/share/fungos/commands/sfx/module.wasm
-cp cli/command.toml ~/.local/share/fungos/commands/sfx/command.toml
+cp target/wasm32-wasip2/release/sfx.wasm bin/sfx.wasm
+cd ../.. && soil-spore lock spores/sfx     # the lock covers the command module
 ```
+
+`[[commands]]` in [`spore.toml`](spore.toml) declares it. Installing the Spore is
+the whole install: the command appears on Mush's virtual PATH at its next
+prompt, and `soil-command shims` puts it on an ordinary shell's PATH.
 
 Then, from Mush:
 

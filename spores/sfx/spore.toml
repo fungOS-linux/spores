@@ -23,6 +23,16 @@ abi = { canvas = "1.0.0", appdata = "1.0.0", vfs = "1.0.0", audio = "0.1.0" }
 [module]
 path = "module.wasm"
 
+# The command-line face of this Spore. `bin/sfx.wasm` is the same crate built
+# `--no-default-features --features cli --bin sfx`: a `wasi:cli` command that
+# reads the same mapping and pads. Declaring it here is what puts it on a shell's
+# PATH - the package carries the module, and every host that reads the install
+# tree finds it. There is no second package to install.
+[[commands]]
+name = "sfx"
+summary = "play a pad, bind an event, or probe a room"
+module = "bin/sfx.wasm"
+
 [ui]
 entry = "ui/board.lua"
 jit = true
