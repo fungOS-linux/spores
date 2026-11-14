@@ -12,6 +12,8 @@
 //! Nothing here touches wasm or the network: request URLs, response parsing,
 //! the WMO table, and the record body are host-testable with inline fixtures.
 
+pub mod nws;
+
 use serde_json::{json, Map, Value};
 
 /// The records collection that holds one record per place.
@@ -39,6 +41,9 @@ pub const FORECAST_DAYS: u32 = 5;
 /// `infinitime::SUN_ABSENT` is the wire-side owner of this number, and a test
 /// there pins the two together.
 pub const SUN_ABSENT: i16 = -2;
+/// The provider does not publish sunrise/sunset (NWS). The watch renders
+/// "unknown", which is not the same as "does not occur".
+pub const SUN_UNKNOWN: i16 = -1;
 
 /// The longest location the watch's fixed 32-byte field can hold.
 pub const LOCATION_BYTES: usize = 32;
