@@ -83,6 +83,16 @@ soil-webgpu --frame /tmp/doc.bgr --size 1280x800 \
 A Spore gets no window and no device handle it can keep: it renders offscreen and
 hands the host a texture. `soil:present/input` is the only keyboard.
 
+## Which part of the kit
+
+`gpui-base` and `gpui-component` — the kit's two Spore-facing layers — for the
+style extensions (`font_semibold`, the text scale), the `StatusBar`, the theme
+and its tokens. Not the `gpui-kit` umbrella: the fork carries exactly four crates
+for wasm and excludes the umbrella, because it pulls the desktop and browser
+platforms in with it. Not `gpui-kit-assets` either — on `target_family = "wasm"`
+its asset source fetches icons over HTTP, and a Spore has no network — so the two
+icons in this window (a folder and a page) are drawn from rectangles.
+
 ## What is not here yet
 
 - **Saving.** `cmd-s` needs `soil:vfs-mut`; the record of *who* saved comes from

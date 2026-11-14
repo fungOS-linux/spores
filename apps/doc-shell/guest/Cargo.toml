@@ -34,6 +34,9 @@ gpui_wgpu = { git = "https://github.com/fungOS-linux/gpui-fast", rev = "60ebb175
 wgpu = { version = "30", default-features = false, features = ["wgsl"] }
 wgpu-wasi-webgpu = { git = "https://github.com/fungOS-linux/wgpu-wasi-webgpu", rev = "bec921356c366450408d5faee2d206b6a1b8061b" }
 wit-bindgen = "0.57"
-# The house component library, pinned to the fork revision that builds against
-# the same headless `gpui` a Spore gets.
+# The kit's two Spore-facing layers: `gpui-base` (style extensions) and
+# `gpui-component` (the widgets). The `gpui-kit` umbrella is not a dependency a
+# Spore can take — the fork carries exactly these crates for wasm and excludes
+# the umbrella, because it pulls the desktop and browser platforms with it.
+gpui-base = { git = "https://github.com/fungOS-linux/gpui-kit", rev = "8feed9ee6526d0ee8e7b3e11349290b3d38319ed", package = "gpui-base", default-features = false }
 gpui-component = { git = "https://github.com/fungOS-linux/gpui-kit", rev = "8feed9ee6526d0ee8e7b3e11349290b3d38319ed", package = "gpui-component", default-features = false }

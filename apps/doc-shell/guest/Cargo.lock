@@ -936,6 +936,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gpui",
+ "gpui-base",
  "gpui-component",
  "gpui_wgpu",
  "quick-xml",
