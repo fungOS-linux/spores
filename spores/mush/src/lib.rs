@@ -309,8 +309,20 @@ impl Shell {
     }
 
     fn load_startup(&mut self) -> String {
-        for candidate in [".mushrc", "mushrc"] {
-            match self.read_file(candidate) {
+        // The user's rc first, then the root's. A prompt theme and aliases
+        // follow the person, not the checkout; the root's file is for what is
+        // specific to this project.
+        let mut candidates = Vec::new();
+        if let Some(home) = self.env.get("HOME")
+            && home != "/"
+            && let Ok(path) = self.resolve(&format!("{home}/.mushrc"))
+        {
+            candidates.push(path);
+        }
+        candidates.push(".mushrc".into());
+        candidates.push("mushrc".into());
+        for candidate in candidates {
+            match self.read_file(&candidate) {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
                     self.run_script(&text);
