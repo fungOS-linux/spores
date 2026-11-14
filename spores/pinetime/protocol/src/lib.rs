@@ -6,6 +6,8 @@
 //! Sources:
 //! - <https://github.com/InfiniTimeOrg/InfiniTime/blob/main/doc/ble.md>
 //! - <https://github.com/InfiniTimeOrg/InfiniTime/blob/main/doc/MotionService.md>
+//! - <https://github.com/InfiniTimeOrg/InfiniTime/blob/main/doc/NavigationService.md>
+//! - <https://github.com/InfiniTimeOrg/InfiniTime/blob/main/doc/SimpleWeatherService.md>
 //! - <https://github.com/InfiniTimeOrg/InfiniTime/blob/main/src/components/ble/HeartRateService.cpp>
 //! - <https://github.com/InfiniTimeOrg/InfiniTime/blob/main/src/components/ble/AlertNotificationService.cpp>
 //! - <https://github.com/InfiniTimeOrg/InfiniTime/blob/main/src/components/ble/MusicService.h>
@@ -31,6 +33,18 @@ pub const MUSIC_ARTIST: &str = "00000003-78fc-48fe-8e23-433b3a1942d0";
 pub const MUSIC_TRACK: &str = "00000004-78fc-48fe-8e23-433b3a1942d0";
 pub const MUSIC_ALBUM: &str = "00000005-78fc-48fe-8e23-433b3a1942d0";
 
+/// Navigation service (InfiniTime 0.11+). The watch only knows the icon names
+/// `pure-maps` emits, so the name is validated before it is written.
+pub const NAVIGATION_SERVICE: &str = "00010000-78fc-48fe-8e23-433b3a1942d0";
+pub const NAVIGATION_FLAGS: &str = "00010001-78fc-48fe-8e23-433b3a1942d0";
+pub const NAVIGATION_NARRATIVE: &str = "00010002-78fc-48fe-8e23-433b3a1942d0";
+pub const NAVIGATION_MAN_DIST: &str = "00010003-78fc-48fe-8e23-433b3a1942d0";
+pub const NAVIGATION_PROGRESS: &str = "00010004-78fc-48fe-8e23-433b3a1942d0";
+
+/// Simple Weather service (InfiniTime 1.14+); replaces the 1.8 weather service.
+pub const WEATHER_SERVICE: &str = "00050000-78fc-48fe-8e23-433b3a1942d0";
+pub const WEATHER_DATA: &str = "00050001-78fc-48fe-8e23-433b3a1942d0";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolError {
     TooShort { expected: usize, actual: usize },
@@ -38,6 +52,10 @@ pub enum ProtocolError {
     UnknownMusicEvent(u8),
     UnknownCallResponse(u8),
     MessageTooLong(usize),
+    UnknownIcon(String),
+    BadDate(String),
+    UnknownAlertCategory(String),
+    UnknownWeatherIcon(String),
 }
 
 impl fmt::Display for ProtocolError {
@@ -52,6 +70,12 @@ impl fmt::Display for ProtocolError {
                 write!(f, "unknown call response 0x{response:02x}")
             }
             Self::MessageTooLong(size) => write!(f, "notification is {size} bytes; max is 512"),
+            Self::UnknownIcon(name) => write!(f, "unknown navigation icon {name:?}"),
+            Self::BadDate(reason) => write!(f, "bad date: {reason}"),
+            Self::UnknownAlertCategory(value) => write!(f, "unknown alert category {value:?}"),
+            Self::UnknownWeatherIcon(name) => {
+                write!(f, "unknown weather icon {name:?}")
+            }
         }
     }
 }
@@ -265,6 +289,390 @@ pub const fn music_status(playing: bool) -> u8 {
     }
 }
 
+/// Alert Notification Service categories. The watch colours and groups a
+/// notification by this byte; 0xff is `All alerts`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertCategory {
+    Simple,
+    Email,
+    News,
+    Call,
+    MissedCall,
+    Sms,
+    Voicemail,
+    Schedule,
+    HighPriority,
+    InstantMessage,
+    All,
+}
+
+impl AlertCategory {
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        match self {
+            Self::Simple => 0,
+            Self::Email => 1,
+            Self::News => 2,
+            Self::Call => 3,
+            Self::MissedCall => 4,
+            Self::Sms => 5,
+            Self::Voicemail => 6,
+            Self::Schedule => 7,
+            Self::HighPriority => 8,
+            Self::InstantMessage => 9,
+            Self::All => 0xff,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Simple => "simple",
+            Self::Email => "email",
+            Self::News => "news",
+            Self::Call => "call",
+            Self::MissedCall => "missed-call",
+            Self::Sms => "sms",
+            Self::Voicemail => "voicemail",
+            Self::Schedule => "schedule",
+            Self::HighPriority => "high-priority",
+            Self::InstantMessage => "instant-message",
+            Self::All => "all",
+        }
+    }
+
+    /// A name from the spec's table, or the raw byte the bridge would carry.
+    pub fn parse(value: &str) -> Result<Self, ProtocolError> {
+        if let Ok(number) = value.parse::<u8>() {
+            return Self::from_u8(number)
+                .ok_or_else(|| ProtocolError::UnknownAlertCategory(value.to_string()));
+        }
+        let wanted = value.to_ascii_lowercase().replace('_', "-");
+        [
+            Self::Simple,
+            Self::Email,
+            Self::News,
+            Self::Call,
+            Self::MissedCall,
+            Self::Sms,
+            Self::Voicemail,
+            Self::Schedule,
+            Self::HighPriority,
+            Self::InstantMessage,
+            Self::All,
+        ]
+        .into_iter()
+        .find(|category| category.as_str() == wanted)
+        .ok_or_else(|| ProtocolError::UnknownAlertCategory(value.to_string()))
+    }
+
+    #[must_use]
+    pub const fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Simple),
+            1 => Some(Self::Email),
+            2 => Some(Self::News),
+            3 => Some(Self::Call),
+            4 => Some(Self::MissedCall),
+            5 => Some(Self::Sms),
+            6 => Some(Self::Voicemail),
+            7 => Some(Self::Schedule),
+            8 => Some(Self::HighPriority),
+            9 => Some(Self::InstantMessage),
+            0xff => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
+/// Current Time Service payload: local date and time, little-endian, ten bytes.
+///
+/// The watch has no timezone and no network: it displays exactly these fields.
+/// `utc_offset_min` is therefore applied here, by the caller's choice, and the
+/// last byte is the CTS manual-update reason (`0x01`).
+pub fn current_time_packet(epoch_secs: u64, utc_offset_min: i32) -> Result<Vec<u8>, ProtocolError> {
+    let local = i64::try_from(epoch_secs)
+        .map_err(|_| ProtocolError::BadDate("timestamp out of range".into()))?
+        + i64::from(utc_offset_min) * 60;
+    if local < 0 {
+        return Err(ProtocolError::BadDate(
+            "local time is before 1970".to_string(),
+        ));
+    }
+    let days = local.div_euclid(86_400);
+    let seconds = local.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let year = u16::try_from(year)
+        .map_err(|_| ProtocolError::BadDate(format!("year {year} does not fit CTS")))?;
+    // 1970-01-01 was a Thursday, which is weekday 4 in the 1=Monday CTS scale.
+    let weekday = ((days + 3).rem_euclid(7) + 1) as u8;
+    Ok(vec![
+        (year & 0xff) as u8,
+        (year >> 8) as u8,
+        month as u8,
+        day as u8,
+        (seconds / 3600) as u8,
+        ((seconds % 3600) / 60) as u8,
+        (seconds % 60) as u8,
+        weekday,
+        0,
+        0x01,
+    ])
+}
+
+/// Howard Hinnant's `civil_from_days`: days since 1970-01-01 to (year, month, day).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if month <= 2 { year + 1 } else { year }, month, day)
+}
+
+/// The icon names the Navigation service accepts, from the `pure-maps` set the
+/// InfiniTime document lists. The watch silently ignores anything else.
+pub const NAVIGATION_ICONS: &[&str] = &[
+    "arrive",
+    "arrive-left",
+    "arrive-right",
+    "arrive-straight",
+    "close",
+    "continue",
+    "continue-left",
+    "continue-right",
+    "continue-slight-left",
+    "continue-slight-right",
+    "continue-straight",
+    "continue-uturn",
+    "depart",
+    "depart-left",
+    "depart-right",
+    "depart-straight",
+    "end-of-road-left",
+    "end-of-road-right",
+    "ferry",
+    "flag",
+    "fork",
+    "fork-left",
+    "fork-right",
+    "fork-slight-left",
+    "fork-slight-right",
+    "fork-straight",
+    "invalid",
+    "invalid-left",
+    "invalid-right",
+    "invalid-slight-left",
+    "invalid-slight-right",
+    "invalid-straight",
+    "invalid-uturn",
+    "merge-left",
+    "merge-right",
+    "merge-slight-left",
+    "merge-slight-right",
+    "merge-straight",
+    "new-name-left",
+    "new-name-right",
+    "new-name-sharp-left",
+    "new-name-sharp-right",
+    "new-name-slight-left",
+    "new-name-slight-right",
+    "new-name-straight",
+    "notification-left",
+    "notification-right",
+    "notification-sharp-left",
+    "notification-sharp-right",
+    "notification-slight-left",
+    "notification-slight-right",
+    "notification-straight",
+    "off-ramp-left",
+    "off-ramp-right",
+    "off-ramp-sharp-left",
+    "off-ramp-sharp-right",
+    "off-ramp-slight-left",
+    "off-ramp-slight-right",
+    "off-ramp-straight",
+    "on-ramp-left",
+    "on-ramp-right",
+    "on-ramp-sharp-left",
+    "on-ramp-sharp-right",
+    "on-ramp-slight-left",
+    "on-ramp-slight-right",
+    "on-ramp-straight",
+    "rotary",
+    "rotary-left",
+    "rotary-right",
+    "rotary-sharp-left",
+    "rotary-sharp-right",
+    "rotary-slight-left",
+    "rotary-slight-right",
+    "rotary-straight",
+    "roundabout",
+    "roundabout-left",
+    "roundabout-right",
+    "roundabout-sharp-left",
+    "roundabout-sharp-right",
+    "roundabout-slight-left",
+    "roundabout-slight-right",
+    "roundabout-straight",
+    "turn-left",
+    "turn-right",
+    "turn-sharp-left",
+    "turn-sharp-right",
+    "turn-slight-left",
+    "turn-slight-right",
+    "turn-stright",
+    "updown",
+    "uturn",
+];
+
+pub fn validate_navigation_icon(name: &str) -> Result<(), ProtocolError> {
+    if NAVIGATION_ICONS.contains(&name) {
+        Ok(())
+    } else {
+        Err(ProtocolError::UnknownIcon(name.to_string()))
+    }
+}
+
+/// One navigation instruction, as four characteristic writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Navigation {
+    pub icon: String,
+    pub narrative: String,
+    pub distance: String,
+    pub progress: u8,
+}
+
+impl Navigation {
+    /// `(characteristic, bytes)` in the order the watch expects them.
+    pub fn packets(&self) -> Result<Vec<(&'static str, Vec<u8>)>, ProtocolError> {
+        validate_navigation_icon(&self.icon)?;
+        Ok(vec![
+            (NAVIGATION_FLAGS, self.icon.as_bytes().to_vec()),
+            (NAVIGATION_NARRATIVE, self.narrative.as_bytes().to_vec()),
+            (NAVIGATION_MAN_DIST, self.distance.as_bytes().to_vec()),
+            (NAVIGATION_PROGRESS, vec![self.progress.min(100)]),
+        ])
+    }
+}
+
+/// Icon ids of the Simple Weather service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeatherIcon {
+    Clear,
+    FewClouds,
+    Clouds,
+    HeavyClouds,
+    CloudsRain,
+    Rain,
+    Thunderstorm,
+    Snow,
+    Mist,
+}
+
+impl WeatherIcon {
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        match self {
+            Self::Clear => 0,
+            Self::FewClouds => 1,
+            Self::Clouds => 2,
+            Self::HeavyClouds => 3,
+            Self::CloudsRain => 4,
+            Self::Rain => 5,
+            Self::Thunderstorm => 6,
+            Self::Snow => 7,
+            Self::Mist => 8,
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, ProtocolError> {
+        match value.to_ascii_lowercase().replace('_', "-").as_str() {
+            "clear" | "sun" => Ok(Self::Clear),
+            "few-clouds" => Ok(Self::FewClouds),
+            "clouds" => Ok(Self::Clouds),
+            "heavy-clouds" => Ok(Self::HeavyClouds),
+            "clouds-rain" => Ok(Self::CloudsRain),
+            "rain" => Ok(Self::Rain),
+            "thunderstorm" => Ok(Self::Thunderstorm),
+            "snow" => Ok(Self::Snow),
+            "mist" => Ok(Self::Mist),
+            other => Err(ProtocolError::UnknownWeatherIcon(other.to_string())),
+        }
+    }
+}
+
+/// Sunrise/sunset values the service defines beyond plain minutes.
+pub const SUN_UNKNOWN: i16 = -1;
+pub const SUN_ABSENT: i16 = -2;
+
+const WEATHER_LOCATION_BYTES: usize = 32;
+
+/// Simple Weather current conditions, version 1 (with sunrise/sunset).
+///
+/// Temperatures are degrees Celsius x100 as `i16`; the location is a fixed
+/// 32-byte zero-padded field, so a shorter name is not a shorter frame.
+#[must_use]
+pub fn current_weather_packet(
+    timestamp: u64,
+    current_c: i16,
+    min_c: i16,
+    max_c: i16,
+    location: &str,
+    icon: WeatherIcon,
+    sunrise_min: i16,
+    sunset_min: i16,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(53);
+    out.push(0);
+    out.push(1);
+    out.extend_from_slice(&timestamp.to_le_bytes());
+    out.extend_from_slice(&current_c.to_le_bytes());
+    out.extend_from_slice(&min_c.to_le_bytes());
+    out.extend_from_slice(&max_c.to_le_bytes());
+    let mut name = [0u8; WEATHER_LOCATION_BYTES];
+    let bytes = location.as_bytes();
+    let take = bytes.len().min(WEATHER_LOCATION_BYTES);
+    name[..take].copy_from_slice(&bytes[..take]);
+    out.extend_from_slice(&name);
+    out.push(icon.as_u8());
+    out.extend_from_slice(&sunrise_min.to_le_bytes());
+    out.extend_from_slice(&sunset_min.to_le_bytes());
+    out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForecastDay {
+    pub min_c: i16,
+    pub max_c: i16,
+    pub icon: WeatherIcon,
+}
+
+/// Simple Weather forecast, version 0: today plus up to four more days.
+#[must_use]
+pub fn forecast_packet(timestamp: u64, days: &[ForecastDay]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(36);
+    out.push(1);
+    out.push(0);
+    out.extend_from_slice(&timestamp.to_le_bytes());
+    out.push(days.len().min(5) as u8);
+    for index in 0..5 {
+        let used = days.get(index).copied();
+        let (min_c, max_c, icon) = match used {
+            Some(day) => (day.min_c, day.max_c, day.icon.as_u8()),
+            None => (0, 0, 0),
+        };
+        out.extend_from_slice(&min_c.to_le_bytes());
+        out.extend_from_slice(&max_c.to_le_bytes());
+        out.push(icon);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,5 +735,124 @@ mod tests {
         assert_eq!(parse_call_response(1), Ok(CallResponse::Accepted));
         assert!(parse_music_event(0x99).is_err());
         assert!(parse_call_response(0x99).is_err());
+    }
+
+    #[test]
+    fn current_time_packet_is_cts_little_endian() {
+        // 2023-11-14T22:13:20Z, a Tuesday.
+        let packet = current_time_packet(1_700_000_000, 0).expect("cts");
+        assert_eq!(packet, vec![0xE7, 0x07, 11, 14, 22, 13, 20, 2, 0, 0x01]);
+    }
+
+    #[test]
+    fn current_time_applies_the_callers_offset() {
+        // +02:00 rolls the same instant into the next day.
+        let packet = current_time_packet(1_700_000_000, 120).expect("cts");
+        assert_eq!(packet, vec![0xE7, 0x07, 11, 15, 0, 13, 20, 3, 0, 0x01]);
+    }
+
+    #[test]
+    fn the_cts_weekday_scale_starts_at_monday() {
+        // 1970-01-01 was a Thursday, which is 4 when Monday is 1.
+        let packet = current_time_packet(0, 0).expect("cts");
+        assert_eq!(packet[7], 4);
+    }
+
+    #[test]
+    fn navigation_writes_the_four_characteristics_in_order() {
+        let navigation = Navigation {
+            icon: "turn-left".to_string(),
+            narrative: "Turn left onto Market".to_string(),
+            distance: "50 m".to_string(),
+            progress: 120,
+        };
+        let packets = navigation.packets().expect("nav");
+        assert_eq!(packets[0].0, NAVIGATION_FLAGS);
+        assert_eq!(packets[0].1, b"turn-left");
+        assert_eq!(packets[1].0, NAVIGATION_NARRATIVE);
+        assert_eq!(packets[2].0, NAVIGATION_MAN_DIST);
+        assert_eq!(packets[3], (NAVIGATION_PROGRESS, vec![100]));
+    }
+
+    #[test]
+    fn an_unknown_navigation_icon_is_refused() {
+        let navigation = Navigation {
+            icon: "turn-inward".to_string(),
+            narrative: String::new(),
+            distance: String::new(),
+            progress: 0,
+        };
+        assert!(matches!(
+            navigation.packets(),
+            Err(ProtocolError::UnknownIcon(_))
+        ));
+    }
+
+    #[test]
+    fn current_weather_packet_matches_the_service_layout() {
+        let packet = current_weather_packet(
+            1_700_000_000,
+            1_250,
+            900,
+            1_400,
+            "Puget Sound",
+            WeatherIcon::Rain,
+            7 * 60,
+            16 * 60 + 32,
+        );
+        assert_eq!(packet.len(), 53);
+        assert_eq!(packet[0], 0);
+        assert_eq!(packet[1], 1);
+        assert_eq!(&packet[2..10], &1_700_000_000u64.to_le_bytes());
+        assert_eq!(&packet[10..12], &1_250i16.to_le_bytes());
+        assert_eq!(&packet[12..14], &900i16.to_le_bytes());
+        assert_eq!(&packet[14..16], &1_400i16.to_le_bytes());
+        assert_eq!(&packet[16..27], b"Puget Sound");
+        assert!(packet[27..48].iter().all(|byte| *byte == 0));
+        assert_eq!(packet[48], 5);
+        assert_eq!(&packet[49..51], &420i16.to_le_bytes());
+        assert_eq!(&packet[51..53], &992i16.to_le_bytes());
+    }
+
+    #[test]
+    fn forecast_keeps_five_day_slots_and_zeroes_the_unused_ones() {
+        let packet = forecast_packet(
+            1_700_000_000,
+            &[
+                ForecastDay {
+                    min_c: 900,
+                    max_c: 1_400,
+                    icon: WeatherIcon::Clouds,
+                },
+                ForecastDay {
+                    min_c: -200,
+                    max_c: 300,
+                    icon: WeatherIcon::Snow,
+                },
+            ],
+        );
+        assert_eq!(packet.len(), 36);
+        assert_eq!(packet[0], 1);
+        assert_eq!(packet[1], 0);
+        assert_eq!(packet[10], 2);
+        assert_eq!(&packet[11..13], &900i16.to_le_bytes());
+        assert_eq!(&packet[13..15], &1_400i16.to_le_bytes());
+        assert_eq!(packet[15], 2);
+        assert_eq!(&packet[16..18], &(-200i16).to_le_bytes());
+        assert_eq!(packet[20], 7);
+        assert!(packet[21..].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn alert_categories_parse_by_name_and_number() {
+        assert_eq!(AlertCategory::parse("call"), Ok(AlertCategory::Call));
+        assert_eq!(
+            AlertCategory::parse("missed_call"),
+            Ok(AlertCategory::MissedCall)
+        );
+        assert_eq!(AlertCategory::parse("255"), Ok(AlertCategory::All));
+        assert_eq!(AlertCategory::Sms.as_u8(), 5);
+        assert!(AlertCategory::parse("urgent").is_err());
+        assert!(AlertCategory::parse("42").is_err());
     }
 }

@@ -32,13 +32,27 @@ struct Args {
     device: Option<String>,
     scan_ms: u32,
     hold_ms: u64,
-    category: u8,
+    category: String,
     title: String,
     body: String,
     artist: String,
     track: String,
     album: String,
     playing: bool,
+    epoch: Option<u64>,
+    offset_min: i32,
+    icon: String,
+    narrative: String,
+    distance: String,
+    progress: u8,
+    temp_c: Option<i16>,
+    min_c: Option<i16>,
+    max_c: Option<i16>,
+    location: String,
+    sunrise_min: i16,
+    sunset_min: i16,
+    forecast: Vec<proto::ForecastDay>,
+    read_back: bool,
 }
 
 impl Default for Args {
@@ -49,13 +63,27 @@ impl Default for Args {
             device: None,
             scan_ms: 8_000,
             hold_ms: 5_000,
-            category: 0,
+            category: "simple".to_string(),
             title: String::new(),
             body: String::new(),
             artist: String::new(),
             track: String::new(),
             album: String::new(),
             playing: true,
+            epoch: None,
+            offset_min: 0,
+            icon: String::new(),
+            narrative: String::new(),
+            distance: String::new(),
+            progress: 0,
+            temp_c: None,
+            min_c: None,
+            max_c: None,
+            location: String::new(),
+            sunrise_min: proto::SUN_UNKNOWN,
+            sunset_min: proto::SUN_UNKNOWN,
+            forecast: Vec::new(),
+            read_back: false,
         }
     }
 }
@@ -72,6 +100,12 @@ impl Args {
         }
         while index < raw.len() {
             let flag = raw[index].as_str();
+            // `--read-back` is the one flag that stands alone.
+            if flag == "--read-back" {
+                args.read_back = true;
+                index += 1;
+                continue;
+            }
             let value = raw
                 .get(index + 1)
                 .ok_or_else(|| format!("{flag} needs a value"))?;
@@ -88,25 +122,48 @@ impl Args {
                         .parse()
                         .map_err(|_| format!("--hold-ms: {value:?} is not a number"))?
                 }
-                "--category" => {
-                    args.category = value
-                        .parse()
-                        .map_err(|_| format!("--category: {value:?} is not a byte"))?
-                }
+                "--category" => args.category = value.clone(),
                 "--title" => args.title = value.clone(),
                 "--body" => args.body = value.clone(),
                 "--artist" => args.artist = value.clone(),
                 "--track" => args.track = value.clone(),
                 "--album" => args.album = value.clone(),
                 "--playing" => args.playing = matches!(value.as_str(), "true" | "1" | "yes"),
+                "--epoch" => {
+                    args.epoch = Some(
+                        value
+                            .parse()
+                            .map_err(|_| format!("--epoch: {value:?} is not a unix timestamp"))?,
+                    )
+                }
+                "--offset-min" => {
+                    args.offset_min = value
+                        .parse()
+                        .map_err(|_| format!("--offset-min: {value:?} is not a number"))?
+                }
+                "--icon" => args.icon = value.clone(),
+                "--narrative" => args.narrative = value.clone(),
+                "--distance" => args.distance = value.clone(),
+                "--progress" => {
+                    args.progress = value
+                        .parse()
+                        .map_err(|_| format!("--progress: {value:?} is not a percentage"))?
+                }
+                "--temp-c" => args.temp_c = Some(degrees(value, "--temp-c")?),
+                "--min-c" => args.min_c = Some(degrees(value, "--min-c")?),
+                "--max-c" => args.max_c = Some(degrees(value, "--max-c")?),
+                "--location" => args.location = value.clone(),
+                "--sunrise-min" => args.sunrise_min = count(value, "--sunrise-min")?,
+                "--sunset-min" => args.sunset_min = count(value, "--sunset-min")?,
+                "--forecast" => args.forecast = forecast(value)?,
                 other => return Err(format!("unknown argument {other:?}")),
             }
             index += 2;
         }
         match args.command.as_str() {
-            "watch" | "notify" | "media" | "find" => Ok(args),
+            "watch" | "notify" | "media" | "find" | "time" | "nav" | "weather" => Ok(args),
             other => Err(format!(
-                "unknown command {other:?}; expected watch, notify, media, or find"
+                "unknown command {other:?}; expected watch, notify, media, find, time, nav, or weather"
             )),
         }
     }
@@ -211,25 +268,87 @@ fn run_connected(args: &Args, advertised_name: &str) -> Result<(), String> {
     let battery = read_battery()?;
     upsert_device_state(&device_id, &model, &firmware, battery, &args.wearer)?;
 
+    let mut writes: Vec<Written> = Vec::new();
     let counts = match args.command.as_str() {
         "watch" => {
             subscribe_watch()?;
             drain(&device_id, &args.wearer, args.hold_ms, &model, &firmware)?
         }
         "notify" => {
-            let packet = proto::notification_packet(args.category, &args.title, &args.body);
+            let category =
+                proto::AlertCategory::parse(&args.category).map_err(|error| error.to_string())?;
+            let packet = proto::notification_packet(category.as_u8(), &args.title, &args.body);
             proto::ensure_notification_packet(&packet).map_err(|error| error.to_string())?;
-            ble::write(proto::NEW_ALERT, &packet).map_err(ble_err)?;
+            writes.push(write_characteristic(
+                proto::NEW_ALERT,
+                &packet,
+                args.read_back,
+            )?);
             Counts::default()
         }
         "media" => {
-            write_media(args)?;
+            write_media(args, &mut writes)?;
             ble::subscribe(proto::MUSIC_EVENT).map_err(ble_err)?;
             drain(&device_id, &args.wearer, args.hold_ms, &model, &firmware)?
         }
         "find" => {
             // Immediate Alert level 2 (high) makes the watch vibrate.
-            ble::write(proto::ALERT_LEVEL, &[2]).map_err(ble_err)?;
+            writes.push(write_characteristic(
+                proto::ALERT_LEVEL,
+                &[2],
+                args.read_back,
+            )?);
+            Counts::default()
+        }
+        "time" => {
+            // The watch has no timezone of its own: the caller says which local
+            // time to display, and the payload carries exactly those fields.
+            let packet = proto::current_time_packet(epoch(args)?, args.offset_min)
+                .map_err(|error| error.to_string())?;
+            writes.push(write_characteristic(
+                proto::CURRENT_TIME,
+                &packet,
+                args.read_back,
+            )?);
+            Counts::default()
+        }
+        "nav" => {
+            let navigation = proto::Navigation {
+                icon: args.icon.clone(),
+                narrative: args.narrative.clone(),
+                distance: args.distance.clone(),
+                progress: args.progress,
+            };
+            for (uuid, bytes) in navigation.packets().map_err(|error| error.to_string())? {
+                writes.push(write_characteristic(uuid, &bytes, args.read_back)?);
+            }
+            Counts::default()
+        }
+        "weather" => {
+            let icon = proto::WeatherIcon::parse(&args.icon).map_err(|error| error.to_string())?;
+            let packet = proto::current_weather_packet(
+                epoch(args)?,
+                args.temp_c.unwrap_or(0),
+                args.min_c.unwrap_or(0),
+                args.max_c.unwrap_or(0),
+                &args.location,
+                icon,
+                args.sunrise_min,
+                args.sunset_min,
+            );
+            writes.push(write_characteristic(
+                proto::WEATHER_DATA,
+                &packet,
+                args.read_back,
+            )?);
+            if !args.forecast.is_empty() {
+                let forecast = proto::forecast_packet(epoch(args)?, &args.forecast);
+                writes.push(write_characteristic(
+                    proto::WEATHER_DATA,
+                    &forecast,
+                    args.read_back,
+                )?);
+            }
             Counts::default()
         }
         other => return Err(format!("unknown command {other:?}")),
@@ -246,6 +365,7 @@ fn run_connected(args: &Args, advertised_name: &str) -> Result<(), String> {
             "battery_percent": battery,
             "wearer": args.wearer.clone(),
             "signals": counts.json(),
+            "writes": write_report(&writes),
             "updated_at_monotonic_ms": now,
         });
     });
@@ -406,18 +526,131 @@ fn handle_notification(
     Ok(())
 }
 
-fn write_media(args: &Args) -> Result<(), String> {
-    ble::write(proto::MUSIC_STATUS, &[proto::music_status(args.playing)]).map_err(ble_err)?;
+/// One characteristic write, and what a read-back said about it. The read
+/// happens immediately: two writes to the same characteristic must not be
+/// compared against the second value.
+struct Written {
+    uuid: String,
+    bytes: usize,
+    /// `None` when `--read-back` was not asked for.
+    verified: Option<Verified>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Verified {
+    Matched,
+    Mismatched,
+    /// The firmware exposes the characteristic as write-only.
+    Unsupported,
+}
+
+fn write_characteristic(uuid: &str, data: &[u8], read_back: bool) -> Result<Written, String> {
+    ble::write(uuid, data).map_err(ble_err)?;
+    let verified = if read_back {
+        Some(match ble::read(uuid, data.len().max(1) as u32) {
+            Ok(value) if value == data => Verified::Matched,
+            Ok(_) => Verified::Mismatched,
+            Err(_) => Verified::Unsupported,
+        })
+    } else {
+        None
+    };
+    Ok(Written {
+        uuid: uuid.to_string(),
+        bytes: data.len(),
+        verified,
+    })
+}
+
+fn write_media(args: &Args, writes: &mut Vec<Written>) -> Result<(), String> {
+    let status = [proto::music_status(args.playing)];
+    writes.push(write_characteristic(
+        proto::MUSIC_STATUS,
+        &status,
+        args.read_back,
+    )?);
     for (uuid, value) in [
         (proto::MUSIC_ARTIST, &args.artist),
         (proto::MUSIC_TRACK, &args.track),
         (proto::MUSIC_ALBUM, &args.album),
     ] {
         if !value.is_empty() {
-            ble::write(uuid, value.as_bytes()).map_err(ble_err)?;
+            writes.push(write_characteristic(
+                uuid,
+                value.as_bytes(),
+                args.read_back,
+            )?);
         }
     }
     Ok(())
+}
+
+/// What went to the radio, and optionally what the watch read back.
+fn write_report(writes: &[Written]) -> Vec<Value> {
+    writes
+        .iter()
+        .map(|written| {
+            let mut report = json!({"uuid": written.uuid, "bytes": written.bytes});
+            if let Some(verified) = written.verified {
+                report["read_back"] = match verified {
+                    Verified::Matched => json!(true),
+                    Verified::Mismatched => json!("mismatch"),
+                    Verified::Unsupported => json!("unsupported"),
+                };
+            }
+            report
+        })
+        .collect()
+}
+
+fn epoch(args: &Args) -> Result<u64, String> {
+    args.epoch
+        .ok_or_else(|| format!("{} needs --epoch <unix-seconds>", args.command))
+}
+
+/// Degrees Celsius on the command line, hundredths in the packet.
+fn degrees(value: &str, flag: &str) -> Result<i16, String> {
+    let parsed: f32 = value
+        .parse()
+        .map_err(|_| format!("{flag}: {value:?} is not a temperature"))?;
+    let hundredths = (parsed * 100.0).round();
+    if !(-32_768.0..=32_767.0).contains(&hundredths) {
+        return Err(format!("{flag}: {value} is out of range"));
+    }
+    Ok(hundredths as i16)
+}
+
+/// Minutes since midnight, or one of the service's negative sentinels.
+fn count(value: &str, flag: &str) -> Result<i16, String> {
+    value
+        .parse()
+        .map_err(|_| format!("{flag}: {value:?} is not a number of minutes"))
+}
+
+/// `min,max,icon;min,max,icon` in whole degrees Celsius.
+fn forecast(value: &str) -> Result<Vec<proto::ForecastDay>, String> {
+    let mut days = Vec::new();
+    for entry in value.split(';').filter(|entry| !entry.trim().is_empty()) {
+        let mut fields = entry.split(',');
+        let min = fields
+            .next()
+            .ok_or_else(|| format!("--forecast: {entry:?} is not min,max,icon"))?;
+        let max = fields
+            .next()
+            .ok_or_else(|| format!("--forecast: {entry:?} is not min,max,icon"))?;
+        let icon = fields
+            .next()
+            .ok_or_else(|| format!("--forecast: {entry:?} is not min,max,icon"))?;
+        if fields.next().is_some() {
+            return Err(format!("--forecast: {entry:?} has too many fields"));
+        }
+        days.push(proto::ForecastDay {
+            min_c: degrees(min, "--forecast min")?,
+            max_c: degrees(max, "--forecast max")?,
+            icon: proto::WeatherIcon::parse(icon).map_err(|error| error.to_string())?,
+        });
+    }
+    Ok(days)
 }
 
 fn read_string(uuid: &str) -> Result<String, String> {

@@ -17,20 +17,62 @@ renaming an id rekeys per-app Canvas settings and records readers.
 ## Commands
 
 ```text
-pinetime watch  [--wearer W] [--device ID] [--scan-ms N] [--hold-ms N]
-pinetime notify [--category C] [--title T] [--body B] [--wearer W]
-pinetime media  [--artist A] [--track T] [--album L] [--playing true|false]
-pinetime find   [--wearer W]
+pinetime watch   [--wearer W] [--device ID] [--scan-ms N] [--hold-ms N]
+pinetime notify  [--category C] [--title T] [--body B] [--wearer W]
+pinetime media   [--artist A] [--track T] [--album L] [--playing true|false]
+pinetime find    [--wearer W]
+pinetime time    --epoch UNIX [--offset-min N]
+pinetime nav     --icon NAME [--narrative T] [--distance D] [--progress 0-100]
+pinetime weather --epoch UNIX --icon NAME --temp-c C [--min-c C] [--max-c C]
+                 [--location L] [--sunrise-min N] [--sunset-min N]
+                 [--forecast "min,max,icon;min,max,icon"]
 ```
 
 - `watch` reads DIS model/firmware/serial and battery, subscribes to heart rate,
   step count, motion, music events, call events, and battery, then drains for
   `--hold-ms` (default 5000).
 - `notify` writes an ANS New Alert in InfiniTime's
-  `<category><amount>\x00<title>\x00<body>` format.
+  `<category><amount>\x00<title>\x00<body>` format. `--category` takes the
+  spec's names (`simple`, `email`, `news`, `call`, `missed-call`, `sms`,
+  `voicemail`, `schedule`, `high-priority`, `instant-message`, `all`) or its
+  byte.
 - `media` writes playback status, artist, track, and album, then drains music
   events for `--hold-ms`.
 - `find` writes Immediate Alert level 2, which makes the watch vibrate.
+- `time` writes the Current Time Service: local fields, weekday, and the
+  manual-update reason. The watch has no timezone or network, so `--epoch` is
+  the caller's instant and `--offset-min` is the local offset to display.
+- `nav` writes the four Navigation characteristics: a validated `pure-maps`
+  icon name, the instruction, the distance to it, and route progress.
+- `weather` writes Simple Weather current conditions (version 1, with
+  sunrise/sunset) and, with `--forecast`, a five-day forecast. Temperatures are
+  decimal Celsius on the command line and hundredths in the packet; sunrise and
+  sunset accept the service's `-1` (unknown) and `-2` (does not occur).
+
+Every write command reports what it sent. `--read-back` also reads each
+characteristic immediately after the write and records `true`, `"mismatch"`, or
+`"unsupported"` (write-only on that firmware) in the snapshot.
+
+## Spec coverage
+
+| InfiniTime service | Spore |
+|---|---|
+| Device Information, Battery, Heart Rate | read and subscribe |
+| Alert Notification (`0x2A46`) | `notify`, any category |
+| Notification Event (`00020001`) | call responses as signals |
+| Music (`0000000x`) | `media` plus event subscription |
+| Motion (`0003000x`) | steps and motion signals |
+| Navigation (`0001000x`) | `nav`, icon-validated |
+| Simple Weather (`0005000x`) | `weather`, current + forecast |
+| Current Time (`0x2A2B`) | `time` |
+| Immediate Alert | `find` |
+
+Deliberately not implemented: **DFU** and **BLE FS**. Both are file transfers —
+firmware images and watch-face assets — and this Spore has no filesystem grant.
+DFU in particular is a nine-step state machine that can brick a watch; it belongs
+in a host tool with real file access and a recovery path, not in a capability
+Spore. Gadgetbridge is the Android app that implements this same InfiniTime wire
+protocol; the protocol is what is implemented here, not the app.
 
 ## Identity and records
 
