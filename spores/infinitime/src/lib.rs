@@ -12,6 +12,8 @@
 //! - <https://github.com/InfiniTimeOrg/InfiniTime/blob/main/src/components/ble/AlertNotificationService.cpp>
 //! - <https://github.com/InfiniTimeOrg/InfiniTime/blob/main/src/components/ble/MusicService.h>
 
+pub mod dfu;
+
 use std::fmt;
 
 pub const DIS_SERIAL: &str = "00002a25-0000-1000-8000-00805f9b34fb";
