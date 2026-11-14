@@ -45,7 +45,7 @@ spores/weather/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bc
 
 # --- soil-spore.wit ---------------------------------------------------------
 # source:      fungOS-linux/soil, wit/soil-spore.wit
-# soil-commit: 35d960cdcdbc0db61cef34734f53316dca44fe38 (soil main)
+# soil-commit: e6c4ffa6f68eedc0abe2b58b65bc3ae7da96a1d5 (feat/spore-catalog-mark)
 #
 # `title` joined the catalog entry: a package names how it is shown (a window
 # title, a launcher row) without turning its slug into a label. Every copy moved
@@ -62,13 +62,19 @@ spores/weather/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bc
 # the rest behind is the lie this file exists to prevent, so this section stayed
 # empty until `spores/spore-catalog` put both hosts back on soil's main.
 
-spores/launcher/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
-spores/launcher-gpui/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
-spores/launcher-host/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
-spores/spore-browser/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
-spores/spore-browser-host/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
-spores/probe-gpui/wit/deps/soil-spore/spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
-spores/store/wit/deps/soil-spore.wit aa294ff1479364904ef35d1e15f15bd30f98c4a5
+#
+# `mark` joined the catalog entry: a package's own art, handed over as bytes
+# because a Spore has no filesystem to open `presentation.mark` with. The field
+# is optional and a host that cannot read the asset sends `none`, so a package
+# that ships no art lists exactly as before. All seven copies moved together.
+
+spores/launcher/wit/deps/soil-spore/spore.wit fdd2bd351b8a2a38b6a7df16e395887799626b7f
+spores/launcher-gpui/wit/deps/soil-spore/spore.wit fdd2bd351b8a2a38b6a7df16e395887799626b7f
+spores/launcher-host/wit/deps/soil-spore/spore.wit fdd2bd351b8a2a38b6a7df16e395887799626b7f
+spores/spore-browser/wit/deps/soil-spore/spore.wit fdd2bd351b8a2a38b6a7df16e395887799626b7f
+spores/spore-browser-host/wit/deps/soil-spore/spore.wit fdd2bd351b8a2a38b6a7df16e395887799626b7f
+spores/probe-gpui/wit/deps/soil-spore/spore.wit fdd2bd351b8a2a38b6a7df16e395887799626b7f
+spores/store/wit/deps/soil-spore.wit fdd2bd351b8a2a38b6a7df16e395887799626b7f
 
 # --- soil-surface-import.wit ------------------------------------------------
 # source:      fungOS-linux/soil, wit/soil-surface-import.wit
