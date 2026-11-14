@@ -1,0 +1,6 @@
+spore-lock 1
+spore dev.fungos.vitals-view
+version 0.1.0
+file 696f123d4a3a96dba7d67358fbcda6ffb458470be769d59213a443797efe85c1 9638971 module.wasm
+file c3b0c70e4f1c37ac690161ed537f485e80fc66402b94d4c6a2daabbe631e43da 2138 spore.toml
+digest 6efe06aee1b3100bcb26efde8c3aace6148a91b746082125b55876a8b6cc0cbd

@@ -1,0 +1,46 @@
+# Vitals: cross-device health fusion, no UI and no radio.
+#
+# A native GPUI viewer host reads vitals.latest or subscribes to the
+# vitals.summary.v1 bus frame; the Spore never owns pixels.
+schema = 1
+
+[spore]
+id = "dev.fungos.vitals"
+name = "vitals"
+version = "0.1.0"
+license = "MIT"
+summary = "Wearer-scoped health fusion across ring and watch signals"
+description = "Reads signal.sample.v1 records, applies the ring-primary/watch-fallback policy, and writes vitals.summary.v1, a latest-value bus frame, and the vitals.view.v1 record (activity rings, sleep session, plus cards) for the renderer Spore. Sleep stages are selected, not averaged; steps stay per device; stale values are unknown."
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { records = "0.1.0", unibus = "0.1.0", time = "1.0.0" }
+
+[module]
+path = "module.wasm"
+
+[launch]
+default = "native"
+surfaces = ["native"]
+
+[grants]
+"soil:records" = "read signal/device records and write vitals.summary, vitals.latest, and vitals.view"
+"soil:unibus" = "publish the latest vitals.summary.v1 frame for a GPUI host"
+"soil:time" = "monotonic observation and loop ticks; no wall clock"
+"wasi:cli" = "Rust std stdio for the host's log stream"
+"wasi:clocks" = "Rust std runtime dependency; observations use soil:time"
+"wasi:io" = "Rust std runtime I/O primitives"
+
+[denied]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "wall-clock", "camera", "microphone"]
+
+[catalog]
+categories = ["system", "utilities"]
+keywords = ["vitals", "health", "wearable", "hrv", "sleep", "steps"]
+
+[presentation]
+badge = "V"
+color = "#5ec8a0"

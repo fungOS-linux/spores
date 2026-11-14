@@ -37,9 +37,7 @@ impl Http for HostHttp {
                 .map(|(name, value)| abi::Header { name, value })
                 .collect(),
             body: request.body,
-            // The bridge key travels in the URL path for Hue's v1 API, so this
-            // Spore has no separate credential handle to ask the host for.
-            credential: None,
+            credential: request.credential,
             max_bytes: crate::MAX_BODY,
             timeout_ms: crate::TIMEOUT_MS,
         })

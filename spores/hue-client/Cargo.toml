@@ -1,0 +1,16 @@
+[package]
+name = "hue-client"
+description = "Philips Hue v1 LAN semantics shared by the CLI and UI Spores"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+cli-http = { path = "../cli-http" }
+serde_json = "1"
+
+[lints]
+workspace = true

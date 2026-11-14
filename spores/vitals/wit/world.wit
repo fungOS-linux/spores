@@ -1,0 +1,21 @@
+// Vitals: cross-device health fusion and the Spore-owned view model.
+//
+// Device Spores own protocols and write signal.sample.v1 records. This Spore
+// owns the wearer-scoped health policy and returns vitals.view.v1 for a GPUI
+// renderer host. It has no radio and no pixels.
+package fungos:vitals@0.1.0;
+
+world vitals-spore {
+  import soil:records/records@0.1.0;
+  import soil:unibus/bus@0.1.0;
+  import soil:time/time@1.0.0;
+
+  /// `seed`, `once`, or `loop`; see README.md.
+  export run: func(args: list<string>) -> result<_, string>;
+
+  /// The last summary, as JSON, for a host that wants a snapshot.
+  export snapshot: func() -> result<list<u8>, string>;
+
+  /// The Spore-owned view model: cards, per-device step rows, no pixels.
+  export view: func() -> result<list<u8>, string>;
+}

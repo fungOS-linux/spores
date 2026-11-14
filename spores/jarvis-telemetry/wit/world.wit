@@ -1,0 +1,18 @@
+// JARVIS telemetry: read device signals from Records, publish a fused state.
+//
+// No radio, camera, or socket. The Spore is deliberately a consumer of the
+// records that device Spores write, which is what lets JARVIS run on a laptop
+// against seeded records before any hardware is present.
+package fungos:jarvis-telemetry@0.1.0;
+
+world jarvis-telemetry-spore {
+  import soil:records/records@0.1.0;
+  import soil:unibus/bus@0.1.0;
+  import soil:time/time@1.0.0;
+
+  /// `once`, `seed`, or `loop`; see README.md.
+  export run: func(args: list<string>) -> result<_, string>;
+
+  /// The last fused presence/attention state, as JSON.
+  export snapshot: func() -> result<list<u8>, string>;
+}

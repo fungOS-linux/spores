@@ -1,0 +1,49 @@
+# Vitals view: a Spore UI rendered by GPUI through wasi:webgpu into Canvas.
+#
+# The Spore reads the Spore-owned vitals.view record, lays out cards with GPUI,
+# renders into a host-provided GPU texture, and presents it through
+# soil:present. There is no second native window binary.
+schema = 1
+
+[spore]
+id = "dev.fungos.vitals-view"
+name = "vitals-view"
+version = "0.1.0"
+license = "MIT"
+summary = "GPUI vitals rings, sleep hypnogram, and cards on a Canvas-owned GPU surface"
+description = "Reads the vitals.view record from Records, builds Apple Health-style activity rings, a sleep hypnogram, and metric cards with GPUI, renders them through the Soil-provided wasi:webgpu device, and presents the texture to Canvas. The Spore owns the UI and the health labels; Canvas owns the window and compositor. Layouts collapse from a wide dashboard to a centered phone column and a watch/flip face; sleep bars stay inset from the rounded track. Steps stay per device and are never summed; the Move ring uses a fused per-bucket estimate."
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { spore = "0.1.0", canvas = "1.0.0", records = "0.1.0" }
+
+[module]
+path = "module.wasm"
+
+[launch]
+default = "canvas"
+surfaces = ["canvas", "native", "web"]
+
+[grants]
+"wasi:webgpu" = "render GPUI cards into one Canvas-owned texture"
+"soil:present" = "present that texture; the host owns the surface and window"
+"soil:records" = "read the Spore-owned vitals.view record"
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "GPUI's test dispatcher needs monotonic timing"
+"wasi:filesystem" = "std and fontdb import the interface; the host grants no preopens"
+"wasi:io" = "component-model async transport"
+"wasi:random" = "GPUI's deterministic scheduler seed"
+
+[denied]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "wall-clock", "camera", "microphone"]
+
+[catalog]
+categories = ["system", "graphics"]
+keywords = ["vitals", "health", "gpui", "webgpu", "canvas"]
+
+[presentation]
+badge = "V"
+color = "#5ec8a0"

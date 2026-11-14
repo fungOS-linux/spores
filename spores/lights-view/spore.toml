@@ -1,0 +1,50 @@
+# Lights view: a room-first Philips Hue controller rendered by GPUI in a Spore.
+#
+# The Spore reads the bridge through soil:http, using a host-bound `hue.local`
+# origin and a Geode credential handle. It renders its own texture and presents
+# it through soil:present; the host owns the window, pointer input and the
+# bridge key.
+schema = 1
+
+[spore]
+id = "dev.fungos.lights-view"
+name = "lights"
+version = "0.1.0"
+license = "MIT"
+summary = "Room-first Hue control rendered by GPUI inside a Spore"
+description = "A dark room rail, scene chips, and per-light cards for a Philips Hue bridge. Pointer and keyboard input arrive through soil:present; Hue requests go through soil:http with the bridge key leased from Geode and substituted by the host. Lights stay per-device and per-room; nothing is averaged or invented when the bridge is unreachable."
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { spore = "0.1.0", canvas = "1.0.0", http = "0.1.0" }
+
+[module]
+path = "module.wasm"
+
+[launch]
+default = "canvas"
+surfaces = ["canvas"]
+
+[grants]
+"wasi:webgpu" = "render the lights UI into one host-presented texture"
+"soil:present" = "present the texture and receive normalized pointer and key input"
+"soil:http" = "read and write the Hue bridge through the host-bound hue.local origin"
+"wasi:cli" = "Rust std diagnostics; no args, environment, or process launch"
+"wasi:clocks" = "GPUI's scheduler and the 16 ms idle poll"
+"wasi:filesystem" = "std and fontdb import the interface; the host grants no preopens"
+"wasi:io" = "component-model async transport"
+"wasi:random" = "GPUI's deterministic scheduler seed"
+
+[denied]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "camera", "microphone"]
+
+[catalog]
+categories = ["utilities", "graphics"]
+keywords = ["hue", "lights", "gpui", "webgpu", "presence"]
+
+[presentation]
+badge = "L"
+color = "#f5b95b"

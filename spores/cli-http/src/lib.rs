@@ -17,6 +17,8 @@ pub struct Request {
     pub method: Method,
     pub headers: Vec<(String, String)>,
     pub body: Option<Vec<u8>>,
+    /// Opaque host credential handle. A handle is a name, never a secret.
+    pub credential: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

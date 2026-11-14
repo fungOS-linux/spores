@@ -1,0 +1,6 @@
+spore-lock 1
+spore dev.fungos.elmers-ui
+version 0.1.0
+file fb9898c91d7615e32fa7da221abc95cae68ab7c7e89dce5e2a280e497029aa69 13083246 module.wasm
+file 6d31d8707c4ec34541b194721f9cd9c3238602942d4b9eec1e8dc4570a332483 1288 spore.toml
+digest 2ef8e5ab6cc1e1dba7c58b088274ef0c5b7e27220e22a8f0eb0bcaf3eeaa85eb

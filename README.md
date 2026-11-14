@@ -77,6 +77,13 @@ reader/editor that proves the split:
   hot-reloads it, so an agent can restyle a running app without a rebuild.
 - **Canvas** lays out and renders all three surfaces.
 
+A Spore can also own its drawing when it needs GPUI semantics: it lays out an
+offscreen GPUI window, renders through `wasi:webgpu`, and presents the texture
+through `soil:present`. The host still owns the window, compositor, input,
+and capture; no native surface enters the guest. [`spores/vitals-view`](spores/vitals-view)
+and [`spores/lights-view`](spores/lights-view) are the working examples. The Lua path above remains the renderer-independent
+option; the GPU path trades host portability for GPUI layout and text.
+
 The hosts are still landing. What already holds is the contract: the snapshot
 shape, the Lua entry point, and the rule that a Spore cannot tell which host is
 drawing it. See [`docs/host-contract.md`](docs/host-contract.md).
@@ -109,10 +116,12 @@ spores/markdown            Markdown reader/editor
 spores/files               VFS browser + storage census (files.myc)
 spores/unibus              read-only inbox (dev.fungos.inbox)
 spores/worklog             cross-tool timeline (dev.fungos.worklog)
+spores/vitals              cross-device health fusion (dev.fungos.vitals)
+spores/vitals-view         GPUI vitals rings, sleep, + cards over wasi:webgpu + soil:present
+spores/lights-view         GPUI Hue room rail, scenes, and per-light controls over soil:present
 spores/pulse               cron schedules and webhook ingress health (dev.fungos.pulse)
 spores/terminal            terminal Spore
 spores/terminal-core       terminal semantics shared by the tmux and host front ends
-spores/terminal-host       native terminal host
 spores/terminal-gpui       terminal view rendered by GPUI inside a wasm32-wasip2 Spore
 spores/launcher-gpui       GPUI launcher: installed Spores, selection, and launch
 spores/crm                 CRM Spore over namespaced records
@@ -129,6 +138,11 @@ spores/cli-http            the narrow host-mediated HTTP seam shared by CLI spor
 spores/media-probe         soil:media fixture
 spores/surface-probe       soil:surface-import fixture
 ```
+
+`terminal-host` is not here: it is the native Mycelium/PTY host in
+[`fungOS-linux/soil`](https://github.com/fungOS-linux/soil),
+`crates/terminal-host`. The terminal package names it as its
+`[launch] native` host.
 
 ## TUI spores
 

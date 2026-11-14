@@ -1,0 +1,47 @@
+# JARVIS telemetry: a Spore, not a standalone daemon.
+#
+# It consumes the records device Spores write, so the JARVIS side can run
+# against seeded data before any ring or watch is present.
+schema = 1
+
+[spore]
+id = "dev.fungos.jarvis-telemetry"
+name = "jarvis-telemetry"
+version = "0.1.0"
+license = "MIT"
+summary = "Wearer-scoped presence and attention from device signals"
+description = "Reads signal.sample.v1 records, applies the explicit wearer/freshness/fusion policy, and publishes presence.state.v1 and attention.state.v1 latest-value frames. A seed mode writes deterministic fake owner and guest signals so the JARVIS side can run without hardware."
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { records = "0.1.0", unibus = "0.1.0", time = "1.0.0" }
+
+[module]
+path = "module.wasm"
+
+[launch]
+default = "native"
+surfaces = ["native"]
+
+[grants]
+# Exact package names are the host-link unit; the reasons name the verbs.
+"soil:records" = "read signal records and write deterministic seed records"
+"soil:unibus" = "publish presence.state.v1 and attention.state.v1 frames"
+"soil:time" = "monotonic observation and loop ticks; no wall clock"
+"wasi:cli" = "Rust std stdio for the host's log stream"
+"wasi:clocks" = "Rust std runtime dependency; observations use soil:time"
+"wasi:io" = "Rust std runtime I/O primitives"
+
+[denied]
+transport = ["socket", "quic", "iroh"]
+host = ["process", "secrets", "environment", "raw-filesystem", "wall-clock", "camera", "microphone"]
+
+[catalog]
+categories = ["system", "utilities"]
+keywords = ["jarvis", "telemetry", "presence", "attention", "wearable"]
+
+[presentation]
+badge = "J"
+color = "#b58cff"

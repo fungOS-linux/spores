@@ -1,0 +1,28 @@
+[package]
+name = "lights-view"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1"
+cli-http = { path = "../cli-http" }
+gpui = { git = "https://github.com/fungOS-linux/gpui-fast", rev = "60ebb175729ad2a17acf59d8e988e794ff4b7eb4", package = "gpui", default-features = false, features = ["headless"] }
+gpui-base = { git = "https://github.com/fungOS-linux/gpui-kit", rev = "8feed9ee6526d0ee8e7b3e11349290b3d38319ed", package = "gpui-base", default-features = false }
+gpui-component = { git = "https://github.com/fungOS-linux/gpui-kit", rev = "8feed9ee6526d0ee8e7b3e11349290b3d38319ed", package = "gpui-component", default-features = false }
+gpui_wgpu = { git = "https://github.com/fungOS-linux/gpui-fast", rev = "60ebb175729ad2a17acf59d8e988e794ff4b7eb4", package = "gpui_wgpu", default-features = false, features = ["headless"] }
+hue-client = { path = "../hue-client" }
+lights-core = { path = "../lights-core" }
+serde_json = "1"
+wgpu = { version = "30", default-features = false, features = ["wgsl"] }
+wgpu-wasi-webgpu = { git = "https://github.com/fungOS-linux/wgpu-wasi-webgpu", rev = "bec921356c366450408d5faee2d206b6a1b8061b" }
+wit-bindgen = "0.57"
+
+[lints.rust]
+unsafe_code = "allow"

@@ -183,6 +183,7 @@ impl Command {
             method,
             headers,
             body: bytes,
+            credential: Some("default".into()),
         })?;
         decode(response)
     }

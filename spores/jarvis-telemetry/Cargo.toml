@@ -1,0 +1,16 @@
+[package]
+name = "jarvis-telemetry-spore"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+jarvis-telemetry-core = { path = "core" }
+serde_json = "1"
+wit-bindgen = "0.41"
+
+[workspace]
