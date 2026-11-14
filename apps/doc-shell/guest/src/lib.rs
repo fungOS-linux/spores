@@ -44,6 +44,7 @@ use gpui_component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
 use soil::present::{cursor, input, surface};
 
+mod comments;
 mod data;
 mod docx;
 
@@ -92,6 +93,13 @@ enum Pane {
     },
 }
 
+/// Where a key goes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Focus {
+    Vault,
+    Document,
+}
+
 /// One window of the reader.
 struct Shell {
     /// Workspace-relative path of the directory being listed; empty is the root.
@@ -100,6 +108,14 @@ struct Shell {
     selected: usize,
     pane: Pane,
     note: Option<String>,
+    /// Which pane the keyboard is talking to.
+    focus: Focus,
+    /// The block the cursor is on, in the open document.
+    block: usize,
+    /// The document's pending comments, if one is open.
+    comments: Option<comments::Pending>,
+    /// A comment being written, if one is.
+    compose: Option<String>,
 }
 
 impl Shell {
@@ -110,6 +126,10 @@ impl Shell {
             selected: 0,
             pane: Pane::Empty,
             note: None,
+            focus: Focus::Vault,
+            block: 0,
+            comments: None,
+            compose: None,
         };
         shell.reload();
         // The harness build opens on a Word file, so a captured frame shows the
@@ -157,9 +177,15 @@ impl Shell {
             };
             return;
         }
+        self.comments = None;
+        self.compose = None;
+        self.block = 0;
         match data::read(&path, data::DOC_BYTES) {
             Ok(bytes) => match docx::read(&bytes) {
-                Ok(document) => self.pane = Pane::Document { name, document },
+                Ok(document) => {
+                    self.comments = Some(comments::open(&path));
+                    self.pane = Pane::Document { name, document };
+                }
                 Err(error) => {
                     self.pane = Pane::Failed {
                         name,
@@ -200,22 +226,131 @@ impl Shell {
         }
     }
 
+    /// How many blocks the open document has.
+    fn blocks(&self) -> usize {
+        match &self.pane {
+            Pane::Document { document, .. } => document.blocks.len(),
+            _ => 0,
+        }
+    }
+
+    /// The id of the block the cursor is on.
+    fn block_id(&self) -> Option<&str> {
+        match &self.pane {
+            Pane::Document { document, .. } => document
+                .blocks
+                .get(self.block)
+                .map(|block| block.id.as_str()),
+            _ => None,
+        }
+    }
+
     fn handle_key(&mut self, key: &str) -> bool {
+        // Composing takes every key: a comment is prose, not a command.
+        if let Some(text) = self.compose.as_mut() {
+            match key {
+                "enter" => {
+                    let body = text.trim().to_owned();
+                    let block = self.block_id().map(ToOwned::to_owned);
+                    self.compose = None;
+                    if body.is_empty() {
+                        return true;
+                    }
+                    if let (Some(block), Some(pending)) = (block, self.comments.as_mut()) {
+                        pending.add(&block, &body);
+                        self.note = Some(format!("comment left on {block}"));
+                    }
+                    return true;
+                }
+                "escape" => {
+                    self.compose = None;
+                    return true;
+                }
+                "backspace" => {
+                    text.pop();
+                    return true;
+                }
+                "space" => {
+                    text.push(' ');
+                    return true;
+                }
+                other if other.chars().count() == 1 => {
+                    text.push_str(other);
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+
         match key {
+            "tab" => {
+                self.focus = match self.focus {
+                    Focus::Vault => Focus::Document,
+                    Focus::Document => Focus::Vault,
+                };
+                true
+            }
+            "c" if self.focus == Focus::Document && self.blocks() > 0 => {
+                if self.comments.is_none()
+                    && let Pane::Document { .. } = self.pane
+                {
+                    return false;
+                }
+                self.compose = Some(String::new());
+                true
+            }
+            "x" if self.focus == Focus::Document => {
+                let Some(block) = self.block_id().map(ToOwned::to_owned) else {
+                    return false;
+                };
+                let Some(pending) = self.comments.as_mut() else {
+                    return false;
+                };
+                let open = pending
+                    .for_block(&block)
+                    .iter()
+                    .any(|comment| !comment.resolved);
+                pending.set_resolved(&block, open);
+                self.note = Some(if open {
+                    format!("resolved the thread on {block}")
+                } else {
+                    format!("reopened the thread on {block}")
+                });
+                true
+            }
             "arrow-down" | "j" => {
-                self.select(self.selected + 1);
+                match self.focus {
+                    Focus::Vault => self.select(self.selected + 1),
+                    Focus::Document => {
+                        self.block = (self.block + 1).min(self.blocks().saturating_sub(1));
+                    }
+                }
                 true
             }
             "arrow-up" | "k" => {
-                self.selected = self.selected.saturating_sub(1);
-                self.select(self.selected);
+                match self.focus {
+                    Focus::Vault => {
+                        self.selected = self.selected.saturating_sub(1);
+                        self.select(self.selected);
+                    }
+                    Focus::Document => self.block = self.block.saturating_sub(1),
+                }
                 true
             }
-            "enter" => {
+            "enter" if self.focus == Focus::Vault => {
                 self.enter();
                 true
             }
-            "backspace" => {
+            "enter" => {
+                // In the document, Enter is the gesture that starts writing on
+                // the block under the cursor.
+                if self.blocks() > 0 {
+                    self.compose = Some(String::new());
+                    return true;
+                }
+                false
+            }
+            "backspace" if self.focus == Focus::Vault => {
                 self.up();
                 true
             }
@@ -318,11 +453,15 @@ impl Render for Shell {
             Pane::Document { name, document } => (
                 name.clone(),
                 format!(
-                    "{} blocks · {} named by Word · {} synthetic · {} headings",
+                    "{} blocks · {} named by Word · {} synthetic · {} headings{}",
                     document.blocks.len(),
                     document.identified,
                     document.synthetic,
-                    document.headings()
+                    document.headings(),
+                    match self.comments.as_ref().map(comments::Pending::unresolved) {
+                        Some(0) | None => String::new(),
+                        Some(pending) => format!(" · {pending} pending comments"),
+                    }
                 ),
                 Some(document),
                 false,
@@ -337,19 +476,34 @@ impl Render for Shell {
             ),
         };
 
-        // Each block: its identity in the gutter, its text where the eye expects
-        // it. A heading is a heading because the container said so.
+        // Each block: its identity in the gutter, its text where the eye
+        // expects it, and the thread still pending on it to the right. A heading
+        // is a heading because the container said so.
         let mut rendered: Vec<gpui::AnyElement> = Vec::new();
-        for block in blocks.into_iter().flat_map(|document| &document.blocks) {
+        for (index, block) in blocks
+            .into_iter()
+            .flat_map(|document| &document.blocks)
+            .enumerate()
+        {
             let heading = block
                 .style
                 .as_deref()
                 .is_some_and(|style| style.starts_with("Heading"));
+            let thread = self
+                .comments
+                .as_ref()
+                .map(|pending| pending.for_block(&block.id))
+                .unwrap_or_default();
+            let focused = self.focus == Focus::Document && index == self.block;
             rendered.push(
                 h_flex()
                     .items_start()
                     .gap_3()
-                    .when(heading, |this| this.mt_3())
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .when(heading, |this| this.mt_2())
+                    .when(focused, |this| this.bg(theme.accent))
                     .child(
                         gpui::div()
                             .w(px(88.0))
@@ -372,10 +526,53 @@ impl Render for Shell {
                             .when(!heading, |this| this.text_sm())
                             .text_color(theme.foreground)
                             .child(if block.text.is_empty() {
-                                "—".to_owned()
+                                "\u{2014}".to_owned()
                             } else {
                                 block.text.clone()
                             }),
+                    )
+                    .child(
+                        v_flex()
+                            .w(px(260.0))
+                            .gap_1()
+                            .children(thread.into_iter().map(|comment| {
+                                v_flex()
+                                    .gap_0p5()
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .child(
+                                                gpui::div()
+                                                    .text_xs()
+                                                    .text_color(if comment.resolved {
+                                                        muted
+                                                    } else {
+                                                        theme.foreground
+                                                    })
+                                                    .child(comment.author.clone()),
+                                            )
+                                            .when(comment.resolved, |this| {
+                                                this.child(
+                                                    gpui::div()
+                                                        .text_xs()
+                                                        .text_color(muted)
+                                                        .child("· resolved"),
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        gpui::div()
+                                            .text_xs()
+                                            .text_color(if comment.resolved {
+                                                muted
+                                            } else {
+                                                theme.foreground
+                                            })
+                                            .child(comment.body.clone()),
+                                    )
+                                    .into_any_element()
+                            })),
                     )
                     .into_any_element(),
             );
@@ -446,7 +643,38 @@ impl Render for Shell {
                                             .child(meta),
                                     ),
                             )
-                            .children(rendered),
+                            .children(rendered)
+                            .when_some(self.compose.clone(), |this, text| {
+                                this.child(
+                                    h_flex()
+                                        .gap_2()
+                                        .mt_3()
+                                        .px_2()
+                                        .py_2()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(border)
+                                        .child(gpui::div().text_xs().text_color(muted).child(
+                                            format!(
+                                                "comment on {}:",
+                                                self.block_id().unwrap_or("—")
+                                            ),
+                                        ))
+                                        .child(
+                                            gpui::div()
+                                                .flex_1()
+                                                .text_sm()
+                                                .text_color(theme.foreground)
+                                                .child(format!("{text}_")),
+                                        )
+                                        .child(
+                                            gpui::div()
+                                                .text_xs()
+                                                .text_color(muted)
+                                                .child("enter leaves it · esc cancels"),
+                                        ),
+                                )
+                            }),
                     ),
             )
             .child(
@@ -474,7 +702,10 @@ impl Render for Shell {
                         gpui::div()
                             .text_xs()
                             .text_color(muted)
-                            .child("d theme · q quits"),
+                            .child(match self.focus {
+                                Focus::Vault => "tab document · d theme · q quits",
+                                Focus::Document => "c comment · x resolve · tab vault",
+                            }),
                     ),
             )
     }
