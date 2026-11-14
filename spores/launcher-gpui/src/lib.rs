@@ -74,6 +74,9 @@ struct Row {
     version: SharedString,
     summary: SharedString,
     default_surface: SharedString,
+    /// The package's `[presentation] mark`, as SVG source. A tile draws it; a
+    /// package that ships none falls back to its initial.
+    mark: Option<SharedString>,
 }
 
 struct LauncherView {
@@ -111,6 +114,7 @@ impl LauncherView {
                         version: SharedString::from(entry.version),
                         summary: SharedString::from(entry.summary),
                         default_surface: SharedString::from(entry.default_surface),
+                        mark: entry.mark.map(SharedString::from),
                     })
                     .collect();
                 let visible = (0..rows.len()).collect();
@@ -380,10 +384,18 @@ impl LauncherView {
                     .items_center()
                     .justify_center()
                     .rounded(px(24.0))
-                    .bg(rgb(background))
+                    .bg(rgb(background));
+                // The catalogue now carries each package's `[presentation] mark`
+                // (`row.mark`), and this renderer cannot draw it: `gpui_wgpu`
+                // implements no SVG renderer, so `svg()` lays out nothing. The
+                // monogram is the honest fallback until the mark arrives as
+                // pixels - a blank tile is worse than a letter.
+                let art: AnyElement = div()
                     .text_size(px(40.0))
                     .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(0xffff_ffff));
+                    .text_color(rgb(0xffff_ffff))
+                    .child(SharedString::from(glyph))
+                    .into_any_element();
                 if selected {
                     tile = tile.border_2().border_color(rgb(0x7d_8b_99));
                 }
@@ -396,7 +408,7 @@ impl LauncherView {
                     .items_center()
                     .gap(px(6.0))
                     .w(px(TILE))
-                    .child(tile.child(SharedString::from(glyph)))
+                    .child(tile.child(art))
                     .child(
                         div()
                             .text_size(px(12.0))
