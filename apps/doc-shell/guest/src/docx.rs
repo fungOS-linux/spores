@@ -26,6 +26,19 @@ pub struct Block {
     pub identified: bool,
 }
 
+impl Block {
+    /// The heading level the container wrote, if it said this is a heading. A
+    /// style of `Heading` with no number is a first-level heading.
+    pub fn heading(&self) -> Option<u8> {
+        self.style
+            .as_deref()?
+            .strip_prefix("Heading")?
+            .parse()
+            .ok()
+            .or(Some(1))
+    }
+}
+
 pub struct Document {
     pub blocks: Vec<Block>,
     pub identified: usize,
@@ -33,16 +46,12 @@ pub struct Document {
 }
 
 impl Document {
-    pub fn headings(&self) -> usize {
+    /// What the document says, counted the way a reader counts it.
+    pub fn words(&self) -> usize {
         self.blocks
             .iter()
-            .filter(|block| {
-                block
-                    .style
-                    .as_deref()
-                    .is_some_and(|style| style.starts_with("Heading"))
-            })
-            .count()
+            .map(|block| block.text.split_whitespace().count())
+            .sum()
     }
 }
 

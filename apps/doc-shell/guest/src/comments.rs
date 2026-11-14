@@ -50,11 +50,21 @@ impl Pending {
             .collect()
     }
 
-    pub fn unresolved(&self) -> usize {
-        self.comments
-            .iter()
-            .filter(|comment| !comment.resolved)
-            .count()
+    /// The threads, one per block: the block, and whether anything on it is
+    /// still open. A thread is the unit the reader resolves, so it is the unit
+    /// the counts are about.
+    pub fn threads(&self) -> Vec<(&str, bool)> {
+        let mut threads: Vec<(&str, bool)> = Vec::new();
+        for comment in &self.comments {
+            match threads
+                .iter_mut()
+                .find(|(block, _)| *block == comment.block.as_str())
+            {
+                Some((_, open)) => *open |= !comment.resolved,
+                None => threads.push((comment.block.as_str(), !comment.resolved)),
+            }
+        }
+        threads
     }
 
     /// Say something on a block. Returns the comment so the caller can select it.
@@ -186,36 +196,71 @@ mod store {
     use super::{Comment, Pending};
 
     pub fn open(target: &str) -> Pending {
-        let seeded = [
-            (
-                "1A2B3C4D",
-                "studio",
-                "Headings are Word's, so the anchor survives a re-read.",
-                true,
-            ),
-            (
-                "1A2B3C4D",
-                "neo",
-                "Then a reply to a resolved thread still renders.",
-                false,
-            ),
-            (
-                "A1B2C3D4",
-                "studio",
-                "Is two years the term this client agreed to?",
-                false,
-            ),
-        ];
+        // The harness seeds one document's threads, and only that document's:
+        // opening a second file in the fixed vault has to look like a file with
+        // no comments, not like a copy of the first one's.
+        let seeded: &[(&str, &str, &str, bool)] = if target.ends_with("nda.docx") {
+            &[
+                (
+                    "1A2B3C4D",
+                    "studio",
+                    "Headings are Word's, so the anchor survives a re-read.",
+                    false,
+                ),
+                (
+                    "1A2B3C4D",
+                    "neo",
+                    "And the reply stays under it, resolved or not.",
+                    false,
+                ),
+                (
+                    "7F0A1B2C",
+                    "neo",
+                    "Does the carve-out cover roadmaps yet?",
+                    false,
+                ),
+                (
+                    "A1B2C3D4",
+                    "studio",
+                    "Is two years the term this client agreed to?",
+                    true,
+                ),
+                (
+                    "A1B2C3D4",
+                    "neo",
+                    "Yes: confirmed by mail the same day.",
+                    true,
+                ),
+            ]
+        } else {
+            // Three threads in the three states a thread can be in: open and
+            // answered, open and alone, and resolved with a reply under it.
+            &[]
+        };
+        // Ids number a comment within its own thread, the way `add` does, so a
+        // seeded comment and a written one are the same kind of row.
+        let mut numbers: Vec<(&str, usize)> = Vec::new();
         let comments: Vec<Comment> = seeded
             .iter()
-            .enumerate()
-            .map(|(index, (block, author, body, resolved))| Comment {
-                id: format!("{author}@{block}@{}", index + 1),
-                target: target.to_owned(),
-                block: (*block).to_owned(),
-                author: (*author).to_owned(),
-                body: (*body).to_owned(),
-                resolved: *resolved,
+            .map(|(block, author, body, resolved)| {
+                let n = match numbers.iter_mut().find(|(seen, _)| seen == block) {
+                    Some((_, n)) => {
+                        *n += 1;
+                        *n
+                    }
+                    None => {
+                        numbers.push((block, 1));
+                        1
+                    }
+                };
+                Comment {
+                    id: format!("{author}@{block}@{n}"),
+                    target: target.to_owned(),
+                    block: (*block).to_owned(),
+                    author: (*author).to_owned(),
+                    body: (*body).to_owned(),
+                    resolved: *resolved,
+                }
             })
             .collect();
         Pending {
