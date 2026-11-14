@@ -1408,8 +1408,9 @@ impl Shell {
     }
 
     fn document_view(&self, columns: &Columns, theme: &gpui_component::Theme) -> AnyElement {
-        let body = match self.notice() {
-            Some(notice) => self.notice_view(&notice, theme),
+        let notice = self.notice();
+        let body = match &notice {
+            Some(notice) => self.notice_view(notice, theme),
             None => self.blocks_view(theme),
         };
         h_flex()
@@ -1426,7 +1427,7 @@ impl Shell {
             )
             // The rail is its own column and its own scroll, so a document stays
             // a document however much is said about it.
-            .when(self.notice().is_none(), |this| {
+            .when(notice.is_none(), |this| {
                 this.child(self.threads_view(columns, theme))
             })
             .into_any_element()
