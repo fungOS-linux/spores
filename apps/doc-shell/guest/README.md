@@ -8,10 +8,9 @@ uses.
 
 ![the reader](frame.png)
 
-That frame is the **`demo`** build, captured by `soil-webgpu`, because the host
-that presents Spores does not link `soil:vfs` yet. The document in it is a real
-`.docx`: `src/data.rs` writes the zip in memory, so the frame exercises the
-shipped reader rather than a stub.
+That frame is the **`demo`** build: `src/data.rs` writes a `.docx` into memory,
+so the frame exercises the shipped reader without needing a vault. The shipped
+build reads a real one — see [Build](#build).
 
 Two more frames sit beside it, each captured from a demo build seeded into the
 state it shows — the shipped build opens dark, on the reader, with no overlay:
@@ -126,11 +125,25 @@ the namespace: they arrive as `soil:vfs-mut` with their own review. See
 # the package: module.wasm + spore.lock (+ a tar with --tar)
 ./scripts/package.sh --tar
 
-# look at the arrangement without a host that links soil:vfs
-cargo build --release --target wasm32-wasip2 --features demo
+# the shipped build, over a real vault and a real record book
+cargo build --release --target wasm32-wasip2
+fungos-vfs --root /tmp/vfsroot ingest /tmp/vault --prefix ""
+records init --root /tmp/recbook
 soil-webgpu --frame /tmp/doc.bgr --size 1280x800 \
+  --root /tmp/vfsroot --records /tmp/recbook \
+  --collection comment.pending --book doc-shell --actor "$USER" \
+  target/wasm32-wasip2/release/doc_shell_guest.wasm
+
+# the arrangement alone, no vault needed
+cargo build --release --target wasm32-wasip2 --features demo
+soil-webgpu --frame /tmp/demo.bgr --size 1280x800 \
   target/wasm32-wasip2/release/doc_shell_guest.wasm
 ```
+
+The first command is what the frame above shows minus the vault: `soil-webgpu`
+grants `soil:vfs` (one workspace), `soil:records` (one collection) and
+`soil:principal` (the attested author), and each is `denied` when it is not
+passed.
 
 A Spore gets no window and no device handle it can keep: it renders offscreen and
 hands the host a texture. `soil:present/input` is the only keyboard.
