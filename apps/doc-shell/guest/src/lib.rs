@@ -40,6 +40,8 @@ use gpui::{
     AppContext as _, Context, HeadlessAppContext, IntoElement, ParentElement as _,
     PlatformTextSystem as _, Render, Styled as _, Window, px, size,
 };
+use gpui_base::StyledExt as _;
+use gpui_component::status_bar::StatusBar;
 use gpui_component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_wgpu::{CosmicTextSystem, WgpuContext, WgpuHeadlessRenderer};
 use soil::present::{cursor, input, surface};
@@ -371,49 +373,51 @@ fn describe(path: &str) -> String {
     }
 }
 
+/// A page or a folder, drawn from rectangles: a Spore has no asset source, and
+/// the kit's icon bundle is a network fetch on wasm.
+fn row_icon(directory: bool, theme: &gpui_component::Theme) -> gpui::AnyElement {
+    if directory {
+        return v_flex()
+            .items_start()
+            .child(
+                gpui::div()
+                    .w(px(7.0))
+                    .h(px(3.0))
+                    .rounded_t_sm()
+                    .bg(theme.sidebar_primary),
+            )
+            .child(
+                gpui::div()
+                    .w(px(13.0))
+                    .h(px(9.0))
+                    .rounded_sm()
+                    .bg(theme.sidebar_primary),
+            )
+            .into_any_element();
+    }
+    gpui::div()
+        .w(px(10.0))
+        .h(px(12.0))
+        .rounded_sm()
+        .border_1()
+        .border_color(theme.sidebar_foreground)
+        .into_any_element()
+}
+
 impl Render for Shell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let border = theme.border;
 
-        let segments: Vec<&str> = self
-            .path
-            .split('/')
-            .filter(|part| !part.is_empty())
-            .collect();
-        let mut crumbs: Vec<gpui::AnyElement> = Vec::new();
-        crumbs.push(
-            gpui::div()
-                .text_sm()
-                .text_color(if segments.is_empty() {
-                    theme.foreground
-                } else {
-                    muted
-                })
-                .child("/")
-                .into_any_element(),
-        );
-        for (index, segment) in segments.iter().enumerate() {
-            if index > 0 {
-                crumbs.push(
-                    gpui::div()
-                        .text_sm()
-                        .text_color(muted)
-                        .child("/")
-                        .into_any_element(),
-                );
-            }
-            let current = index + 1 == segments.len();
-            crumbs.push(
-                gpui::div()
-                    .text_sm()
-                    .text_color(if current { theme.foreground } else { muted })
-                    .child((*segment).to_owned())
-                    .into_any_element(),
-            );
-        }
+        let title = match &self.pane {
+            Pane::Document { name, .. }
+            | Pane::Failed { name, .. }
+            | Pane::NotWord { name, .. } => name.clone(),
+            Pane::Empty => "no document open".to_owned(),
+        };
 
+        // The vault, on the sidebar's own colour: it is a place, not the page.
         let rows: Vec<gpui::AnyElement> = self
             .entries
             .iter()
@@ -422,23 +426,37 @@ impl Render for Shell {
                 let selected = index == self.selected;
                 h_flex()
                     .w_full()
-                    .justify_between()
                     .items_center()
+                    .gap_2()
                     .px_2()
                     .py_1()
                     .rounded_md()
-                    .when(selected, |this| this.bg(theme.accent))
-                    .child(gpui::div().text_sm().text_color(theme.foreground).child(
-                        if row.directory {
-                            format!("{}/", row.name)
-                        } else {
-                            row.name.clone()
-                        },
-                    ))
+                    .when(selected, |this| {
+                        this.bg(theme.sidebar_accent)
+                            .text_color(theme.sidebar_accent_foreground)
+                    })
+                    .child(row_icon(row.directory, theme))
+                    .child(
+                        gpui::div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_sm()
+                            .text_color(if selected {
+                                theme.sidebar_accent_foreground
+                            } else {
+                                theme.sidebar_foreground
+                            })
+                            .child(row.name.clone()),
+                    )
                     .child(
                         gpui::div()
                             .text_xs()
-                            .text_color(muted)
+                            .text_color(if selected {
+                                theme.sidebar_accent_foreground
+                            } else {
+                                muted
+                            })
                             .child(if row.directory {
                                 String::new()
                             } else {
@@ -449,9 +467,8 @@ impl Render for Shell {
             })
             .collect();
 
-        let (title, meta, blocks, failed) = match &self.pane {
-            Pane::Document { name, document } => (
-                name.clone(),
+        let (meta, blocks, failed) = match &self.pane {
+            Pane::Document { document, .. } => (
                 format!(
                     "{} blocks · {} named by Word · {} synthetic · {} headings{}",
                     document.blocks.len(),
@@ -460,25 +477,20 @@ impl Render for Shell {
                     document.headings(),
                     match self.comments.as_ref().map(comments::Pending::unresolved) {
                         Some(0) | None => String::new(),
-                        Some(pending) => format!(" · {pending} pending comments"),
+                        Some(pending) => format!(" · {pending} pending"),
                     }
                 ),
                 Some(document),
                 false,
             ),
-            Pane::NotWord { name, who } => (name.clone(), who.clone(), None, false),
-            Pane::Failed { name, why } => (name.clone(), why.clone(), None, true),
-            Pane::Empty => (
-                "no document open".to_owned(),
-                "select a Word file in the vault".to_owned(),
-                None,
-                false,
-            ),
+            Pane::NotWord { who, .. } => (who.clone(), None, false),
+            Pane::Failed { why, .. } => (why.clone(), None, true),
+            Pane::Empty => ("select a Word file in the vault".to_owned(), None, false),
         };
 
-        // Each block: its identity in the gutter, its text where the eye
-        // expects it, and the thread still pending on it to the right. A heading
-        // is a heading because the container said so.
+        // Each block: its identity in the gutter, its text where the eye expects
+        // it, and the thread still pending on it to the right. A heading is a
+        // heading because the container said so.
         let mut rendered: Vec<gpui::AnyElement> = Vec::new();
         for (index, block) in blocks
             .into_iter()
@@ -502,7 +514,7 @@ impl Render for Shell {
                     .px_2()
                     .py_1()
                     .rounded_md()
-                    .when(heading, |this| this.mt_2())
+                    .when(heading, |this| this.mt_1())
                     .when(focused, |this| this.bg(theme.accent))
                     .child(
                         gpui::div()
@@ -522,7 +534,8 @@ impl Render for Shell {
                     .child(
                         gpui::div()
                             .flex_1()
-                            .when(heading, |this| this.text_lg())
+                            .min_w_0()
+                            .when(heading, |this| this.text_lg().font_semibold())
                             .when(!heading, |this| this.text_sm())
                             .text_color(theme.foreground)
                             .child(if block.text.is_empty() {
@@ -534,7 +547,10 @@ impl Render for Shell {
                     .child(
                         v_flex()
                             .w(px(260.0))
+                            .pl_3()
                             .gap_1()
+                            .border_l_1()
+                            .border_color(border)
                             .children(thread.into_iter().map(|comment| {
                                 v_flex()
                                     .gap_0p5()
@@ -583,19 +599,56 @@ impl Render for Shell {
             .bg(theme.background)
             .text_sm()
             .child(
+                // Symbols and key names, the way the native shell's toolbar reads:
+                // the action is named once, in the place the eye already goes.
                 h_flex()
-                    .justify_between()
                     .items_center()
+                    .justify_between()
+                    .gap_3()
                     .px_3()
                     .py_2()
                     .border_b_1()
                     .border_color(border)
-                    .child(h_flex().items_center().gap_1().children(crumbs))
-                    .child(gpui::div().text_xs().text_color(muted).child(format!(
-                        "{} entr{} · enter opens · backspace up",
-                        self.entries.len(),
-                        if self.entries.len() == 1 { "y" } else { "ies" }
-                    ))),
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .min_w_0()
+                            .child(gpui::div().text_sm().font_semibold().child("doc-shell"))
+                            .child(
+                                gpui::div()
+                                    .text_xs()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(muted)
+                                    .child(title.clone()),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                gpui::div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child("tab panes · c comment · x resolve"),
+                            )
+                            .child(gpui::div().text_xs().text_color(muted).child("·"))
+                            .child(
+                                gpui::div()
+                                    .text_xs()
+                                    .text_color(if self.focus == Focus::Document {
+                                        theme.foreground
+                                    } else {
+                                        muted
+                                    })
+                                    .child(match self.focus {
+                                        Focus::Vault => "focus: vault",
+                                        Focus::Document => "focus: document",
+                                    }),
+                            ),
+                    ),
             )
             .child(
                 h_flex()
@@ -603,16 +656,31 @@ impl Render for Shell {
                     .min_h_0()
                     .child(
                         v_flex()
-                            .w(px(320.0))
+                            .w(px(300.0))
                             .h_full()
-                            .p_2()
                             .gap_0p5()
+                            .p_2()
+                            .bg(theme.sidebar)
                             .border_r_1()
                             .border_color(border)
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .px_2()
+                                    .pb_1()
+                                    .child(gpui::div().text_xs().text_color(muted).child("vault"))
+                                    .child(
+                                        gpui::div()
+                                            .text_xs()
+                                            .text_color(muted)
+                                            .child(describe(&self.path)),
+                                    ),
+                            )
                             .when(self.entries.is_empty(), |this| {
                                 this.child(
                                     gpui::div()
-                                        .p_2()
+                                        .px_2()
                                         .text_xs()
                                         .text_color(muted)
                                         .child("this directory is empty"),
@@ -625,23 +693,16 @@ impl Render for Shell {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .p_4()
+                            .px_4()
+                            .py_3()
                             .gap_2()
+                            // The toolbar already names the document; this is
+                            // what the pane can say about it.
                             .child(
-                                v_flex()
-                                    .gap_0p5()
-                                    .child(
-                                        gpui::div()
-                                            .text_sm()
-                                            .text_color(theme.foreground)
-                                            .child(title),
-                                    )
-                                    .child(
-                                        gpui::div()
-                                            .text_xs()
-                                            .text_color(if failed { theme.danger } else { muted })
-                                            .child(meta),
-                                    ),
+                                gpui::div()
+                                    .text_xs()
+                                    .text_color(if failed { theme.danger } else { muted })
+                                    .child(meta),
                             )
                             .children(rendered)
                             .when_some(self.compose.clone(), |this, text| {
@@ -657,7 +718,7 @@ impl Render for Shell {
                                         .child(gpui::div().text_xs().text_color(muted).child(
                                             format!(
                                                 "comment on {}:",
-                                                self.block_id().unwrap_or("—")
+                                                self.block_id().unwrap_or("\u{2014}")
                                             ),
                                         ))
                                         .child(
@@ -678,34 +739,38 @@ impl Render for Shell {
                     ),
             )
             .child(
-                h_flex()
-                    .justify_between()
-                    .items_center()
-                    .px_3()
-                    .py_1()
-                    .border_t_1()
-                    .border_color(border)
-                    .child(gpui::div().text_xs().text_color(muted).child(
-                        self.note.clone().unwrap_or_else(
-                            || match self.entries.get(self.selected) {
-                                Some(row) => format!(
-                                    "{} of {} · {}",
-                                    self.selected + 1,
-                                    self.entries.len(),
-                                    row.name
-                                ),
-                                None => "—".to_owned(),
-                            },
-                        ),
-                    ))
-                    .child(
-                        gpui::div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(match self.focus {
-                                Focus::Vault => "tab document · d theme · q quits",
-                                Focus::Document => "c comment · x resolve · tab vault",
-                            }),
+                StatusBar::new()
+                    .left(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                gpui::div()
+                                    .text_xs()
+                                    .child(self.note.clone().unwrap_or_else(|| {
+                                        match self.entries.get(self.selected) {
+                                            Some(row) => format!(
+                                                "{} of {} · {}",
+                                                self.selected + 1,
+                                                self.entries.len(),
+                                                row.name
+                                            ),
+                                            None => "\u{2014}".to_owned(),
+                                        }
+                                    })),
+                            )
+                            .child(gpui::div().text_xs().child("·"))
+                            .child(gpui::div().text_xs().child(match self.block_id() {
+                                Some(block) => format!("block {block}"),
+                                None => "no block".to_owned(),
+                            })),
+                    )
+                    .right(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(gpui::div().text_xs().child("d theme"))
+                            .child(gpui::div().text_xs().child("q quits")),
                     ),
             )
     }
