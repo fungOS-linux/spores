@@ -36,6 +36,11 @@ spores/contacts/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194b
 spores/crm/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
 spores/unibus/wit/deps/soil-records/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
 spores/rooms/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
+spores/jarvis-telemetry/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
+spores/pinetime/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
+spores/vitals-view/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
+spores/vitals/wit/deps/soil-records.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
+apps/doc-shell/guest/wit/deps/soil-records/package.wit 898cb3a58c473488e877a624e65f37c7fb194bcb
 
 # --- soil-spore.wit ---------------------------------------------------------
 # source:      fungOS-linux/soil, wit/soil-spore.wit

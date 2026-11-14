@@ -1,0 +1,15 @@
+package fungos:xplorer-demo@0.1.0;
+
+/// A file manager over the host's namespace.
+///
+/// The Spore reads one granted workspace through `soil:vfs` and owns every pixel.
+/// It has no filesystem, no network, no process and no clock: paths come from the
+/// host, bytes come from the host, and a path it cannot see is a path it cannot
+/// name. Preview is the same read at a smaller budget, so there is one authority
+/// for what a file contains.
+world runner {
+  import soil:present/surface@0.1.0;
+  import soil:present/input@0.1.0;
+  import soil:present/cursor@0.1.0;
+  export run: async func() -> u32;
+}

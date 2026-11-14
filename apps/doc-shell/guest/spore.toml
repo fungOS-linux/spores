@@ -1,0 +1,49 @@
+# Spore manifest, schema 1. See fungOS-linux/soil docs/spore-package.md.
+#
+# A grant is a statement of intent reviewed with the pull request, not a
+# capability the Spore can widen at runtime.
+
+schema = 1
+
+[spore]
+id = "dev.fungos.doc-shell"
+name = "doc-shell"
+version = "0.1.0"
+license = "MIT"
+summary = "Read a Word file as blocks: Word's own paragraph identities, previewed"
+description = "A document reader that draws its own window: a vault on one side, a .docx parsed from its own bytes on the other, and each paragraph shown by the identity Word already wrote."
+homepage = "https://github.com/fungOS-linux/spores"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+abi = { present = "0.1.0", vfs = "1.0.0" }
+
+# A Rust module that draws its own frame is the host's default presentation, so
+# this package declares no `[[surfaces]]`.
+[module]
+path = "module.wasm"
+
+[launch]
+default = "native"
+surfaces = ["native"]
+
+[grants]
+"soil:vfs" = "list one granted workspace and read the bytes of the document it opens"
+"soil:present" = "draw the window: an offscreen surface, keyboard input and the cursor"
+"soil:records" = "read and write the pending comments left on a document's blocks"
+"soil:principal" = "the commenting identity, attested by the host rather than typed"
+"wasi:webgpu" = "one offscreen WebGPU device and queue; the host keeps the adapter, the surface and the swap"
+
+[denied]
+# Comments are records; the document is not. Saving it, and accepting a comment
+# into its text, are mutations and arrive as `soil:vfs-mut` with their own
+# review.
+"soil:vfs-mut" = ["a reader that can overwrite the document cannot be trusted to show it"]
+"soil:records.sync" = ["the book syncs through the host; this Spore writes pending comments, it does not transport pages"]
+host = ["process", "secrets", "environment", "raw-filesystem", "clock"]
+transport = ["socket", "quic", "iroh"]
+
+[presentation]
+badge = "D"
+color = "#c9a6ff"
